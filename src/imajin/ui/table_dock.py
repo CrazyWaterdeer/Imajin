@@ -6,7 +6,6 @@ import pandas as pd
 from qtpy.QtCore import QAbstractTableModel, QModelIndex, Qt
 from qtpy.QtWidgets import (
     QAbstractItemView,
-    QComboBox,
     QHBoxLayout,
     QHeaderView,
     QLabel,
@@ -15,6 +14,8 @@ from qtpy.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+
+from imajin.ui.theme import NoScrollComboBox, apply_dock_theme
 
 
 class _DataFrameModel(QAbstractTableModel):
@@ -62,13 +63,14 @@ class _DataFrameModel(QAbstractTableModel):
 class TableDock(QWidget):
     def __init__(self, viewer: Any) -> None:
         super().__init__()
+        apply_dock_theme(self)
         self.viewer = viewer
 
         layout = QVBoxLayout(self)
 
         head = QHBoxLayout()
         head.addWidget(QLabel("<b>Table:</b>"))
-        self.table_picker = QComboBox()
+        self.table_picker = NoScrollComboBox()
         head.addWidget(self.table_picker, stretch=1)
         self.refresh_btn = QPushButton("Refresh list")
         self.refresh_btn.clicked.connect(self._refresh_table_list)

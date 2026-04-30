@@ -4,12 +4,13 @@ import inspect
 from typing import Any
 
 from qtpy.QtWidgets import (
-    QComboBox,
     QLabel,
     QTextEdit,
     QVBoxLayout,
     QWidget,
 )
+
+from imajin.ui.theme import NoScrollComboBox, apply_dock_theme
 
 
 def _layer_param_names(func) -> set[str]:
@@ -20,13 +21,14 @@ def _layer_param_names(func) -> set[str]:
 class ManualDock(QWidget):
     def __init__(self, viewer: Any) -> None:
         super().__init__()
+        apply_dock_theme(self)
         self.viewer = viewer
         self._current_widget = None
 
         layout = QVBoxLayout(self)
         layout.addWidget(QLabel("<b>Manual analysis</b>"))
 
-        self.tool_picker = QComboBox()
+        self.tool_picker = NoScrollComboBox()
         layout.addWidget(self.tool_picker)
 
         self._form_holder = QWidget()

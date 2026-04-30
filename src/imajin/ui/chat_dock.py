@@ -5,7 +5,6 @@ from typing import Any
 
 from qtpy.QtGui import QTextCursor
 from qtpy.QtWidgets import (
-    QComboBox,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -14,6 +13,8 @@ from qtpy.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+
+from imajin.ui.theme import NoScrollComboBox, Theme, apply_dock_theme
 
 _MODEL_CHOICES: list[tuple[str, str, str]] = [
     ("Claude Sonnet 4.6", "anthropic", "claude-sonnet-4-6"),
@@ -26,6 +27,7 @@ _MODEL_CHOICES: list[tuple[str, str, str]] = [
 class ChatDock(QWidget):
     def __init__(self, viewer: Any, settings: Any) -> None:
         super().__init__()
+        apply_dock_theme(self)
         self.viewer = viewer
         self.settings = settings
         self._runner = None
@@ -37,7 +39,7 @@ class ChatDock(QWidget):
 
         head = QHBoxLayout()
         head.addWidget(QLabel("<b>Model:</b>"))
-        self.model_picker = QComboBox()
+        self.model_picker = NoScrollComboBox()
         for label, _, _ in _MODEL_CHOICES:
             self.model_picker.addItem(label)
         head.addWidget(self.model_picker, stretch=1)
@@ -227,7 +229,9 @@ class ChatDock(QWidget):
         self.transcript.setTextCursor(cursor)
 
     def _append_system(self, msg: str) -> None:
-        self.transcript.append(f"<span style='color:#888'><i>{self._escape(msg)}</i></span>")
+        self.transcript.append(
+            f"<span style='color:{Theme.TEXT_SECONDARY}'><i>{self._escape(msg)}</i></span>"
+        )
 
     @staticmethod
     def _escape(text: str) -> str:
