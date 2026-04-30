@@ -1,0 +1,79 @@
+[project]
+name = "imajin"
+version = "0.1.0"
+description = "GUI-based AI agent for confocal microscopy analysis (Zeiss LSM, cells, intensity, tracing) with napari + Claude/OpenAI tool use."
+readme = "README.md"
+requires-python = ">=3.11,<3.13"
+authors = [{ name = "lab" }]
+license = { text = "MIT" }
+
+dependencies = [
+    # Viewer / GUI
+    "napari[all]>=0.5",
+    "magicgui>=0.8",
+    # Imaging IO
+    "tifffile>=2025.1",
+    "bioio>=1.1",
+    "bioio-czi>=1.1",
+    "xarray>=2024.6",
+    "dask>=2024.6",
+    "imageio[ffmpeg]>=2.34",
+    # Numerics + analysis
+    "numpy>=1.26,<3",
+    "scipy>=1.13",
+    "pandas>=2.2",
+    "scikit-image>=0.24",
+    "pyarrow>=16",
+    # Segmentation / tracing
+    "torch>=2.4",
+    "torchvision>=0.19",
+    "cellpose>=4.0",
+    "scikit-learn>=1.5",
+    "skan>=0.12",
+    "btrack>=0.6",
+    # LLM
+    "anthropic>=0.45",
+    "openai>=1.50",
+    "pydantic>=2.7",
+    # Workflow / report
+    "pyyaml>=6.0",
+    "jinja2>=3.1",
+    "Pillow>=10.3",
+    # Utilities
+    "platformdirs>=4.2",
+]
+
+[project.scripts]
+imajin = "imajin.cli:main"
+
+[project.entry-points."napari.manifest"]
+imajin = "imajin:napari.yaml"
+
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu128" }
+torchvision = { index = "pytorch-cu128" }
+
+[build-system]
+requires = ["uv_build>=0.11.8,<0.12.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.3",
+    "pytest-qt>=4.5.0",
+]
+
+[tool.uv_build]
+module-name = "imajin"
+module-root = "src"
+
+[tool.pytest.ini_options]
+markers = [
+    "slow: marks tests requiring model download / heavy compute (deselect with -m 'not slow')",
+    "integration: marks tests requiring external services (LLM API keys, network)",
+]

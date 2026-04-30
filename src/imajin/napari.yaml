@@ -1,0 +1,17 @@
+name: imajin
+display_name: imajin
+contributions:
+  commands:
+    - id: imajin.read
+      python_name: imajin.io.napari_reader:read_path
+      title: Read confocal images (LSM/CZI/OME-TIFF/TIFF)
+  readers:
+    - command: imajin.read
+      filename_patterns:
+        - "*.lsm"
+        - "*.czi"
+        - "*.ome.tif"
+        - "*.ome.tiff"
+        - "*.tif"
+        - "*.tiff"
+      accepts_directories: false
