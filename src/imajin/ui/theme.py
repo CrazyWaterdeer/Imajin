@@ -157,12 +157,45 @@ class Theme:
                 border-bottom: 1px solid {cls.BORDER};
             }}
 
-            QTextEdit {{
+            QTextEdit, QPlainTextEdit {{
                 background-color: {cls.BG_DARK};
                 border: 1px solid {cls.BORDER};
                 border-radius: 5px;
                 padding: 10px;
                 color: {cls.TEXT_PRIMARY};
+            }}
+
+            QFrame#composer {{
+                background-color: {cls.BG_DARK};
+                border: 1px solid {cls.BORDER};
+                border-radius: 10px;
+            }}
+            QFrame#composer QPlainTextEdit {{
+                background-color: transparent;
+                border: none;
+                padding: 4px;
+                color: {cls.TEXT_PRIMARY};
+            }}
+
+            QPushButton#sendBtn {{
+                background-color: {cls.PRIMARY};
+                color: white;
+                border: 1px solid {cls.PRIMARY};
+                padding: 8px 18px;
+                border-radius: 5px;
+                font-weight: bold;
+            }}
+            QPushButton#sendBtn:hover {{
+                background-color: {cls.PRIMARY_LIGHT};
+                border-color: {cls.PRIMARY_LIGHT};
+            }}
+            QPushButton#sendBtn:pressed {{
+                background-color: {cls.PRIMARY_DARK};
+            }}
+            QPushButton#sendBtn:disabled {{
+                background-color: #1E1E1E;
+                color: #404040;
+                border-color: {cls.BORDER};
             }}
 
             QScrollBar:vertical {{

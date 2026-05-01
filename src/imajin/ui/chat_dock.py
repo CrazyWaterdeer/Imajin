@@ -3,11 +3,12 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from qtpy.QtGui import QTextCursor
+from qtpy.QtCore import Qt, Signal
+from qtpy.QtGui import QKeyEvent, QTextCursor
 from qtpy.QtWidgets import (
-    QGroupBox,
+    QFrame,
     QHBoxLayout,
-    QLineEdit,
+    QPlainTextEdit,
     QPushButton,
     QTextEdit,
     QVBoxLayout,
@@ -24,6 +25,19 @@ _MODEL_CHOICES: list[tuple[str, str, str]] = [
 ]
 
 
+class _ComposerInput(QPlainTextEdit):
+    submitted = Signal()
+
+    def keyPressEvent(self, event: QKeyEvent) -> None:
+        if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            if event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
+                super().keyPressEvent(event)
+            else:
+                self.submitted.emit()
+            return
+        super().keyPressEvent(event)
+
+
 class ChatDock(QWidget):
     def __init__(self, viewer: Any, settings: Any) -> None:
         super().__init__()
@@ -37,46 +51,59 @@ class ChatDock(QWidget):
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(8, 8, 8, 8)
-        layout.setSpacing(10)
+        layout.setSpacing(8)
 
-        provider_box = QGroupBox("Provider")
-        provider_layout = QHBoxLayout(provider_box)
-        self.model_picker = NoScrollComboBox()
-        for label, _, _ in _MODEL_CHOICES:
-            self.model_picker.addItem(label)
-        provider_layout.addWidget(self.model_picker, stretch=1)
-        self.clear_btn = QPushButton("Clear")
-        self.clear_btn.setToolTip("Reset conversation history")
-        self.clear_btn.clicked.connect(self._on_clear)
-        provider_layout.addWidget(self.clear_btn)
-        layout.addWidget(provider_box)
-
-        conversation_box = QGroupBox("Conversation")
-        conversation_layout = QVBoxLayout(conversation_box)
         self.transcript = QTextEdit()
         self.transcript.setReadOnly(True)
         self.transcript.setPlaceholderText(
             "Type a request below. e.g. 이 z-stack에서 세포 찾고 채널2 강도 측정해줘"
         )
-        conversation_layout.addWidget(self.transcript)
-        layout.addWidget(conversation_box, stretch=1)
+        layout.addWidget(self.transcript, stretch=1)
 
-        send_box = QGroupBox("Send")
-        send_layout = QHBoxLayout(send_box)
-        self.input = QLineEdit()
-        self.input.setPlaceholderText("Send a message...")
-        self.input.returnPressed.connect(self._on_send)
-        self.send_btn = QPushButton("Send")
-        self.send_btn.clicked.connect(self._on_send)
+        composer = QFrame()
+        composer.setObjectName("composer")
+        composer_layout = QVBoxLayout(composer)
+        composer_layout.setContentsMargins(10, 10, 10, 10)
+        composer_layout.setSpacing(6)
+
+        self.input = _ComposerInput()
+        self.input.setPlaceholderText("Type a request…  (Shift+Enter for newline)")
+        self.input.setMinimumHeight(70)
+        self.input.setMaximumHeight(220)
+        self.input.submitted.connect(self._on_send)
+        composer_layout.addWidget(self.input)
+
+        toolbar = QHBoxLayout()
+        toolbar.setContentsMargins(0, 0, 0, 0)
+        toolbar.setSpacing(6)
+        self.model_picker = NoScrollComboBox()
+        for label, _, _ in _MODEL_CHOICES:
+            self.model_picker.addItem(label)
+        self.model_picker.currentIndexChanged.connect(self._on_model_change)
+        toolbar.addWidget(self.model_picker, stretch=1)
+
+        self.clear_btn = QPushButton("Clear")
+        self.clear_btn.setToolTip("Reset conversation history")
+        self.clear_btn.clicked.connect(self._on_clear)
+        toolbar.addWidget(self.clear_btn)
+
         self.cancel_btn = QPushButton("Cancel")
         self.cancel_btn.setEnabled(False)
         self.cancel_btn.clicked.connect(self._on_cancel)
-        send_layout.addWidget(self.input, stretch=1)
-        send_layout.addWidget(self.send_btn)
-        send_layout.addWidget(self.cancel_btn)
-        layout.addWidget(send_box)
+        toolbar.addWidget(self.cancel_btn)
 
-        self.model_picker.currentIndexChanged.connect(self._on_model_change)
+        self.send_btn = QPushButton("Send")
+        self.send_btn.setObjectName("sendBtn")
+        self.send_btn.clicked.connect(self._on_send)
+        toolbar.addWidget(self.send_btn)
+
+        composer_layout.addLayout(toolbar)
+        layout.addWidget(composer)
+
+    def invalidate_runner(self) -> None:
+        self._runner = None
+        self._provider_kind = None
+        self._provider_model = None
 
     def _make_provider(self):
         from imajin.agent.providers import (
@@ -89,7 +116,7 @@ class ChatDock(QWidget):
         if kind == "anthropic":
             if not self.settings.anthropic_api_key:
                 raise RuntimeError(
-                    "ANTHROPIC_API_KEY not set. Set the env var or use a local provider."
+                    "ANTHROPIC_API_KEY not set. Open Imajin → API Keys… or set the env var."
                 )
             return AnthropicProvider(
                 api_key=self.settings.anthropic_api_key, model=model
@@ -97,15 +124,15 @@ class ChatDock(QWidget):
         if kind == "openai":
             if not self.settings.openai_api_key:
                 raise RuntimeError(
-                    "OPENAI_API_KEY not set. Set the env var or use a local provider."
+                    "OPENAI_API_KEY not set. Open Imajin → API Keys… or set the env var."
                 )
             return OpenAICompatProvider(
                 api_key=self.settings.openai_api_key,
                 model=model,
-                base_url="https://api.openai.com/v1",
+                base_url=self.settings.openai_base_url,
             )
         return OpenAICompatProvider(
-            api_key=None, model=model, base_url="http://localhost:11434/v1"
+            api_key=None, model=model, base_url=self.settings.ollama_base_url
         )
 
     def _ensure_runner(self):
@@ -137,7 +164,7 @@ class ChatDock(QWidget):
         self.transcript.clear()
 
     def _on_send(self) -> None:
-        text = self.input.text().strip()
+        text = self.input.toPlainText().strip()
         if not text:
             return
         self.input.clear()

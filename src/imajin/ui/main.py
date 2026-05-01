@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Any
+
 
 def _register_imajin_theme() -> None:
     from napari.utils.theme import Theme, available_themes, register_theme
@@ -28,6 +30,26 @@ def _register_imajin_theme() -> None:
     register_theme("imajin", theme, "imajin")
 
 
+def _add_imajin_menu(viewer: Any, settings: Any, chat_dock: Any) -> None:
+    from qtpy.QtGui import QAction
+
+    qmain = viewer.window._qt_window
+    menubar = qmain.menuBar()
+    menu = menubar.addMenu("Imajin")
+
+    action = QAction("API Keys…", qmain)
+    action.triggered.connect(lambda: _open_settings(qmain, settings, chat_dock))
+    menu.addAction(action)
+
+
+def _open_settings(parent: Any, settings: Any, chat_dock: Any) -> None:
+    from imajin.ui.settings_dialog import SettingsDialog
+
+    dialog = SettingsDialog(settings, parent=parent)
+    if dialog.exec():
+        chat_dock.invalidate_runner()
+
+
 def launch() -> int:
     import napari
 
@@ -52,9 +74,14 @@ def launch() -> int:
     manual = ManualDock(viewer=viewer)
     table = TableDock(viewer=viewer)
 
-    viewer.window.add_dock_widget(chat, area="right", name="Chat")
-    viewer.window.add_dock_widget(manual, area="right", name="Manual")
+    chat_dw = viewer.window.add_dock_widget(chat, area="right", name="Chat")
+    manual_dw = viewer.window.add_dock_widget(manual, area="right", name="Manual")
     viewer.window.add_dock_widget(table, area="bottom", name="Tables")
+
+    viewer.window._qt_window.tabifyDockWidget(chat_dw, manual_dw)
+    chat_dw.raise_()
+
+    _add_imajin_menu(viewer, settings, chat)
 
     napari.run()
     return 0
