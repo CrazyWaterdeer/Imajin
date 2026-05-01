@@ -165,25 +165,70 @@ class Theme:
                 color: {cls.TEXT_PRIMARY};
             }}
 
+            /* VS Code-style composer */
             QFrame#composer {{
                 background-color: {cls.BG_DARK};
                 border: 1px solid {cls.BORDER};
-                border-radius: 10px;
+                border-radius: 8px;
             }}
             QFrame#composer QPlainTextEdit {{
                 background-color: transparent;
                 border: none;
-                padding: 4px;
+                padding: 4px 6px;
                 color: {cls.TEXT_PRIMARY};
+                font-size: 12px;
             }}
 
+            /* Model picker pill — compact button with menu */
+            QPushButton#modelBtn {{
+                background-color: transparent;
+                border: 1px solid {cls.BORDER};
+                color: {cls.TEXT_SECONDARY};
+                padding: 3px 10px;
+                border-radius: 4px;
+                font-weight: normal;
+                font-size: 11px;
+                text-align: left;
+                min-height: 0;
+            }}
+            QPushButton#modelBtn:hover {{
+                background-color: {cls.BG_LIGHT};
+                color: {cls.TEXT_PRIMARY};
+            }}
+            QPushButton#modelBtn::menu-indicator {{
+                image: none;
+                width: 0;
+            }}
+
+            /* Subtle toolbar buttons (Clear etc.) — visible only on hover */
+            QPushButton#composerTool {{
+                background-color: transparent;
+                border: 1px solid transparent;
+                color: {cls.TEXT_SECONDARY};
+                padding: 3px 10px;
+                border-radius: 4px;
+                font-weight: normal;
+                font-size: 11px;
+                min-height: 0;
+            }}
+            QPushButton#composerTool:hover {{
+                background-color: {cls.BG_LIGHT};
+                color: {cls.TEXT_PRIMARY};
+            }}
+            QPushButton#composerTool:disabled {{
+                color: {cls.TEXT_MUTED};
+            }}
+
+            /* Primary send action — compact coral */
             QPushButton#sendBtn {{
                 background-color: {cls.PRIMARY};
                 color: white;
                 border: 1px solid {cls.PRIMARY};
-                padding: 8px 18px;
-                border-radius: 5px;
+                padding: 3px 14px;
+                border-radius: 4px;
                 font-weight: bold;
+                font-size: 11px;
+                min-height: 0;
             }}
             QPushButton#sendBtn:hover {{
                 background-color: {cls.PRIMARY_LIGHT};
@@ -193,9 +238,26 @@ class Theme:
                 background-color: {cls.PRIMARY_DARK};
             }}
             QPushButton#sendBtn:disabled {{
-                background-color: #1E1E1E;
-                color: #404040;
+                background-color: {cls.BORDER};
+                color: {cls.TEXT_MUTED};
                 border-color: {cls.BORDER};
+            }}
+
+            /* Stop button — replaces Send while streaming */
+            QPushButton#stopBtn {{
+                background-color: {cls.BG_LIGHT};
+                color: {cls.TEXT_PRIMARY};
+                border: 1px solid {cls.BORDER};
+                padding: 3px 14px;
+                border-radius: 4px;
+                font-weight: bold;
+                font-size: 11px;
+                min-height: 0;
+            }}
+            QPushButton#stopBtn:hover {{
+                background-color: {cls.PRIMARY};
+                border-color: {cls.PRIMARY};
+                color: white;
             }}
 
             QScrollBar:vertical {{

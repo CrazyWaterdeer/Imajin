@@ -8,6 +8,7 @@ from qtpy.QtGui import QKeyEvent, QTextCursor
 from qtpy.QtWidgets import (
     QFrame,
     QHBoxLayout,
+    QMenu,
     QPlainTextEdit,
     QPushButton,
     QTextEdit,
@@ -15,7 +16,7 @@ from qtpy.QtWidgets import (
     QWidget,
 )
 
-from imajin.ui.theme import NoScrollComboBox, Theme, apply_dock_theme
+from imajin.ui.theme import Theme, apply_dock_theme
 
 _MODEL_CHOICES: list[tuple[str, str, str]] = [
     ("Claude Sonnet 4.6", "anthropic", "claude-sonnet-4-6"),
@@ -23,6 +24,56 @@ _MODEL_CHOICES: list[tuple[str, str, str]] = [
     ("GPT-5 (OpenAI)", "openai", "gpt-5"),
     ("Local: qwen3.5:9b (multimodal, 256K)", "ollama", "qwen3.5:9b"),
 ]
+
+
+def _short_label(label: str) -> str:
+    short = label.replace("Claude ", "").replace(" (OpenAI)", "").replace("Local: ", "")
+    if len(short) > 26:
+        short = short[:24] + "…"
+    return short
+
+
+class _ModelPickerButton(QPushButton):
+    """Pill-shaped button that opens a menu of model choices."""
+
+    currentIndexChanged = Signal(int)
+
+    def __init__(self, choices: list[tuple[str, str, str]], parent=None) -> None:
+        super().__init__(parent)
+        self.setObjectName("modelBtn")
+        self._choices = choices
+        self._index = 0
+
+        menu = QMenu(self)
+        last_kind: str | None = None
+        for i, (label, kind, _) in enumerate(choices):
+            if last_kind is not None and kind != last_kind:
+                menu.addSeparator()
+            action = menu.addAction(label)
+            action.triggered.connect(lambda _checked=False, idx=i: self.setCurrentIndex(idx))
+            last_kind = kind
+        self.setMenu(menu)
+        self._refresh_text()
+
+    def setCurrentIndex(self, idx: int) -> None:
+        if idx == self._index:
+            return
+        self._index = idx
+        self._refresh_text()
+        self.currentIndexChanged.emit(idx)
+
+    def currentIndex(self) -> int:
+        return self._index
+
+    def count(self) -> int:
+        return len(self._choices)
+
+    def itemText(self, idx: int) -> str:
+        return self._choices[idx][0]
+
+    def _refresh_text(self) -> None:
+        label = self._choices[self._index][0]
+        self.setText(f"{_short_label(label)}  ▾")
 
 
 class _ComposerInput(QPlainTextEdit):
@@ -56,46 +107,53 @@ class ChatDock(QWidget):
         self.transcript = QTextEdit()
         self.transcript.setReadOnly(True)
         self.transcript.setPlaceholderText(
-            "Type a request below. e.g. 이 z-stack에서 세포 찾고 채널2 강도 측정해줘"
+            "Type a request below.   e.g. 이 z-stack에서 세포 찾고 채널2 강도 측정해줘"
         )
         layout.addWidget(self.transcript, stretch=1)
 
         composer = QFrame()
         composer.setObjectName("composer")
         composer_layout = QVBoxLayout(composer)
-        composer_layout.setContentsMargins(10, 10, 10, 10)
-        composer_layout.setSpacing(6)
+        composer_layout.setContentsMargins(8, 6, 8, 6)
+        composer_layout.setSpacing(4)
 
         self.input = _ComposerInput()
-        self.input.setPlaceholderText("Type a request…  (Shift+Enter for newline)")
-        self.input.setMinimumHeight(70)
-        self.input.setMaximumHeight(220)
+        self.input.setPlaceholderText("Type a request…   (Shift+Enter = newline)")
+        self.input.setMinimumHeight(32)
+        self.input.setMaximumHeight(140)
         self.input.submitted.connect(self._on_send)
         composer_layout.addWidget(self.input)
 
         toolbar = QHBoxLayout()
         toolbar.setContentsMargins(0, 0, 0, 0)
         toolbar.setSpacing(6)
-        self.model_picker = NoScrollComboBox()
-        for label, _, _ in _MODEL_CHOICES:
-            self.model_picker.addItem(label)
+
+        self.model_picker = _ModelPickerButton(_MODEL_CHOICES)
         self.model_picker.currentIndexChanged.connect(self._on_model_change)
-        toolbar.addWidget(self.model_picker, stretch=1)
+        toolbar.addWidget(self.model_picker)
+
+        toolbar.addStretch(1)
 
         self.clear_btn = QPushButton("Clear")
+        self.clear_btn.setObjectName("composerTool")
         self.clear_btn.setToolTip("Reset conversation history")
         self.clear_btn.clicked.connect(self._on_clear)
         toolbar.addWidget(self.clear_btn)
 
-        self.cancel_btn = QPushButton("Cancel")
-        self.cancel_btn.setEnabled(False)
-        self.cancel_btn.clicked.connect(self._on_cancel)
-        toolbar.addWidget(self.cancel_btn)
-
         self.send_btn = QPushButton("Send")
         self.send_btn.setObjectName("sendBtn")
+        self.send_btn.setToolTip("Send (Enter)")
         self.send_btn.clicked.connect(self._on_send)
         toolbar.addWidget(self.send_btn)
+
+        self.stop_btn = QPushButton("Stop")
+        self.stop_btn.setObjectName("stopBtn")
+        self.stop_btn.setToolTip("Cancel the running turn")
+        self.stop_btn.clicked.connect(self._on_cancel)
+        self.stop_btn.hide()
+        toolbar.addWidget(self.stop_btn)
+
+        self.cancel_btn = self.stop_btn  # backward-compat alias
 
         composer_layout.addLayout(toolbar)
         layout.addWidget(composer)
@@ -190,8 +248,7 @@ class ChatDock(QWidget):
         worker.finished.connect(self._on_finished)
         worker.errored.connect(self._on_errored)
         self._worker = worker
-        self.send_btn.setEnabled(False)
-        self.cancel_btn.setEnabled(True)
+        self._set_streaming(True)
         worker.start()
 
     def _on_cancel(self) -> None:
@@ -204,13 +261,16 @@ class ChatDock(QWidget):
                 pass
 
     def _on_finished(self) -> None:
-        self.send_btn.setEnabled(True)
-        self.cancel_btn.setEnabled(False)
+        self._set_streaming(False)
         self._worker = None
 
     def _on_errored(self, exc: Exception) -> None:
         self._append_system(f"[runner error] {type(exc).__name__}: {exc}")
         self._on_finished()
+
+    def _set_streaming(self, streaming: bool) -> None:
+        self.send_btn.setVisible(not streaming)
+        self.stop_btn.setVisible(streaming)
 
     def _on_event(self, event: Any) -> None:
         from imajin.agent.providers.base import (

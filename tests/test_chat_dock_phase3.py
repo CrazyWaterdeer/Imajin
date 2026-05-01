@@ -12,7 +12,7 @@ def test_chat_dock_has_model_picker(qtbot, viewer) -> None:
     assert "Claude Sonnet 4.6" in dock.model_picker.itemText(0)
     assert "qwen3.5:9b" in dock.model_picker.itemText(3)
     assert dock.send_btn.isEnabled()
-    assert dock.cancel_btn.isEnabled() is False
+    assert dock.stop_btn.isHidden()
 
 
 def test_chat_dock_clear_resets_transcript(qtbot, viewer) -> None:
