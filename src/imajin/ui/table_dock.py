@@ -6,9 +6,9 @@ import pandas as pd
 from qtpy.QtCore import QAbstractTableModel, QModelIndex, Qt
 from qtpy.QtWidgets import (
     QAbstractItemView,
+    QGroupBox,
     QHBoxLayout,
     QHeaderView,
-    QLabel,
     QPushButton,
     QTableView,
     QVBoxLayout,
@@ -67,23 +67,28 @@ class TableDock(QWidget):
         self.viewer = viewer
 
         layout = QVBoxLayout(self)
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(10)
 
-        head = QHBoxLayout()
-        head.addWidget(QLabel("<b>Table:</b>"))
+        source_box = QGroupBox("Source")
+        source_layout = QHBoxLayout(source_box)
         self.table_picker = NoScrollComboBox()
-        head.addWidget(self.table_picker, stretch=1)
-        self.refresh_btn = QPushButton("Refresh list")
+        source_layout.addWidget(self.table_picker, stretch=1)
+        self.refresh_btn = QPushButton("Refresh")
         self.refresh_btn.clicked.connect(self._refresh_table_list)
-        head.addWidget(self.refresh_btn)
-        layout.addLayout(head)
+        source_layout.addWidget(self.refresh_btn)
+        layout.addWidget(source_box)
 
+        data_box = QGroupBox("Data")
+        data_layout = QVBoxLayout(data_box)
         self._model = _DataFrameModel()
         self._view = QTableView()
         self._view.setModel(self._model)
         self._view.setSortingEnabled(True)
         self._view.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self._view.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
-        layout.addWidget(self._view, stretch=1)
+        data_layout.addWidget(self._view)
+        layout.addWidget(data_box, stretch=1)
 
         self.table_picker.currentTextChanged.connect(self._on_table_change)
         self._view.clicked.connect(self._on_row_click)

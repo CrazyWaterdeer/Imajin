@@ -4,7 +4,8 @@ import inspect
 from typing import Any
 
 from qtpy.QtWidgets import (
-    QLabel,
+    QGroupBox,
+    QHBoxLayout,
     QTextEdit,
     QVBoxLayout,
     QWidget,
@@ -26,23 +27,31 @@ class ManualDock(QWidget):
         self._current_widget = None
 
         layout = QVBoxLayout(self)
-        layout.addWidget(QLabel("<b>Manual analysis</b>"))
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(10)
 
+        tool_box = QGroupBox("Tool")
+        tool_layout = QHBoxLayout(tool_box)
         self.tool_picker = NoScrollComboBox()
-        layout.addWidget(self.tool_picker)
+        tool_layout.addWidget(self.tool_picker)
+        layout.addWidget(tool_box)
 
+        params_box = QGroupBox("Parameters")
+        params_layout = QVBoxLayout(params_box)
         self._form_holder = QWidget()
         self._form_layout = QVBoxLayout(self._form_holder)
         self._form_layout.setContentsMargins(0, 0, 0, 0)
-        layout.addWidget(self._form_holder)
+        params_layout.addWidget(self._form_holder)
+        layout.addWidget(params_box, stretch=1)
 
+        output_box = QGroupBox("Output")
+        output_layout = QVBoxLayout(output_box)
         self.result_view = QTextEdit()
         self.result_view.setReadOnly(True)
-        self.result_view.setMaximumHeight(140)
+        self.result_view.setMaximumHeight(160)
         self.result_view.setPlaceholderText("Tool output appears here.")
-        layout.addWidget(self.result_view)
-
-        layout.addStretch(1)
+        output_layout.addWidget(self.result_view)
+        layout.addWidget(output_box)
 
         self._populate_tools()
         self.tool_picker.currentIndexChanged.connect(self._on_tool_change)

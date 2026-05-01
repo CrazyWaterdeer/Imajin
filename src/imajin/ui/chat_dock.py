@@ -5,8 +5,8 @@ from typing import Any
 
 from qtpy.QtGui import QTextCursor
 from qtpy.QtWidgets import (
+    QGroupBox,
     QHBoxLayout,
-    QLabel,
     QLineEdit,
     QPushButton,
     QTextEdit,
@@ -36,27 +36,33 @@ class ChatDock(QWidget):
         self._provider_model = None
 
         layout = QVBoxLayout(self)
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(10)
 
-        head = QHBoxLayout()
-        head.addWidget(QLabel("<b>Model:</b>"))
+        provider_box = QGroupBox("Provider")
+        provider_layout = QHBoxLayout(provider_box)
         self.model_picker = NoScrollComboBox()
         for label, _, _ in _MODEL_CHOICES:
             self.model_picker.addItem(label)
-        head.addWidget(self.model_picker, stretch=1)
+        provider_layout.addWidget(self.model_picker, stretch=1)
         self.clear_btn = QPushButton("Clear")
         self.clear_btn.setToolTip("Reset conversation history")
         self.clear_btn.clicked.connect(self._on_clear)
-        head.addWidget(self.clear_btn)
-        layout.addLayout(head)
+        provider_layout.addWidget(self.clear_btn)
+        layout.addWidget(provider_box)
 
+        conversation_box = QGroupBox("Conversation")
+        conversation_layout = QVBoxLayout(conversation_box)
         self.transcript = QTextEdit()
         self.transcript.setReadOnly(True)
         self.transcript.setPlaceholderText(
             "Type a request below. e.g. 이 z-stack에서 세포 찾고 채널2 강도 측정해줘"
         )
-        layout.addWidget(self.transcript, stretch=1)
+        conversation_layout.addWidget(self.transcript)
+        layout.addWidget(conversation_box, stretch=1)
 
-        row = QHBoxLayout()
+        send_box = QGroupBox("Send")
+        send_layout = QHBoxLayout(send_box)
         self.input = QLineEdit()
         self.input.setPlaceholderText("Send a message...")
         self.input.returnPressed.connect(self._on_send)
@@ -65,10 +71,10 @@ class ChatDock(QWidget):
         self.cancel_btn = QPushButton("Cancel")
         self.cancel_btn.setEnabled(False)
         self.cancel_btn.clicked.connect(self._on_cancel)
-        row.addWidget(self.input, stretch=1)
-        row.addWidget(self.send_btn)
-        row.addWidget(self.cancel_btn)
-        layout.addLayout(row)
+        send_layout.addWidget(self.input, stretch=1)
+        send_layout.addWidget(self.send_btn)
+        send_layout.addWidget(self.cancel_btn)
+        layout.addWidget(send_box)
 
         self.model_picker.currentIndexChanged.connect(self._on_model_change)
 
