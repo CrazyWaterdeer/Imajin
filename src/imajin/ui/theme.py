@@ -323,12 +323,92 @@ class Theme:
                 padding: 8px;
                 border-radius: 4px;
             }}
+
+            /* ===== Chat transcript (bubble layout) ===== */
+            QScrollArea#chatTranscript,
+            QWidget#chatTranscriptInner,
+            QWidget#chatRow {{
+                background-color: {cls.BG_DARKEST};
+                border: none;
+            }}
+
+            QLabel#chatPlaceholder {{
+                color: {cls.TEXT_MUTED};
+                font-weight: normal;
+                padding: 24px 12px;
+            }}
+
+            QFrame#bubbleUser {{
+                background-color: {cls.PRIMARY};
+                border-radius: 14px;
+                padding: 10px 14px;
+            }}
+            QFrame#bubbleUser QLabel {{
+                color: white;
+                background: transparent;
+                font-weight: normal;
+            }}
+
+            QFrame#bubbleAssistant {{
+                background-color: {cls.BG_DARK};
+                border-radius: 14px;
+                padding: 10px 14px;
+            }}
+            QFrame#bubbleAssistant QLabel {{
+                color: {cls.TEXT_PRIMARY};
+                background: transparent;
+                font-weight: normal;
+            }}
+
+            QFrame#bubbleSystem {{
+                background: transparent;
+                padding: 2px 6px;
+            }}
+            QFrame#bubbleSystem QLabel {{
+                color: {cls.TEXT_SECONDARY};
+                background: transparent;
+                font-style: italic;
+                font-weight: normal;
+                font-size: 11px;
+            }}
         """
 
 
 def apply_dock_theme(widget: QWidget) -> None:
     widget.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
     widget.setStyleSheet(Theme.get_dock_stylesheet())
+
+
+def apply_dark_app_palette(app) -> None:
+    """Set a dark QPalette on the QApplication so Qt's Wayland CSD draws a
+    dark titlebar matching the imajin theme. No-op for X11/server-side
+    decorations (the WM controls those)."""
+    from qtpy.QtGui import QColor, QPalette
+
+    bg = QColor(Theme.BG_DARKEST)
+    bg_alt = QColor(Theme.BG_DARK)
+    fg = QColor(Theme.TEXT_PRIMARY)
+    accent = QColor(Theme.PRIMARY)
+    border = QColor(Theme.BORDER)
+
+    pal = QPalette()
+    pal.setColor(QPalette.ColorRole.Window, bg)
+    pal.setColor(QPalette.ColorRole.WindowText, fg)
+    pal.setColor(QPalette.ColorRole.Base, bg_alt)
+    pal.setColor(QPalette.ColorRole.AlternateBase, bg)
+    pal.setColor(QPalette.ColorRole.Text, fg)
+    pal.setColor(QPalette.ColorRole.Button, bg_alt)
+    pal.setColor(QPalette.ColorRole.ButtonText, fg)
+    pal.setColor(QPalette.ColorRole.Highlight, accent)
+    pal.setColor(QPalette.ColorRole.HighlightedText, fg)
+    pal.setColor(QPalette.ColorRole.ToolTipBase, bg_alt)
+    pal.setColor(QPalette.ColorRole.ToolTipText, fg)
+    pal.setColor(QPalette.ColorRole.PlaceholderText, QColor(Theme.TEXT_MUTED))
+    pal.setColor(QPalette.ColorRole.Mid, border)
+    pal.setColor(QPalette.ColorRole.Dark, bg)
+    pal.setColor(QPalette.ColorRole.Shadow, QColor("#000000"))
+
+    app.setPalette(pal)
 
 
 class NoScrollSpinBox(QSpinBox):

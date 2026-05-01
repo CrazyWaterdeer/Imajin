@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Iterator
 from typing import Any
 
@@ -11,6 +12,102 @@ from imajin.agent.providers.base import (
     ToolUse,
     ToolUseStart,
 )
+
+
+_JSON_TOOLCALL_RE = re.compile(
+    r"\[?\s*\{[^{}]*\"name\"\s*:\s*\"[^\"]+\"[^{}]*\"(?:arguments|parameters|input|args)\"\s*:",
+    re.DOTALL,
+)
+
+
+def _parse_inline_tool_calls(text: str, known_tool_names: set[str]) -> list[dict[str, Any]]:
+    """Extract tool calls that some local models (qwen, llama) emit as JSON in
+    the content field instead of via the proper `tool_calls` field.
+
+    Recognizes shapes like:
+        [{"name": "foo", "arguments": {...}}]
+        {"name": "foo", "arguments": {...}}
+        ```json {"name": "foo", "parameters": {...}} ```
+    Returns a list of {"name": str, "input": dict, "id": str} dicts.
+    """
+    if not text or not _JSON_TOOLCALL_RE.search(text):
+        return []
+    # Strip code fences if present.
+    candidate = text.strip()
+    fence = re.search(r"```(?:json)?\s*(.*?)```", candidate, re.DOTALL)
+    if fence:
+        candidate = fence.group(1).strip()
+    # Try direct parse, then try to slice the first JSON object/array out.
+    obj: Any = None
+    for parser_input in (candidate, _slice_first_json(candidate)):
+        if parser_input is None:
+            continue
+        try:
+            obj = json.loads(parser_input)
+            break
+        except json.JSONDecodeError:
+            continue
+    if obj is None:
+        return []
+    items = obj if isinstance(obj, list) else [obj]
+    out: list[dict[str, Any]] = []
+    for i, it in enumerate(items):
+        if not isinstance(it, dict):
+            continue
+        name = it.get("name") or (it.get("function") or {}).get("name")
+        if not isinstance(name, str) or name not in known_tool_names:
+            continue
+        args = (
+            it.get("arguments")
+            or it.get("parameters")
+            or it.get("input")
+            or it.get("args")
+            or (it.get("function") or {}).get("arguments")
+            or {}
+        )
+        if isinstance(args, str):
+            try:
+                args = json.loads(args)
+            except json.JSONDecodeError:
+                args = {}
+        out.append({"id": f"inline_{i}", "name": name, "input": args})
+    return out
+
+
+def _slice_first_json(text: str) -> str | None:
+    """Return the first balanced JSON array/object substring, or None."""
+    start = -1
+    for i, ch in enumerate(text):
+        if ch in "[{":
+            start = i
+            opener = ch
+            closer = "]" if opener == "[" else "}"
+            break
+    if start == -1:
+        return None
+    depth = 0
+    in_str = False
+    esc = False
+    for i in range(start, len(text)):
+        c = text[i]
+        if esc:
+            esc = False
+            continue
+        if c == "\\":
+            esc = True
+            continue
+        if c == '"':
+            in_str = not in_str
+            continue
+        if in_str:
+            continue
+        if c == opener:
+            depth += 1
+        elif c == closer:
+            depth -= 1
+            if depth == 0:
+                return text[start : i + 1]
+    return None
 
 
 def _anthropic_to_openai_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -113,6 +210,8 @@ class OpenAICompatProvider:
 
         tool_buffers: dict[int, dict[str, str]] = {}
         finish_reason: str | None = None
+        accumulated_text = ""
+        known_tool_names = {t["name"] for t in tools}
 
         for chunk in self._client.chat.completions.create(**kwargs):
             if not chunk.choices:
@@ -121,6 +220,7 @@ class OpenAICompatProvider:
             delta = choice.delta
 
             if getattr(delta, "content", None):
+                accumulated_text += delta.content
                 yield TextDelta(text=delta.content)
 
             if getattr(delta, "tool_calls", None):
@@ -139,12 +239,24 @@ class OpenAICompatProvider:
             if choice.finish_reason:
                 finish_reason = choice.finish_reason
 
-        for idx, buf in tool_buffers.items():
-            try:
-                parsed = json.loads(buf["args"]) if buf["args"] else {}
-            except json.JSONDecodeError:
-                parsed = {}
-            yield ToolUse(id=buf["id"] or f"call_{idx}", name=buf["name"], input=parsed)
+        if tool_buffers:
+            for idx, buf in tool_buffers.items():
+                try:
+                    parsed = json.loads(buf["args"]) if buf["args"] else {}
+                except json.JSONDecodeError:
+                    parsed = {}
+                yield ToolUse(id=buf["id"] or f"call_{idx}", name=buf["name"], input=parsed)
+        else:
+            # Fallback: some local models (qwen, llama via Ollama) emit tool
+            # calls as JSON inside the content field instead of via the proper
+            # tool_calls channel. Scan the accumulated content text for that
+            # pattern and synthesize ToolUse events.
+            inline_calls = _parse_inline_tool_calls(accumulated_text, known_tool_names)
+            for call in inline_calls:
+                yield ToolUseStart(id=call["id"], name=call["name"])
+                yield ToolUse(id=call["id"], name=call["name"], input=call["input"])
+            if inline_calls:
+                finish_reason = "tool_calls"
 
         reason = "tool_use" if finish_reason == "tool_calls" else (finish_reason or "end_turn")
         yield Stop(reason=reason)

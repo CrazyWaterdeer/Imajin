@@ -45,12 +45,17 @@ class AgentRunner:
         provider: Provider,
         system_prompt: str,
         max_loops: int = 12,
+        tool_caller: Any | None = None,
     ) -> None:
         self.provider = provider
         self.system_prompt = system_prompt
         self.max_loops = max_loops
         self.messages: list[dict[str, Any]] = []
         self._cancelled = False
+        # If unset, falls back to direct call_tool (suitable for tests/scripts).
+        # In the GUI, chat dock injects a callable that marshals to the main
+        # thread to avoid Qt threading violations.
+        self._tool_caller = tool_caller
 
     def cancel(self) -> None:
         self._cancelled = True
@@ -128,8 +133,9 @@ class AgentRunner:
                 from imajin.agent import provenance
 
                 provenance.set_driver(f"llm:{self.provider.model}")
+                tool_caller = self._tool_caller or call_tool
                 try:
-                    result = call_tool(block["name"], **block.get("input", {}))
+                    result = tool_caller(block["name"], **block.get("input", {}))
                     tool_result_blocks.append(
                         {
                             "type": "tool_result",

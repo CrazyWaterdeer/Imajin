@@ -16,6 +16,28 @@ def _is_wsl() -> bool:
         return False
 
 
+def _ensure_ollama(base_url: str) -> None:
+    # Best-effort, fire-and-forget. If ollama isn't installed (laptop case),
+    # this is a silent no-op. The chat dock probes again to render status.
+    try:
+        from imajin.ui.ollama_helper import ensure_running
+
+        ensure_running(base_url)
+    except Exception:
+        pass
+
+
+def _apply_ui_scale_env(ui_scale_setting: str) -> None:
+    # Priority: existing env var (power-user override) > settings/auto.
+    if "QT_SCALE_FACTOR" in os.environ:
+        return
+    from imajin.ui.display import resolve_ui_scale
+
+    scale = resolve_ui_scale(ui_scale_setting)
+    os.environ["QT_SCALE_FACTOR"] = f"{scale:g}"
+    os.environ.setdefault("QT_SCALE_FACTOR_ROUNDING_POLICY", "PassThrough")
+
+
 def _setup_wsl_env() -> None:
     if not _is_wsl():
         return
@@ -25,11 +47,9 @@ def _setup_wsl_env() -> None:
     os.environ.setdefault("GALLIUM_DRIVER", "d3d12")
     if not os.environ.get("XDG_RUNTIME_DIR") and os.path.exists("/mnt/wslg/runtime-dir"):
         os.environ["XDG_RUNTIME_DIR"] = "/mnt/wslg/runtime-dir"
-    # WSLg often reports DPI as 96 (=100%) regardless of the host display, so
-    # Qt's auto-DPI scaling produces tiny widgets on high-res monitors. 1.5x
-    # is a comfortable default; override with QT_SCALE_FACTOR=1.0 / 2.0 / etc.
-    os.environ.setdefault("QT_SCALE_FACTOR", "1.5")
-    os.environ.setdefault("QT_SCALE_FACTOR_ROUNDING_POLICY", "PassThrough")
+    # Prefer Wayland so Qt draws client-side decorations using the app palette
+    # (gives us a dark titlebar). Fall back to xcb if Wayland isn't available.
+    os.environ.setdefault("QT_QPA_PLATFORM", "wayland;xcb")
 
 
 def _check_import(module: str) -> tuple[bool, str]:
@@ -123,14 +143,19 @@ def _doctor() -> int:
     return 0 if ok else 1
 
 
-def _launch_gui() -> int:
+def _launch_gui(settings: "Settings") -> int:
     from imajin.ui.main import launch
 
-    return launch()
+    return launch(settings)
 
 
 def main() -> int:
+    from imajin.config import Settings
+
+    settings = Settings.from_env()
     _setup_wsl_env()
+    _apply_ui_scale_env(settings.ui_scale)
+    _ensure_ollama(settings.ollama_base_url)
     parser = argparse.ArgumentParser(
         prog="imajin",
         description="GUI-based AI agent for confocal microscopy analysis.",
@@ -153,7 +178,7 @@ def main() -> int:
         print("demo not yet implemented — Phase 4")
         return 1
 
-    return _launch_gui()
+    return _launch_gui(settings)
 
 
 if __name__ == "__main__":

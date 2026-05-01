@@ -4,19 +4,21 @@ import json
 from typing import Any
 
 from qtpy.QtCore import Qt, Signal
-from qtpy.QtGui import QKeyEvent, QTextCursor
+from qtpy.QtGui import QKeyEvent
 from qtpy.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QMenu,
     QPlainTextEdit,
     QPushButton,
-    QTextEdit,
     QVBoxLayout,
     QWidget,
 )
 
-from imajin.ui.theme import Theme, apply_dock_theme
+from imajin.agent.qt_tool_runner import MainThreadToolRunner
+from imajin.ui.chat_transcript import ChatTranscript
+from imajin.ui.provider_status import ProviderStatus, compute_statuses
+from imajin.ui.theme import apply_dock_theme
 
 _MODEL_CHOICES: list[tuple[str, str, str]] = [
     ("Claude Sonnet 4.6", "anthropic", "claude-sonnet-4-6"),
@@ -38,22 +40,66 @@ class _ModelPickerButton(QPushButton):
 
     currentIndexChanged = Signal(int)
 
-    def __init__(self, choices: list[tuple[str, str, str]], parent=None) -> None:
+    def __init__(
+        self,
+        choices: list[tuple[str, str, str]],
+        statuses: dict[str, ProviderStatus] | None = None,
+        parent=None,
+    ) -> None:
         super().__init__(parent)
         self.setObjectName("modelBtn")
         self._choices = choices
-        self._index = 0
+        self._statuses: dict[str, ProviderStatus] = statuses or {}
+        # Default to first available choice; fall back to 0 if none available.
+        self._index = self._first_available_index()
+        self._build_menu()
+        self._refresh_text()
 
+    def _first_available_index(self) -> int:
+        for i, (_, kind, _) in enumerate(self._choices):
+            st = self._statuses.get(kind)
+            if st is None or st.available:
+                return i
+        return 0
+
+    def _build_menu(self) -> None:
         menu = QMenu(self)
         last_kind: str | None = None
-        for i, (label, kind, _) in enumerate(choices):
+        for i, (label, kind, _) in enumerate(self._choices):
             if last_kind is not None and kind != last_kind:
                 menu.addSeparator()
-            action = menu.addAction(label)
-            action.triggered.connect(lambda _checked=False, idx=i: self.setCurrentIndex(idx))
+            status = self._statuses.get(kind)
+            if status is not None and not status.available:
+                action = menu.addAction(f"{label} — {status.reason}")
+                action.setEnabled(False)
+                action.setToolTip(
+                    f"Unavailable: {status.reason}. "
+                    "Open Imajin → API Keys… or start Ollama."
+                )
+            else:
+                action = menu.addAction(label)
+                action.triggered.connect(
+                    lambda _checked=False, idx=i: self.setCurrentIndex(idx)
+                )
             last_kind = kind
         self.setMenu(menu)
+
+    def refresh_statuses(self, statuses: dict[str, ProviderStatus]) -> None:
+        self._statuses = statuses
+        # If the current selection went unavailable, switch to first available.
+        kind = self._choices[self._index][1]
+        cur_status = self._statuses.get(kind)
+        if cur_status is not None and not cur_status.available:
+            new_idx = self._first_available_index()
+            if new_idx != self._index:
+                self._index = new_idx
+                self.currentIndexChanged.emit(new_idx)
+        self._build_menu()
         self._refresh_text()
+
+    def current_status(self) -> ProviderStatus | None:
+        kind = self._choices[self._index][1]
+        return self._statuses.get(kind)
 
     def setCurrentIndex(self, idx: int) -> None:
         if idx == self._index:
@@ -73,7 +119,12 @@ class _ModelPickerButton(QPushButton):
 
     def _refresh_text(self) -> None:
         label = self._choices[self._index][0]
-        self.setText(f"{_short_label(label)}  ▾")
+        status = self.current_status()
+        suffix = "  ▾"
+        if status is not None and not status.available:
+            self.setText(f"{_short_label(label)} ({status.reason}){suffix}")
+        else:
+            self.setText(f"{_short_label(label)}{suffix}")
 
 
 class _ComposerInput(QPlainTextEdit):
@@ -119,16 +170,15 @@ class ChatDock(QWidget):
         self._worker = None
         self._provider_kind = None
         self._provider_model = None
+        # Lives on the main (Qt) thread; tool calls from worker are routed
+        # through this so napari Layer creation stays on the main thread.
+        self._tool_runner = MainThreadToolRunner(parent=self)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(8, 8, 8, 8)
         layout.setSpacing(8)
 
-        self.transcript = QTextEdit()
-        self.transcript.setReadOnly(True)
-        self.transcript.setPlaceholderText(
-            "Type a request below.   e.g. 이 z-stack에서 세포 찾고 채널2 강도 측정해줘"
-        )
+        self.transcript = ChatTranscript()
         layout.addWidget(self.transcript, stretch=1)
 
         composer = QFrame()
@@ -146,7 +196,8 @@ class ChatDock(QWidget):
         toolbar.setContentsMargins(0, 0, 0, 0)
         toolbar.setSpacing(6)
 
-        self.model_picker = _ModelPickerButton(_MODEL_CHOICES)
+        statuses = compute_statuses(self.settings)
+        self.model_picker = _ModelPickerButton(_MODEL_CHOICES, statuses=statuses)
         self.model_picker.currentIndexChanged.connect(self._on_model_change)
         toolbar.addWidget(self.model_picker)
 
@@ -180,6 +231,8 @@ class ChatDock(QWidget):
         self._runner = None
         self._provider_kind = None
         self._provider_model = None
+        # Re-probe in case API keys were just edited or Ollama just came up.
+        self.model_picker.refresh_statuses(compute_statuses(self.settings))
 
     def _make_provider(self):
         from imajin.agent.providers import (
@@ -224,7 +277,11 @@ class ChatDock(QWidget):
         ):
             return self._runner
         provider = self._make_provider()
-        self._runner = AgentRunner(provider, build_system_prompt())
+        self._runner = AgentRunner(
+            provider,
+            build_system_prompt(),
+            tool_caller=self._tool_runner.call,
+        )
         self._provider_kind = kind
         self._provider_model = model
         return self._runner
@@ -327,23 +384,13 @@ class ChatDock(QWidget):
             self._append_system(f"[turn complete: {event.stop_reason}]{usage_str}")
 
     def _append_user(self, text: str) -> None:
-        self.transcript.append("")
-        self.transcript.append(f"<b>User:</b> {self._escape(text)}")
+        self.transcript.append_user(text)
 
     def _begin_assistant_turn(self) -> None:
-        self.transcript.append("<b>Assistant:</b>")
+        self.transcript.begin_assistant()
 
     def _append_text_delta(self, text: str) -> None:
-        cursor = self.transcript.textCursor()
-        cursor.movePosition(QTextCursor.MoveOperation.End)
-        cursor.insertText(text)
-        self.transcript.setTextCursor(cursor)
+        self.transcript.append_assistant_delta(text)
 
     def _append_system(self, msg: str) -> None:
-        self.transcript.append(
-            f"<span style='color:{Theme.TEXT_SECONDARY}'><i>{self._escape(msg)}</i></span>"
-        )
-
-    @staticmethod
-    def _escape(text: str) -> str:
-        return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        self.transcript.append_system(msg)

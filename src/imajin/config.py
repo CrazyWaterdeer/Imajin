@@ -17,6 +17,7 @@ class Settings:
     ollama_base_url: str = "http://localhost:11434/v1"
     default_provider: str = "anthropic"
     default_model: str = "claude-sonnet-4-6"
+    ui_scale: str = "auto"
     data_dir: Path = field(
         default_factory=lambda: Path(platformdirs.user_data_dir("imajin"))
     )
@@ -26,6 +27,7 @@ class Settings:
         "openai_api_key",
         "openai_base_url",
         "ollama_base_url",
+        "ui_scale",
     )
 
     @classmethod
@@ -58,6 +60,7 @@ class Settings:
             ollama_base_url=pick(
                 "OLLAMA_BASE_URL", "ollama_base_url", "http://localhost:11434/v1"
             ),
+            ui_scale=file_data.get("ui_scale") or "auto",
         )
 
     def save_secrets(self) -> None:

@@ -8,3 +8,13 @@ wheels/
 
 # Virtual environments
 .venv
+
+# Secrets / credentials (defense-in-depth — real store lives in
+# platformdirs.user_config_dir, outside the repo)
+secrets.json
+.env
+.env.*
+*.env
+*.key
+*.pem
+*credentials*
