@@ -79,6 +79,26 @@ class _ModelPickerButton(QPushButton):
 class _ComposerInput(QPlainTextEdit):
     submitted = Signal()
 
+    def __init__(self, max_visible_lines: int = 4) -> None:
+        super().__init__()
+        self._max_visible_lines = max_visible_lines
+        self._frame_padding = 12
+        self.setFixedHeight(34)  # provisional; refined once the font is realized
+        self.document().contentsChanged.connect(self._adjust_height)
+
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        self._adjust_height()
+
+    def _adjust_height(self) -> None:
+        line_h = self.fontMetrics().lineSpacing()
+        if line_h <= 0:
+            return
+        blocks = max(1, self.document().blockCount())
+        visible = min(blocks, self._max_visible_lines)
+        target = visible * line_h + self._frame_padding
+        self.setFixedHeight(target)
+
     def keyPressEvent(self, event: QKeyEvent) -> None:
         if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
             if event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
@@ -117,10 +137,8 @@ class ChatDock(QWidget):
         composer_layout.setContentsMargins(8, 6, 8, 6)
         composer_layout.setSpacing(4)
 
-        self.input = _ComposerInput()
+        self.input = _ComposerInput(max_visible_lines=4)
         self.input.setPlaceholderText("Type a request…   (Shift+Enter = newline)")
-        self.input.setMinimumHeight(32)
-        self.input.setMaximumHeight(140)
         self.input.submitted.connect(self._on_send)
         composer_layout.addWidget(self.input)
 
