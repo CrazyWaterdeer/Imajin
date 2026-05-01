@@ -25,6 +25,11 @@ def _setup_wsl_env() -> None:
     os.environ.setdefault("GALLIUM_DRIVER", "d3d12")
     if not os.environ.get("XDG_RUNTIME_DIR") and os.path.exists("/mnt/wslg/runtime-dir"):
         os.environ["XDG_RUNTIME_DIR"] = "/mnt/wslg/runtime-dir"
+    # WSLg often reports DPI as 96 (=100%) regardless of the host display, so
+    # Qt's auto-DPI scaling produces tiny widgets on high-res monitors. 1.5x
+    # is a comfortable default; override with QT_SCALE_FACTOR=1.0 / 2.0 / etc.
+    os.environ.setdefault("QT_SCALE_FACTOR", "1.5")
+    os.environ.setdefault("QT_SCALE_FACTOR_ROUNDING_POLICY", "PassThrough")
 
 
 def _check_import(module: str) -> tuple[bool, str]:
