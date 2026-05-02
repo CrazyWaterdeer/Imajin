@@ -417,3 +417,84 @@ def test_run_recipe_on_samples_single_sample_attaches_columns(
     assert (df["group"] == "control").all()
     assert (df["file_id"] == "ctrl_1").all()
     assert (df["source_layer"] == "ctrl_1_ch0").all()
+
+
+# --- Task 10: run_recipe_on_samples (multi-sample, failure isolation) --------
+
+def test_run_recipe_on_samples_multi_sample_one_fails(
+    viewer, monkeypatch, tmp_path: Path
+) -> None:
+    from imajin.tools import workflows
+
+    labels, img = _two_label_image()
+    viewer.add_image(img, name="ctrl_1_ch0", scale=(0.5, 0.5))
+    viewer.add_image(np.zeros_like(img), name="trt_1_ch0", scale=(0.5, 0.5))
+    state.put_channel_annotation("ctrl_1_ch0", role="target", color="green")
+
+    a = tmp_path / "ctrl_1.lsm"
+    b = tmp_path / "trt_1.lsm"
+    a.write_bytes(b"")
+    b.write_bytes(b"")
+    experiment.register_files([str(a), str(b)])
+    experiment.annotate_samples(
+        [
+            {
+                "sample_name": "ctrl_1",
+                "group": "control",
+                "files": [str(a)],
+                "layers": ["ctrl_1_ch0"],
+            },
+            {
+                "sample_name": "trt_1",
+                "group": "treatment",
+                "files": [str(b)],
+                "layers": ["trt_1_ch0"],
+            },
+        ]
+    )
+    experiment.create_analysis_recipe(
+        name="r1",
+        target_channel="ctrl_1_ch0",
+        segmentation={"tool": "cellpose_sam"},
+        measurement={"properties": ["area", "mean_intensity"]},
+    )
+
+    call = {"n": 0}
+
+    def _fake_model_factory(*a, **kw):  # noqa: ANN001
+        class _FM:
+            def eval(self, data, **kwargs):  # noqa: ANN001
+                call["n"] += 1
+                if call["n"] == 1:
+                    return labels, None, None
+                return np.zeros_like(labels), None, None
+
+        return _FM()
+
+    from imajin.tools import segment
+
+    monkeypatch.setattr(segment, "_get_cellpose_model", _fake_model_factory)
+
+    res = workflows.run_recipe_on_samples(
+        recipe_name="r1", sample_names=["ctrl_1", "trt_1"]
+    )
+    assert res["n_samples"] == 2
+    assert res["n_complete"] == 1
+    assert res["n_failed"] == 1
+    statuses = [r["status"] for r in res["runs"]]
+    assert sorted(statuses) == ["complete", "failed"]
+
+    runs = state.list_runs()
+    assert {r["status"] for r in runs} == {"complete", "failed"}
+    failed = next(r for r in runs if r["status"] == "failed")
+    err = (failed["error"] or "").lower()
+    assert "zero objects" in err or "ok=false" in err
+
+
+def test_run_recipe_on_samples_no_samples_returns_empty() -> None:
+    from imajin.tools import workflows
+
+    state.put_recipe(name="r_empty", target_channel="green")
+    res = workflows.run_recipe_on_samples(recipe_name="r_empty", sample_names=[])
+    assert res["n_samples"] == 0
+    assert res["runs"] == []
