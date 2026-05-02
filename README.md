@@ -24,26 +24,38 @@ happen.
 ## Features
 
 - **File loading**: LSM (tifffile + `CZ_LSMINFO`), CZI (bioio-czi), OME-TIFF.
-  Lazy-loaded via dask; multi-channel images split into per-channel layers
-  with names from instrument metadata when present. Drag-and-drop registered
-  through `npe2`.
+  LSM / TIFF / OME-TIFF are loaded into RAM by default for responsive Z-stack
+  browsing, with automatic disk-backed memmap fallback when available RAM is
+  too low; CZI remains lazy via bioio/dask. Multi-channel images split into
+  per-channel layers with names from instrument metadata when present.
+  Drag-and-drop registered through `npe2`.
+- **Channel annotation**: simple target / counterstain / ignore roles, with
+  canonical green, red, UV, and IR/far-red channel colors inferred from file
+  metadata wavelengths when available, with manual annotations as overrides.
+  Target channels are the default for cell segmentation, intensity measurement,
+  size, and time course analysis.
 - **Preprocessing**: rolling-ball background subtraction, percentile auto-
   contrast, Gaussian denoise. All scikit-image; per-channel.
 - **Segmentation**: Cellpose-SAM (`cpsam` generalist model) with 2D / 3D
   toggle and GPU acceleration. Caches model weights between calls.
 - **Measurement**: scikit-image `regionprops_table` per Labels layer with
   per-channel intensity columns, manual-edit-aware refresh, pandas
-  `query`-style filter, group-by summary. Tables persist in a session
-  registry and surface in a layer-linked Qt table dock.
+  `query`-style filter, group-by summary, and ROI intensity-over-time tables
+  for live imaging / time-series data. Tables persist in a session registry
+  and surface in a layer-linked Qt table dock.
 - **Colocalization**: Manders M1/M2 (Otsu / zero / scalar threshold modes)
   and Pearson correlation, both mask-aware.
 - **3D + visualization**: `set_view`, `set_colormap`, `screenshot`,
   `max_projection`, `orthogonal_views`, `animate_z_rotation` (mp4 / gif).
+- **Experiment annotations**: samples, replicates, files, and layer groups can
+  be annotated as control / treatment / genotype / condition groups for
+  report generation and future batch summaries.
 - **Cell tracking**: `track_cells` via [btrack](https://github.com/quantumjot/btrack)
   on T-axis Labels.
-- **Neural morphology**: skeletonization (skan), per-branch metrics
-  (length, branch type, tortuosity). Connectome / NBLAST hooks are stubbed
-  pending a target organism / dataset.
+- **Neural morphology**: available as an isolated advanced module
+  (skeletonization, branch metrics). Connectome / NBLAST hooks are stubbed
+  pending a target organism / dataset and are not part of the default cell
+  analysis workflow.
 - **LLM-driven analysis**: provider abstraction with prompt caching for
   Anthropic and a translation layer for any OpenAI-compatible `/v1` endpoint.
   Streaming chat and tool-use are non-blocking via napari's `thread_worker`.
@@ -100,11 +112,12 @@ required.
 
 ## Status
 
-Phases 0–7 implemented (file loading → segmentation → measurement →
-colocalization → 3D → tracking + neural morphology → reporting). Workflow
-templates and folder-batch processing (Phase 4.5) are deferred. Test
-suite: 84 passing / 5 skipped (offscreen Qt has no GL context for
-`viewer.screenshot`; `track_cells` runs under the `slow` marker).
+Core single-file workflows are implemented (file loading → preprocessing →
+cell segmentation → measurement/time-course measurement → colocalization →
+3D views → reporting). Workflow templates, true folder-batch processing, and
+connectome-backed neural identification are deferred. Offscreen Qt tests skip
+OpenGL screenshot/animation paths; heavy model/API paths remain marked as
+`slow` or `integration`.
 
 ## License
 

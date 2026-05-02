@@ -4,7 +4,8 @@ from typing import Any
 
 import numpy as np
 
-from imajin.agent.state import get_layer, get_viewer
+from imajin.agent.qt_dispatch import call_on_main
+from imajin.tools.napari_ops import add_image_from_worker, snapshot_layer
 from imajin.tools.registry import tool
 
 
@@ -15,9 +16,9 @@ def _materialize(arr) -> np.ndarray:
 def _add_image(
     base_layer, data: np.ndarray, suffix: str, **kwargs: Any
 ) -> dict[str, Any]:
-    viewer = get_viewer()
     name = f"{base_layer.name}_{suffix}"
-    new = viewer.add_image(
+    new = call_on_main(
+        add_image_from_worker,
         data,
         name=name,
         scale=tuple(base_layer.scale),
@@ -34,11 +35,12 @@ def _add_image(
     description="Subtract rolling-ball background per Z-slice. Reduces uneven "
     "illumination before segmentation. Larger radius for larger structures.",
     phase="2",
+    worker=True,
 )
 def rolling_ball_background(layer: str, radius: float = 50.0) -> dict[str, Any]:
     from skimage.restoration import rolling_ball
 
-    L = get_layer(layer)
+    L = call_on_main(snapshot_layer, layer)
     data = _materialize(L.data)
 
     if data.ndim == 2:
@@ -59,13 +61,14 @@ def rolling_ball_background(layer: str, radius: float = 50.0) -> dict[str, Any]:
     description="Rescale intensity to (low_pct, high_pct) percentiles → [0, 1] float. "
     "Improves contrast and normalizes across acquisitions.",
     phase="2",
+    worker=True,
 )
 def auto_contrast(
     layer: str, low_pct: float = 1.0, high_pct: float = 99.0
 ) -> dict[str, Any]:
     from skimage.exposure import rescale_intensity
 
-    L = get_layer(layer)
+    L = call_on_main(snapshot_layer, layer)
     data = _materialize(L.data)
     lo, hi = np.percentile(data, (low_pct, high_pct))
     out = rescale_intensity(data, in_range=(lo, hi), out_range=(0.0, 1.0)).astype(
@@ -78,11 +81,12 @@ def auto_contrast(
     description="Apply Gaussian smoothing. Reduces noise for cleaner segmentation. "
     "Sigma in pixels (use ~1-2 for fine structures, ~3-5 for cells).",
     phase="2",
+    worker=True,
 )
 def gaussian_denoise(layer: str, sigma: float = 1.0) -> dict[str, Any]:
     from skimage.filters import gaussian
 
-    L = get_layer(layer)
+    L = call_on_main(snapshot_layer, layer)
     data = _materialize(L.data)
     out = gaussian(data, sigma=sigma, preserve_range=True).astype(data.dtype)
     return _add_image(L, out, "gauss", op="gaussian_denoise", sigma=sigma)

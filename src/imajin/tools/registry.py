@@ -19,6 +19,9 @@ class ToolEntry:
     phase: str = ""
     vision_hint: bool = False
     subagent: str | None = None
+    manual: bool = True
+    llm: bool = True
+    worker: bool = False
 
     @property
     def json_schema(self) -> dict[str, Any]:
@@ -49,6 +52,9 @@ def tool(
     phase: str = "",
     vision_hint: bool = False,
     subagent: str | None = None,
+    manual: bool | None = None,
+    llm: bool = True,
+    worker: bool = False,
     input_model: type[BaseModel] | None = None,
 ) -> Callable[..., Any]:
     def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
@@ -89,6 +95,9 @@ def tool(
             phase=phase,
             vision_hint=vision_hint,
             subagent=subagent,
+            manual=(subagent is None) if manual is None else manual,
+            llm=llm,
+            worker=worker,
         )
         _REGISTRY[tool_name] = entry
         wrapped.__tool_entry__ = entry  # type: ignore[attr-defined]
@@ -112,7 +121,11 @@ def call_tool(name: str, **kwargs: Any) -> Any:
 
 
 def _entries_for(subagent: str | None) -> list[ToolEntry]:
-    return [e for e in _REGISTRY.values() if e.subagent == subagent]
+    return [e for e in _REGISTRY.values() if e.subagent == subagent and e.llm]
+
+
+def manual_tools() -> list[ToolEntry]:
+    return [e for e in _REGISTRY.values() if e.manual]
 
 
 def tools_for_anthropic(subagent: str | None = None) -> list[dict[str, Any]]:

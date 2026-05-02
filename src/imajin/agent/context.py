@@ -6,6 +6,24 @@ from typing import Any
 import numpy as np
 
 
+def _sample_array(data: Any, max_points: int = 65_536) -> tuple[np.ndarray, bool]:
+    shape = tuple(int(s) for s in getattr(data, "shape", ()))
+    if not shape:
+        arr = np.asarray(data.compute() if hasattr(data, "compute") else data)
+        return arr, False
+
+    total = int(np.prod(shape, dtype=np.int64))
+    if total <= max_points:
+        arr = data.compute() if hasattr(data, "compute") else data
+        return np.asarray(arr), False
+
+    per_axis = max(1, int(round(max_points ** (1 / max(1, len(shape))))))
+    slices = tuple(slice(None, None, max(1, int(np.ceil(s / per_axis)))) for s in shape)
+    sample = data[slices]
+    sample = sample.compute() if hasattr(sample, "compute") else sample
+    return np.asarray(sample), True
+
+
 def _layer_summary(layer: Any) -> dict[str, Any]:
     data = layer.data
     shape = tuple(int(s) for s in getattr(data, "shape", ()))
@@ -22,7 +40,7 @@ def _layer_summary(layer: Any) -> dict[str, Any]:
 
     info: dict[str, Any] = {
         "name": layer.name,
-        "kind": type(layer).__name__.lower(),
+        "kind": getattr(layer, "kind", type(layer).__name__.lower()),
         "shape": shape,
         "dtype": dtype,
         "scale": scale,
@@ -34,7 +52,7 @@ def _layer_summary(layer: Any) -> dict[str, Any]:
 
     if info["kind"] == "image" and shape:
         try:
-            sample = np.asarray(data.compute() if hasattr(data, "compute") else data)
+            sample, sampled = _sample_array(data)
             if sample.size > 0:
                 info["intensity"] = {
                     "min": float(sample.min()),
@@ -42,13 +60,15 @@ def _layer_summary(layer: Any) -> dict[str, Any]:
                     "mean": float(sample.mean()),
                     "p1": float(np.percentile(sample, 1)),
                     "p99": float(np.percentile(sample, 99)),
+                    "sampled": sampled,
                 }
         except Exception:
             pass
     elif info["kind"] == "labels" and shape:
         try:
-            sample = np.asarray(data.compute() if hasattr(data, "compute") else data)
-            info["n_labels"] = int(sample.max())
+            sample, sampled = _sample_array(data)
+            info["n_labels_sample"] = int(sample.max())
+            info["sampled"] = sampled
         except Exception:
             pass
 
@@ -56,12 +76,33 @@ def _layer_summary(layer: Any) -> dict[str, Any]:
 
 
 def summarize_viewer_state() -> str:
-    from imajin.agent.state import list_tables, viewer_or_none
+    from imajin.agent.state import (
+        list_channel_annotations,
+        list_samples,
+        list_tables,
+        viewer_or_none,
+    )
 
     viewer = viewer_or_none()
     if viewer is None:
-        return json.dumps({"layers": [], "tables": [], "note": "viewer not initialized"})
+        return json.dumps(
+            {
+                "layers": [],
+                "tables": [],
+                "samples": list_samples(),
+                "channels": list_channel_annotations(),
+                "note": "viewer not initialized",
+            }
+        )
 
     layers = [_layer_summary(L) for L in viewer.layers]
     tables = list_tables()
-    return json.dumps({"layers": layers, "tables": tables}, default=str)
+    return json.dumps(
+        {
+            "layers": layers,
+            "tables": tables,
+            "samples": list_samples(),
+            "channels": list_channel_annotations(),
+        },
+        default=str,
+    )

@@ -2,7 +2,14 @@ from __future__ import annotations
 
 import pytest
 
-from imajin.tools import call_tool, iter_tools, tool, tools_for_anthropic, tools_for_openai
+from imajin.tools import (
+    call_tool,
+    iter_tools,
+    manual_tools,
+    tool,
+    tools_for_anthropic,
+    tools_for_openai,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -54,6 +61,19 @@ def test_openai_schema_shape() -> None:
     assert spec["type"] == "function"
     assert spec["function"]["name"] == "t"
     assert spec["function"]["parameters"]["properties"]["x"]["type"] == "integer"
+
+
+def test_manual_and_llm_visibility_flags() -> None:
+    @tool(manual=False)
+    def hidden_manual(x: int) -> int:
+        return x
+
+    @tool(llm=False)
+    def hidden_llm(x: int) -> int:
+        return x
+
+    assert {e.name for e in manual_tools()} == {"hidden_llm"}
+    assert {s["name"] for s in tools_for_anthropic()} == {"hidden_manual"}
 
 
 def test_call_tool_validates_and_invokes() -> None:

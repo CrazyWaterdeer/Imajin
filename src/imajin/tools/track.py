@@ -25,15 +25,15 @@ def track_cells(
     search_radius: float = 50.0,
     max_lost: int = 5,
 ) -> dict[str, Any]:
-    import btrack
-    from btrack import datasets, utils
-
     L = get_layer(labels_layer)
     data = _materialize(L.data)
     if data.ndim not in (3, 4):
         raise ValueError(
             f"track_cells expects 3D (TYX) or 4D (TZYX) labels; got shape {data.shape}"
         )
+
+    import btrack
+    from btrack import datasets, utils
 
     objects = utils.segmentation_to_objects(data, num_workers=1)
     if not objects:

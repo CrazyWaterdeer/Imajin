@@ -35,11 +35,18 @@ def test_load_plain_tiff_falls_through_to_ome_loader(plain_tiff: Path) -> None:
     assert ds.channel_names == []
 
 
-def test_dataset_data_is_lazy_dask(tiny_ome_tiff: Path) -> None:
-    import dask.array as da
+def test_dataset_data_loads_into_memory_by_default(tiny_ome_tiff: Path) -> None:
+    ds = load_dataset(tiny_ome_tiff)
+    assert isinstance(ds.data, np.ndarray)
+    assert ds.raw_metadata["load_mode"] == "memory"
+
+
+def test_dataset_falls_back_to_memmap_when_memory_low(
+    tiny_ome_tiff: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("imajin.io.ome.should_load_into_memory", lambda *_: False)
 
     ds = load_dataset(tiny_ome_tiff)
-    assert isinstance(ds.data, da.Array)
-    materialized = ds.data.compute()
-    assert isinstance(materialized, np.ndarray)
-    assert materialized.shape == ds.data.shape
+
+    assert isinstance(ds.data, np.memmap)
+    assert ds.raw_metadata["load_mode"] == "memmap"

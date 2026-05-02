@@ -104,5 +104,5 @@ def test_subagent_only_sees_specialist_tools() -> None:
     assert public_names.isdisjoint(specialist_names)
     assert "skeletonize" in specialist_names
     assert "skeletonize" not in public_names
-    assert "consult_neural_tracer" in public_names
+    assert "consult_neural_tracer" not in public_names
     assert "consult_neural_tracer" not in specialist_names

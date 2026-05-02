@@ -11,6 +11,7 @@ class Dataset:
     axes: str
     voxel_size: tuple[float, float, float] = (1.0, 1.0, 1.0)
     channel_names: list[str] = field(default_factory=list)
+    channel_metadata: list[dict[str, Any]] = field(default_factory=list)
     source_path: Path | None = None
     raw_metadata: dict[str, Any] = field(default_factory=dict)
 

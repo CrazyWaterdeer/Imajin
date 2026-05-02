@@ -4,7 +4,8 @@ from typing import Any
 
 import numpy as np
 
-from imajin.agent.state import get_layer
+from imajin.agent.qt_dispatch import call_on_main
+from imajin.tools.napari_ops import snapshot_layer
 from imajin.tools.registry import tool
 
 
@@ -31,6 +32,7 @@ def _resolve_threshold(arr: np.ndarray, threshold: float | str) -> float:
     "reciprocal. Optionally restrict to a Labels layer mask. Threshold accepts a scalar "
     "or 'otsu' / 'zero'.",
     phase="4",
+    worker=True,
 )
 def manders_coefficients(
     image_a: str,
@@ -39,13 +41,13 @@ def manders_coefficients(
     threshold_a: float | str = "otsu",
     threshold_b: float | str = "otsu",
 ) -> dict[str, Any]:
-    a = _materialize(get_layer(image_a).data).astype(np.float64)
-    b = _materialize(get_layer(image_b).data).astype(np.float64)
+    a = _materialize(call_on_main(snapshot_layer, image_a).data).astype(np.float64)
+    b = _materialize(call_on_main(snapshot_layer, image_b).data).astype(np.float64)
     if a.shape != b.shape:
         raise ValueError(f"shape mismatch: {image_a} {a.shape} vs {image_b} {b.shape}")
 
     if mask:
-        m = _materialize(get_layer(mask).data) > 0
+        m = _materialize(call_on_main(snapshot_layer, mask).data) > 0
         if m.shape != a.shape:
             raise ValueError(f"mask shape mismatch: {mask} {m.shape} vs {a.shape}")
     else:
@@ -80,17 +82,18 @@ def manders_coefficients(
     "to a Labels layer mask. Use when both channels have continuous intensity "
     "distributions (vs Manders for thresholded colocalization).",
     phase="4",
+    worker=True,
 )
 def pearson_correlation(
     image_a: str, image_b: str, mask: str | None = None
 ) -> dict[str, Any]:
-    a = _materialize(get_layer(image_a).data).astype(np.float64)
-    b = _materialize(get_layer(image_b).data).astype(np.float64)
+    a = _materialize(call_on_main(snapshot_layer, image_a).data).astype(np.float64)
+    b = _materialize(call_on_main(snapshot_layer, image_b).data).astype(np.float64)
     if a.shape != b.shape:
         raise ValueError(f"shape mismatch: {image_a} {a.shape} vs {image_b} {b.shape}")
 
     if mask:
-        m = _materialize(get_layer(mask).data) > 0
+        m = _materialize(call_on_main(snapshot_layer, mask).data) > 0
         if m.shape != a.shape:
             raise ValueError(f"mask shape mismatch: {mask} {m.shape} vs {a.shape}")
         a = a[m]

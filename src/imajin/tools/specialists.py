@@ -13,6 +13,8 @@ from imajin.tools.registry import tool
     "returns a structured summary plus the tool calls it made. Currently supports "
     "skeletonization and branch metrics; NBLAST + connectome lookups are stubbed.",
     phase="6",
+    manual=False,
+    llm=False,
 )
 def consult_neural_tracer(
     question: str,
@@ -38,6 +40,7 @@ def consult_neural_tracer(
     "'slide' for bullet points, 'protocol' for numbered steps. The specialist has no "
     "tools and never re-runs analyses — it just synthesizes what was already done.",
     phase="7",
+    manual=False,
 )
 def consult_methods_writer(
     style: str = "paper",

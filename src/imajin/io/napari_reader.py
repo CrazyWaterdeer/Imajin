@@ -3,6 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from imajin.io.channel_metadata import pad_channel_metadata
+
 LayerData = tuple[Any, dict, str]
 _SUPPORTED = (".lsm", ".czi", ".ome.tif", ".ome.tiff", ".tif", ".tiff")
 
@@ -17,7 +19,12 @@ def _to_layer(ds) -> LayerData:
         "X": float(ds.voxel_size[2]),
     }
 
-    kwargs: dict = {"metadata": {"voxel_size_um": ds.voxel_size, "axes": ds.axes}}
+    metadata = {"voxel_size_um": ds.voxel_size, "axes": ds.axes}
+    for key in ("load_mode", "estimated_nbytes", "available_memory_bytes"):
+        if key in ds.raw_metadata:
+            metadata[key] = ds.raw_metadata[key]
+
+    kwargs: dict = {"metadata": metadata}
     if "C" in ds.axes:
         c_idx = ds.axes.index("C")
         kwargs["channel_axis"] = c_idx
@@ -29,9 +36,17 @@ def _to_layer(ds) -> LayerData:
         kwargs["scale"] = tuple(
             scale_per_axis.get(a, 1.0) for a in ds.axes if a != "C"
         )
+        metadata["channel_names"] = list(kwargs["name"])
+        metadata["channel_metadata"] = pad_channel_metadata(
+            list(getattr(ds, "channel_metadata", []) or []),
+            n_channels=n_ch,
+            names=list(kwargs["name"]),
+        )
     else:
         kwargs["name"] = base
         kwargs["scale"] = tuple(scale_per_axis.get(a, 1.0) for a in ds.axes)
+        if getattr(ds, "channel_metadata", None):
+            metadata["channel_metadata"] = list(ds.channel_metadata)
 
     return (ds.data, kwargs, "image")
 

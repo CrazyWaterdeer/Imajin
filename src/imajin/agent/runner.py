@@ -57,6 +57,18 @@ class AgentRunner:
         # thread to avoid Qt threading violations.
         self._tool_caller = tool_caller
 
+    def _runtime_system_prompt(self) -> str:
+        try:
+            from imajin.agent.context import summarize_viewer_state
+            from imajin.agent.qt_dispatch import call_on_main
+
+            context = call_on_main(summarize_viewer_state)
+        except Exception:
+            context = ""
+        if not context:
+            return self.system_prompt
+        return f"{self.system_prompt}\n\nCurrent session context:\n{context}"
+
     def cancel(self) -> None:
         self._cancelled = True
 
@@ -79,6 +91,7 @@ class AgentRunner:
         for _ in range(self.max_loops):
             if self._cancelled:
                 yield TurnDone(stop_reason="cancelled", total_usage=total_usage)
+                self._cancelled = False
                 return
 
             assistant_blocks: list[dict[str, Any]] = []
@@ -86,7 +99,7 @@ class AgentRunner:
             stop_reason = "end_turn"
 
             for event in self.provider.stream(
-                self.messages, tools_spec, self.system_prompt
+                self.messages, tools_spec, self._runtime_system_prompt()
             ):
                 if self._cancelled:
                     break
@@ -113,6 +126,11 @@ class AgentRunner:
                     if event.usage:
                         for k, v in event.usage.items():
                             total_usage[k] = total_usage.get(k, 0) + int(v)
+
+            if self._cancelled:
+                yield TurnDone(stop_reason="cancelled", total_usage=total_usage)
+                self._cancelled = False
+                return
 
             if current_text:
                 assistant_blocks.append({"type": "text", "text": current_text})

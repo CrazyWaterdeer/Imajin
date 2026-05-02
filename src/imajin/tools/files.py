@@ -30,7 +30,9 @@ def load_file(path: str) -> dict[str, Any]:
         "shape": tuple(int(s) for s in ds.data.shape),
         "voxel_size_um": tuple(ds.voxel_size),
         "channel_names": list(ds.channel_names),
+        "channel_metadata": list(getattr(ds, "channel_metadata", []) or []),
         "layer_names": [L.name for L in layers],
+        "load_mode": ds.raw_metadata.get("load_mode"),
     }
 
 
@@ -63,7 +65,7 @@ def list_layers() -> list[dict[str, Any]]:
         out.append(
             {
                 "name": L.name,
-                "kind": type(L).__name__.lower(),
+                "kind": getattr(L, "kind", type(L).__name__.lower()),
                 "shape": shape,
                 "dtype": dtype,
                 "scale": scale,

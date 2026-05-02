@@ -40,6 +40,8 @@ def test_layer_has_channel_axis_and_scale(tiny_ome_tiff: Path) -> None:
     assert kwargs["scale"] == (0.5, 0.2, 0.2)
     assert "voxel_size_um" in kwargs["metadata"]
     assert kwargs["metadata"]["axes"] == "CZYX"
+    assert kwargs["metadata"]["channel_names"] == ["DAPI", "GFP", "TRITC"]
+    assert len(kwargs["metadata"]["channel_metadata"]) == 3
 
 
 def test_layer_names_strip_ome_suffix(tiny_ome_tiff: Path) -> None:

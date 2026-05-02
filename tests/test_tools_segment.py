@@ -29,6 +29,13 @@ def test_cellpose_sam_propagates_scale(viewer, synthetic_blob_image) -> None:
 
 def test_cellpose_sam_rejects_non_2d_3d(viewer) -> None:
     data = np.random.default_rng(0).integers(0, 256, size=(2, 4, 16, 16), dtype=np.uint16)
-    viewer.add_image(data, name="huge")
-    with pytest.raises(ValueError, match="2D or 3D"):
+    viewer.add_image(data, name="huge", metadata={"axes": "ZYXA"})
+    with pytest.raises(ValueError, match="2D \\(YX\\) or 3D \\(ZYX\\)"):
         segment.cellpose_sam("huge")
+
+
+def test_cellpose_sam_rejects_time_series(viewer) -> None:
+    data = np.random.default_rng(0).integers(0, 256, size=(4, 16, 16), dtype=np.uint16)
+    viewer.add_image(data, name="movie", metadata={"axes": "TYX"})
+    with pytest.raises(ValueError, match="time-series"):
+        segment.cellpose_sam("movie")

@@ -148,6 +148,44 @@ def test_generate_report_md(fake_session, tmp_path) -> None:
     assert res["format"] == "md"
 
 
+def test_generate_report_includes_sample_groups(fake_session, tmp_path) -> None:
+    from imajin.agent import state
+
+    state.put_sample("control_1", "control", files=["/data/control_1.lsm"])
+    state.put_sample("treatment_1", "treatment", files=["/data/treatment_1.lsm"])
+
+    out = tmp_path / "report.md"
+    res = report.generate_report(str(out), format="md")
+    body = out.read_text(encoding="utf-8")
+
+    assert "Sample Groups" in body
+    assert "control_1" in body
+    assert "treatment_1" in body
+    assert res["n_samples"] == 2
+
+
+def test_generate_report_includes_channel_annotations(fake_session, tmp_path, viewer) -> None:
+    from imajin.agent import state
+
+    viewer.add_image([[0]], name="green_reporter")
+    state.put_channel_annotation(
+        "green_reporter",
+        role="target",
+        color="green",
+        marker="GCaMP",
+        biological_target="gut cells",
+    )
+
+    out = tmp_path / "report.md"
+    res = report.generate_report(str(out), format="md")
+    body = out.read_text(encoding="utf-8")
+
+    assert "Channel Annotations" in body
+    assert "green_reporter" in body
+    assert "GCaMP" in body
+    assert res["n_channels"] == 1
+
+
 def test_generate_report_rejects_bad_format(fake_session, tmp_path) -> None:
     with pytest.raises(ValueError, match="format must be"):
         report.generate_report(str(tmp_path / "x.pdf"), format="pdf")

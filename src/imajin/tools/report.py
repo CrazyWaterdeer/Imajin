@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections import Counter
+from html import escape
 from pathlib import Path
 from typing import Any
 
@@ -20,6 +21,9 @@ _TOOL_PHRASES: dict[str, str] = {
     "gaussian_denoise": (
         "Gaussian denoising was applied (sigma={sigma}, scikit-image)"
     ),
+    "extract_timepoint": (
+        "a reference timepoint (t={timepoint}) was extracted for ROI definition"
+    ),
     "cellpose_sam": (
         "cells were segmented with Cellpose-SAM ({model_str}{do_3d_str}) on "
         "channel {channel}"
@@ -27,6 +31,10 @@ _TOOL_PHRASES: dict[str, str] = {
     "measure_intensity": (
         "per-object intensity features ({properties}) were extracted with "
         "scikit-image regionprops_table on channel(s) {channels}"
+    ),
+    "measure_intensity_over_time": (
+        "ROI intensity time courses were extracted with scikit-image "
+        "regionprops_table from {image_layer}"
     ),
     "manders_coefficients": (
         "Manders M1/M2 colocalization coefficients were computed between "
@@ -43,6 +51,11 @@ _TOOL_PHRASES: dict[str, str] = {
         "extracted with skan"
     ),
     "track_cells": "cells were tracked across the time series with btrack",
+    "analyze_target_cells": (
+        "cells were segmented from the user-confirmed target channel ({channel}) "
+        "with Cellpose-SAM ({do_3d_str}), and per-object intensity and size were "
+        "measured on the same target channel"
+    ),
 }
 
 
@@ -53,13 +66,35 @@ def _format_phrase(tool_name: str, inputs: dict[str, Any]) -> str | None:
     args: dict[str, Any] = {}
     args["radius"] = inputs.get("radius", "?")
     args["sigma"] = inputs.get("sigma", "?")
-    args["channel"] = inputs.get("channel", "?")
-    args["channels"] = inputs.get("channels", "?")
-    args["properties"] = inputs.get("properties", "?")
+    args["channel"] = (
+        inputs.get("channel")
+        or inputs.get("image_layer")
+        or inputs.get("target")
+        or inputs.get("target_channel")
+        or "?"
+    )
+    args["channels"] = (
+        inputs.get("channels")
+        or inputs.get("image_layers")
+        or inputs.get("image_layer")
+        or "?"
+    )
+    args["properties"] = inputs.get("properties") or [
+        "label",
+        "area",
+        "centroid",
+        "mean_intensity",
+        "max_intensity",
+        "min_intensity",
+    ]
     args["image_a"] = inputs.get("image_a", "?")
     args["image_b"] = inputs.get("image_b", "?")
+    args["image_layer"] = inputs.get("image_layer", "?")
     args["axis"] = inputs.get("axis", "?")
-    pct = inputs.get("percentiles", "(1, 99)")
+    args["timepoint"] = inputs.get("t", inputs.get("timepoint", "?"))
+    pct = inputs.get("percentiles")
+    if pct is None:
+        pct = (inputs.get("low_pct", 1.0), inputs.get("high_pct", 99.0))
     args["percentiles"] = f"{pct}"
     args["model_str"] = f"model={inputs.get('model', 'cpsam')!r}"
     args["do_3d_str"] = ", 3D" if inputs.get("do_3D") else ", 2D"
@@ -85,6 +120,11 @@ def _select_pipeline_records(records: list[dict[str, Any]]) -> list[dict[str, An
         "filter_table",
         "set_view",
         "set_colormap",
+        "annotate_sample",
+        "list_sample_annotations",
+        "annotate_channel",
+        "list_channel_annotations",
+        "resolve_channel",
         "consult_neural_tracer",
         "consult_methods_writer",
         "generate_methods",
@@ -138,10 +178,45 @@ def _render_methods_markdown(records: list[dict[str, Any]]) -> str:
     return methods
 
 
-def _render_report_html(records: list[dict[str, Any]], methods_md: str) -> str:
+def _render_samples_markdown(samples: list[dict[str, Any]]) -> str:
+    if not samples:
+        return ""
+    lines = ["## Sample Groups", ""]
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for sample in samples:
+        grouped.setdefault(str(sample.get("group", "unassigned")), []).append(sample)
+    for group, entries in sorted(grouped.items()):
+        names = ", ".join(str(e.get("sample_name", "?")) for e in entries)
+        lines.append(f"- **{group}**: {names}")
+    lines.append("")
+    return "\n".join(lines)
+
+
+def _render_channels_markdown(channels: list[dict[str, Any]]) -> str:
+    if not channels:
+        return ""
+    lines = ["## Channel Annotations", ""]
+    for channel in channels:
+        layer = channel.get("layer_name", "?")
+        role = channel.get("role", "?")
+        color = channel.get("color") or "unspecified"
+        marker = channel.get("marker") or "unspecified"
+        target = channel.get("biological_target")
+        suffix = f", target={target}" if target else ""
+        lines.append(f"- **{layer}**: {role}, {color}, marker={marker}{suffix}")
+    lines.append("")
+    return "\n".join(lines)
+
+
+def _render_report_html(
+    records: list[dict[str, Any]],
+    methods_md: str,
+    samples_md: str = "",
+    channels_md: str = "",
+) -> str:
     pipeline = _select_pipeline_records(records)
     rows = "".join(
-        f"<tr><td>{r['tool']}</td><td><code>{_short_inputs(r.get('inputs') or {})}</code></td>"
+        f"<tr><td>{escape(str(r['tool']))}</td><td><code>{escape(_short_inputs(r.get('inputs') or {}))}</code></td>"
         f"<td>{r.get('duration_s', 0):.2f}s</td></tr>"
         for r in pipeline
     )
@@ -153,7 +228,9 @@ def _render_report_html(records: list[dict[str, Any]], methods_md: str) -> str:
         "td,th{border:1px solid #ccc;padding:.4em .6em;text-align:left}"
         "code{font-size:.9em}</style></head><body>"
         f"<h1>imajin session report</h1>"
-        f"<pre>{methods_md}</pre>"
+        f"<pre>{escape(methods_md)}</pre>"
+        f"{'<pre>' + escape(samples_md) + '</pre>' if samples_md else ''}"
+        f"{'<pre>' + escape(channels_md) + '</pre>' if channels_md else ''}"
         f"<h2>Operations</h2><table><tr><th>Tool</th><th>Inputs</th><th>Time</th></tr>"
         f"{rows}</table></body></html>"
     )
@@ -199,23 +276,38 @@ def generate_report(
     format: str = "html",
 ) -> dict[str, Any]:
     from imajin.agent import provenance
+    from imajin.agent.state import list_channel_annotations, list_samples
 
     if format not in ("html", "md"):
         raise ValueError(f"format must be 'html' or 'md', got {format!r}")
 
     records = provenance.read_session(session_id)
     methods = _render_methods_markdown(records)
+    samples = list_samples()
+    samples_md = _render_samples_markdown(samples)
+    channels = list_channel_annotations()
+    channels_md = _render_channels_markdown(channels)
     out = Path(path).expanduser().resolve()
     out.parent.mkdir(parents=True, exist_ok=True)
 
     if format == "md":
-        out.write_text(methods, encoding="utf-8")
+        extra = ""
+        if samples_md:
+            extra += "\n" + samples_md
+        if channels_md:
+            extra += "\n" + channels_md
+        out.write_text(methods + extra, encoding="utf-8")
     else:
-        out.write_text(_render_report_html(records, methods), encoding="utf-8")
+        out.write_text(
+            _render_report_html(records, methods, samples_md, channels_md),
+            encoding="utf-8",
+        )
 
     return {
         "path": str(out),
         "format": format,
         "session_id": session_id or provenance.current_session_id(),
         "n_records": len(records),
+        "n_samples": len(samples),
+        "n_channels": len(channels),
     }

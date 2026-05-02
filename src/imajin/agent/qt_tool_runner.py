@@ -31,21 +31,51 @@ class MainThreadToolRunner(QObject):
     def __init__(self, parent: QObject | None = None) -> None:
         super().__init__(parent)
         self._request.connect(self._handle, Qt.ConnectionType.BlockingQueuedConnection)
+        from imajin.agent.qt_dispatch import set_dispatcher
+
+        set_dispatcher(self)
 
     @Slot(object)
     def _handle(self, payload: dict[str, Any]) -> None:
         from imajin.tools import call_tool
 
         try:
-            payload["result"] = call_tool(payload["name"], **payload["kwargs"])
+            if "func" in payload:
+                payload["result"] = payload["func"](*payload["args"], **payload["kwargs"])
+            else:
+                payload["result"] = call_tool(payload["name"], **payload["kwargs"])
         except Exception as e:
             payload["error"] = e
 
+    def invoke(self, func, *args: Any, **kwargs: Any) -> Any:
+        if QThread.currentThread() == self.thread():
+            return func(*args, **kwargs)
+
+        payload: dict[str, Any] = {
+            "func": func,
+            "args": args,
+            "kwargs": kwargs,
+            "result": None,
+            "error": None,
+        }
+        self._request.emit(payload)
+        if payload["error"] is not None:
+            raise payload["error"]
+        return payload["result"]
+
     def call(self, name: str, **kwargs: Any) -> Any:
         from imajin.tools import call_tool
+        from imajin.tools.registry import get_tool
 
         # Same thread? Just call directly — no marshalling needed.
         if QThread.currentThread() == self.thread():
+            return call_tool(name, **kwargs)
+
+        try:
+            entry = get_tool(name)
+        except KeyError:
+            entry = None
+        if entry is not None and entry.worker:
             return call_tool(name, **kwargs)
 
         payload: dict[str, Any] = {

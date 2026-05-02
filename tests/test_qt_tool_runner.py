@@ -47,7 +47,7 @@ def test_call_from_worker_thread_marshals_to_main(qapp, monkeypatch, qtbot) -> N
 
     def worker():
         try:
-            result_holder["v"] = runner.call("cellpose_sam", do_3D=True)
+            result_holder["v"] = runner.call("main_only", do_3D=True)
         except Exception as e:
             err_holder["e"] = e
 
@@ -59,8 +59,35 @@ def test_call_from_worker_thread_marshals_to_main(qapp, monkeypatch, qtbot) -> N
     qtbot.waitUntil(lambda: not t.is_alive(), timeout=2000)
 
     assert err_holder == {}
-    assert result_holder["v"] == "cellpose_sam"
+    assert result_holder["v"] == "main_only"
     assert seen["thread"] == main_ident, "tool ran in wrong thread"
+
+
+def test_worker_tool_runs_on_worker_thread(qapp, monkeypatch, qtbot) -> None:
+    from imajin.agent import qt_tool_runner
+    import imajin.tools as imajin_tools
+
+    main_ident = threading.get_ident()
+    seen: dict[str, int] = {}
+
+    def fake_call_tool(name, **kwargs):
+        seen["thread"] = threading.get_ident()
+        return name
+
+    monkeypatch.setattr(imajin_tools, "call_tool", fake_call_tool, raising=True)
+    runner = qt_tool_runner.MainThreadToolRunner()
+
+    result_holder: dict[str, object] = {}
+
+    def worker():
+        result_holder["v"] = runner.call("cellpose_sam", do_3D=True)
+
+    t = threading.Thread(target=worker, daemon=True)
+    t.start()
+    qtbot.waitUntil(lambda: not t.is_alive(), timeout=2000)
+
+    assert result_holder["v"] == "cellpose_sam"
+    assert seen["thread"] != main_ident
 
 
 def test_tool_exception_propagates_to_caller(qapp, monkeypatch, qtbot) -> None:

@@ -7,7 +7,9 @@ from typing import Any
 
 import numpy as np
 
+from imajin.agent.qt_dispatch import call_on_main
 from imajin.agent.state import get_layer, get_viewer
+from imajin.tools.napari_ops import add_image_from_worker, snapshot_layer
 from imajin.tools.registry import tool
 
 
@@ -90,6 +92,44 @@ def set_colormap(layer: str, colormap: str) -> dict[str, Any]:
 
 
 @tool(
+    description="Extract a single timepoint from a time-series image layer and add it "
+    "as a new image layer. Use this to create a reference frame for segmentation or "
+    "manual ROI drawing before measuring intensity over time.",
+    phase="2",
+    worker=True,
+)
+def extract_timepoint(
+    layer: str,
+    t: int = 0,
+    time_axis: int | str = "t",
+) -> dict[str, Any]:
+    L = call_on_main(snapshot_layer, layer)
+    data = _materialize(L.data)
+    idx = _resolve_axis(L, time_axis)
+    if idx < 0 or idx >= data.ndim:
+        raise ValueError(f"time axis index {idx} out of range for {data.ndim}-D layer")
+    if t < 0 or t >= data.shape[idx]:
+        raise ValueError(f"timepoint {t} out of range for axis size {data.shape[idx]}")
+
+    frame = np.take(data, t, axis=idx)
+    scale_in = tuple(float(s) for s in L.scale)
+    new_scale = tuple(s for i, s in enumerate(scale_in) if i != idx)
+    new = call_on_main(
+        add_image_from_worker,
+        frame,
+        name=f"{L.name}_t{t}",
+        scale=new_scale,
+        metadata={"source_layer": L.name, "op": "extract_timepoint", "timepoint": t},
+    )
+    return {
+        "new_layer": new.name,
+        "shape": tuple(int(s) for s in frame.shape),
+        "timepoint": int(t),
+        "time_axis": idx,
+    }
+
+
+@tool(
     description="Capture a screenshot of the napari canvas. Saves to path if given. "
     "Always returns a base64-encoded PNG thumbnail (max 256 px on the long side).",
     phase="5",
@@ -134,9 +174,10 @@ def screenshot(path: str | None = None) -> dict[str, Any]:
     "'y'/'x'/'t' (resolved via layer's recorded axes) or an integer index. Adds a "
     "new image layer with the reduced shape.",
     phase="5",
+    worker=True,
 )
 def max_projection(layer: str, axis: int | str = "z") -> dict[str, Any]:
-    L = get_layer(layer)
+    L = call_on_main(snapshot_layer, layer)
     data = _materialize(L.data)
     idx = _resolve_axis(L, axis)
     if idx < 0 or idx >= data.ndim:
@@ -147,13 +188,13 @@ def max_projection(layer: str, axis: int | str = "z") -> dict[str, Any]:
     scale_in = tuple(float(s) for s in L.scale)
     new_scale = tuple(s for i, s in enumerate(scale_in) if i != idx)
 
-    viewer = get_viewer()
     suffix = axis if isinstance(axis, str) else f"ax{idx}"
     new_name = f"{L.name}_mip_{suffix}"
-    new = viewer.add_image(
+    new = call_on_main(
+        add_image_from_worker,
         proj,
         name=new_name,
-        scale=new_scale or None,
+        scale=new_scale,
         metadata={"source_layer": L.name, "op": "max_projection", "axis": idx},
     )
     return {
@@ -168,9 +209,10 @@ def max_projection(layer: str, axis: int | str = "z") -> dict[str, Any]:
     "For a 3D z-stack, this gives top-down (XY, the original), side (XZ), and front "
     "(YZ) views. Returns the new layer names.",
     phase="5",
+    worker=True,
 )
 def orthogonal_views(layer: str) -> dict[str, Any]:
-    L = get_layer(layer)
+    L = call_on_main(snapshot_layer, layer)
     data = _materialize(L.data)
     if data.ndim != 3:
         raise ValueError(
@@ -187,17 +229,18 @@ def orthogonal_views(layer: str) -> dict[str, Any]:
     scale_xz = tuple(s for i, s in enumerate(scale) if i != y_idx)
     scale_yz = tuple(s for i, s in enumerate(scale) if i != x_idx)
 
-    viewer = get_viewer()
-    xz_layer = viewer.add_image(
+    xz_layer = call_on_main(
+        add_image_from_worker,
         xz,
         name=f"{L.name}_XZ",
-        scale=scale_xz or None,
+        scale=scale_xz,
         metadata={"source_layer": L.name, "op": "orthogonal_view", "view": "XZ"},
     )
-    yz_layer = viewer.add_image(
+    yz_layer = call_on_main(
+        add_image_from_worker,
         yz,
         name=f"{L.name}_YZ",
-        scale=scale_yz or None,
+        scale=scale_yz,
         metadata={"source_layer": L.name, "op": "orthogonal_view", "view": "YZ"},
     )
     return {

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import functools
 import inspect
 from typing import Any
 
@@ -16,7 +17,30 @@ from imajin.ui.theme import NoScrollComboBox, apply_dock_theme
 
 def _layer_param_names(func) -> set[str]:
     sig = inspect.signature(func)
-    return {p for p in sig.parameters if p == "layer" or p.endswith("_layer")}
+    names = set()
+    for p in sig.parameters:
+        if p == "layer" or p.endswith("_layer"):
+            names.add(p)
+        elif p in {"image_a", "image_b", "mask"}:
+            names.add(p)
+    return names
+
+
+def _table_param_names(func) -> set[str]:
+    sig = inspect.signature(func)
+    return {p for p in sig.parameters if p == "table_name"}
+
+
+def _manual_callable(func):
+    from imajin.agent import provenance
+
+    @functools.wraps(func)
+    def wrapped(*args, **kwargs):
+        provenance.set_driver("manual")
+        return func(*args, **kwargs)
+
+    wrapped.__signature__ = inspect.signature(func)  # type: ignore[attr-defined]
+    return wrapped
 
 
 class ManualDock(QWidget):
@@ -59,10 +83,10 @@ class ManualDock(QWidget):
             self._on_tool_change(0)
 
     def _populate_tools(self) -> None:
-        from imajin.tools import iter_tools
+        from imajin.tools import manual_tools
 
         self.tool_picker.clear()
-        entries = sorted(iter_tools(), key=lambda e: (e.phase, e.name))
+        entries = sorted(manual_tools(), key=lambda e: (e.phase, e.name))
         for entry in entries:
             self.tool_picker.addItem(f"[{entry.phase}] {entry.name}", entry)
 
@@ -70,6 +94,11 @@ class ManualDock(QWidget):
         if self.viewer is None:
             return []
         return [L.name for L in self.viewer.layers]
+
+    def _table_choices(self, _widget) -> list[str]:
+        from imajin.agent import state
+
+        return state.list_tables()
 
     def _on_tool_change(self, index: int) -> None:
         from magicgui import magicgui
@@ -86,10 +115,12 @@ class ManualDock(QWidget):
             return
 
         layer_params = _layer_param_names(entry.func)
+        table_params = _table_param_names(entry.func)
         overrides = {p: {"choices": self._layer_choices} for p in layer_params}
+        overrides.update({p: {"choices": self._table_choices} for p in table_params})
 
         try:
-            gui = magicgui(entry.func, call_button="Run", **overrides)
+            gui = magicgui(_manual_callable(entry.func), call_button="Run", **overrides)
         except Exception as e:
             self.result_view.setPlainText(
                 f"Could not build form for {entry.name}: {e}"

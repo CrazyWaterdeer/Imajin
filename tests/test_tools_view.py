@@ -51,6 +51,17 @@ def test_set_colormap_changes_layer(viewer) -> None:
     assert viewer.layers["vol"].colormap.name == "viridis"
 
 
+def test_extract_timepoint_adds_reference_frame(viewer) -> None:
+    data = np.arange(3 * 16 * 16, dtype=np.float32).reshape(3, 16, 16)
+    viewer.add_image(data, name="movie", metadata={"axes": "TYX"})
+
+    res = view.extract_timepoint("movie", t=1)
+
+    assert res["shape"] == (16, 16)
+    out = np.asarray(viewer.layers[res["new_layer"]].data)
+    np.testing.assert_array_equal(out, data[1])
+
+
 @needs_gl
 def test_screenshot_returns_base64(viewer) -> None:
     _zstack(viewer, name="vol")

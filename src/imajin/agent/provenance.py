@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import tempfile
 import uuid
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
@@ -61,8 +62,9 @@ def _summarize(value: Any) -> Any:
 def record_call(
     tool: str, inputs: dict[str, Any], output: Any, duration_s: float, ok: bool
 ) -> None:
+    global _LOG_PATH
     if _LOG_PATH is None:
-        start_session()
+        start_session(driver=_CURRENT_DRIVER)
     record = CallRecord(
         timestamp=datetime.now(timezone.utc).isoformat(),
         tool=tool,
@@ -73,8 +75,23 @@ def record_call(
         driver=_CURRENT_DRIVER,
     )
     assert _LOG_PATH is not None
-    with _LOG_PATH.open("a", encoding="utf-8") as f:
-        f.write(json.dumps(asdict(record), default=str) + "\n")
+    line = json.dumps(asdict(record), default=str) + "\n"
+    try:
+        with _LOG_PATH.open("a", encoding="utf-8") as f:
+            f.write(line)
+    except OSError:
+        # Provenance is important, but it should never make an analysis fail
+        # because the platform data directory is unwritable (common in tests,
+        # sandboxes, and some managed workstations). Fall back to /tmp.
+        fallback_dir = Path(tempfile.gettempdir()) / "imajin" / "sessions"
+        try:
+            fallback_dir.mkdir(parents=True, exist_ok=True)
+            fallback_path = fallback_dir / _LOG_PATH.name
+            with fallback_path.open("a", encoding="utf-8") as f:
+                f.write(line)
+            _LOG_PATH = fallback_path
+        except OSError:
+            pass
 
 
 def current_session_path() -> Path | None:

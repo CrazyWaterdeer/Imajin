@@ -102,3 +102,46 @@ def test_measure_intensity_rejects_shape_mismatch(viewer) -> None:
     viewer.add_image(a[:10, :10], name="too_small")
     with pytest.raises(ValueError, match="shape mismatch"):
         measure.measure_intensity(labels_layer="masks", image_layers=["too_small"])
+
+
+def test_measure_intensity_over_time_static_rois(viewer) -> None:
+    labels, a, _ = _two_label_image()
+    series = np.stack([a, a * 2, a * 3], axis=0)
+    viewer.add_labels(labels, name="rois")
+    viewer.add_image(series, name="gcamp", metadata={"axes": "TYX"})
+
+    res = measure.measure_intensity_over_time(
+        labels_layer="rois",
+        image_layer="gcamp",
+        properties=["label", "area", "mean_intensity"],
+    )
+
+    assert res["n_timepoints"] == 3
+    assert res["n_labels"] == 2
+    assert res["n_rows"] == 6
+    df = state.get_table(res["table_name"])
+    label1 = df[df["label"] == 1].sort_values("time")
+    assert label1["mean_intensity"].tolist() == pytest.approx([100.0, 200.0, 300.0])
+
+
+def test_measure_intensity_over_time_dynamic_labels(viewer) -> None:
+    labels, a, _ = _two_label_image()
+    labels_t = np.stack([labels, np.where(labels == 2, 0, labels)], axis=0)
+    series = np.stack([a, a * 2], axis=0)
+    viewer.add_labels(labels_t, name="tracked_rois")
+    viewer.add_image(series, name="calexa", metadata={"axes": "TYX"})
+
+    res = measure.measure_intensity_over_time("tracked_rois", "calexa")
+
+    assert res["n_timepoints"] == 2
+    df = state.get_table(res["table_name"])
+    assert df[df["time"] == 0]["label"].tolist() == [1, 2]
+    assert df[df["time"] == 1]["label"].tolist() == [1]
+
+
+def test_measure_intensity_over_time_rejects_shape_mismatch(viewer) -> None:
+    viewer.add_labels(np.ones((8, 8), dtype=np.int32), name="rois")
+    viewer.add_image(np.zeros((3, 10, 10), dtype=np.float32), name="movie")
+
+    with pytest.raises(ValueError, match="shape mismatch"):
+        measure.measure_intensity_over_time("rois", "movie")
