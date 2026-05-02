@@ -69,3 +69,37 @@ def test_list_files_returns_dicts(tmp_path: Path) -> None:
     assert isinstance(files, list)
     assert files[0]["file_id"] == "x"
     assert files[0]["load_status"] == "unloaded"
+
+
+# --- Task 2: SampleAnnotation evolution --------------------------------------
+
+def test_put_sample_accepts_extra_and_optional_group() -> None:
+    state.put_sample(
+        sample_name="ctrl_1",
+        group=None,
+        file_ids=["ctrl_1"],
+        layers=["ctrl_1_ch0"],
+        extra={"genotype": "w1118", "tissue": "midgut"},
+    )
+    samples = state.list_samples()
+    assert len(samples) == 1
+    s = samples[0]
+    assert s["sample_name"] == "ctrl_1"
+    assert s["sample_id"] == "ctrl_1"  # defaults to sample_name
+    assert s["group"] is None
+    assert s["file_ids"] == ["ctrl_1"]
+    assert s["extra"] == {"genotype": "w1118", "tissue": "midgut"}
+
+
+def test_put_sample_keeps_legacy_files_and_layers() -> None:
+    """Existing experiment.annotate_sample() and report.py rely on `files`/`layers`."""
+    state.put_sample(
+        sample_name="t1",
+        group="treatment",
+        files=["/data/t1.lsm"],
+        layers=["t1_ch0", "t1_ch1"],
+    )
+    s = state.list_samples()[0]
+    assert s["files"] == ["/data/t1.lsm"]
+    assert s["layers"] == ["t1_ch0", "t1_ch1"]
+    assert s["group"] == "treatment"

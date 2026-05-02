@@ -96,15 +96,22 @@ def reset_runs() -> None:
 
 
 @dataclass
-class SampleEntry:
+class SampleAnnotation:
     sample_name: str
-    group: str
+    sample_id: str = ""  # defaults to sample_name in put_sample
+    group: str | None = None
     layers: list[str] = field(default_factory=list)
     files: list[str] = field(default_factory=list)
+    file_ids: list[str] = field(default_factory=list)
     notes: str | None = None
+    extra: dict[str, Any] = field(default_factory=dict)
 
 
-_SAMPLES: dict[str, SampleEntry] = {}
+# Backward-compat alias so external imports `from state import SampleEntry` keep working.
+SampleEntry = SampleAnnotation
+
+
+_SAMPLES: dict[str, SampleAnnotation] = {}
 
 
 _CHANNEL_COLOR_ALIASES: dict[str, str] = {
@@ -406,23 +413,29 @@ def reset_tables() -> None:
 
 def put_sample(
     sample_name: str,
-    group: str,
+    group: str | None = None,
     layers: list[str] | None = None,
     files: list[str] | None = None,
+    file_ids: list[str] | None = None,
     notes: str | None = None,
+    sample_id: str | None = None,
+    extra: dict[str, Any] | None = None,
 ) -> str:
     sample_name = sample_name.strip()
-    group = group.strip()
     if not sample_name:
         raise ValueError("sample_name must not be empty")
-    if not group:
-        raise ValueError("group must not be empty")
-    _SAMPLES[sample_name] = SampleEntry(
+    if group is not None:
+        group = group.strip() or None
+    sid = (sample_id or sample_name).strip()
+    _SAMPLES[sample_name] = SampleAnnotation(
         sample_name=sample_name,
+        sample_id=sid,
         group=group,
         layers=list(layers or []),
         files=list(files or []),
+        file_ids=list(file_ids or []),
         notes=notes,
+        extra=dict(extra or {}),
     )
     return sample_name
 
@@ -431,7 +444,7 @@ def list_samples() -> list[dict[str, Any]]:
     return [asdict(entry) for entry in _SAMPLES.values()]
 
 
-def get_sample(sample_name: str) -> SampleEntry:
+def get_sample(sample_name: str) -> SampleAnnotation:
     if sample_name not in _SAMPLES:
         raise KeyError(f"Sample {sample_name!r} not found. Available: {list(_SAMPLES)}")
     return _SAMPLES[sample_name]

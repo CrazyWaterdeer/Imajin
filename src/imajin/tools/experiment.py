@@ -21,6 +21,8 @@ def annotate_sample(
     files: list[str] | None = None,
     notes: str | None = None,
 ) -> dict[str, Any]:
+    if not group or not group.strip():
+        raise ValueError("group must not be empty for annotate_sample()")
     normalized_files = [str(Path(f).expanduser()) for f in (files or [])]
     name = put_sample(
         sample_name=sample_name,
