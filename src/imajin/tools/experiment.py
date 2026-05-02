@@ -239,3 +239,98 @@ def create_analysis_recipe(
         "name": recipe_id,
         "target_channel": target_channel,
     }
+
+
+def _scan_measurement_tables(measurement: str) -> "pd.DataFrame":
+    """Concatenate every Phase-3 measurement table that has the requested column
+    plus the sample/group identifier columns."""
+    import pandas as pd
+
+    from imajin.agent.state import _TABLES
+
+    frames: list[pd.DataFrame] = []
+    for entry in _TABLES.values():
+        df = entry.df
+        if df is None or df.empty:
+            continue
+        needed = {"sample_name", "sample_id", "group", measurement}
+        if not needed.issubset(df.columns):
+            continue
+        frames.append(df)
+    if not frames:
+        raise ValueError(
+            f"No measurement tables found containing column {measurement!r} "
+            "alongside sample_name/sample_id/group. Run a recipe first."
+        )
+    return pd.concat(frames, ignore_index=True)
+
+
+@tool(
+    description="Aggregate per-object measurements into sample-level and "
+    "group-level summary tables. Pass the measurement column name (e.g. "
+    "'mean_intensity_green_target', 'area_um2'). Sample-level: count, mean, "
+    "median, std, sem per sample. Group-level: mean of sample means, "
+    "n_samples, and n_objects per group.",
+    phase="3",
+)
+def summarize_experiment(
+    measurement: str,
+    group_by: str = "group",
+    sample_col: str = "sample_name",
+) -> dict[str, Any]:
+    import pandas as pd
+
+    from imajin.agent.state import put_table
+
+    df = _scan_measurement_tables(measurement)
+    sample_grp = df.groupby(sample_col, dropna=False)[measurement]
+    sample_summary = sample_grp.agg(
+        count="count",
+        mean="mean",
+        median="median",
+        std="std",
+        sem="sem",
+    ).reset_index()
+
+    sample_to_group = (
+        df[[sample_col, group_by]]
+        .drop_duplicates(subset=[sample_col])
+        .set_index(sample_col)
+    )
+    sample_summary[group_by] = sample_summary[sample_col].map(
+        sample_to_group[group_by]
+    )
+
+    group_summary = (
+        sample_summary.groupby(group_by, dropna=False)
+        .agg(
+            n_samples=(sample_col, "nunique"),
+            mean=("mean", "mean"),
+            median=("median", "mean"),
+            std=("std", "mean"),
+            sem=("sem", "mean"),
+        )
+        .reset_index()
+    )
+    object_counts = df.groupby(group_by, dropna=False)[measurement].size()
+    group_summary["n_objects"] = (
+        group_summary[group_by].map(object_counts).astype(int)
+    )
+
+    sample_table_name = put_table(
+        f"summary_sample__{measurement}",
+        sample_summary,
+        spec={"tool": "summarize_experiment", "measurement": measurement, "level": "sample"},
+    )
+    group_table_name = put_table(
+        f"summary_group__{measurement}",
+        group_summary,
+        spec={"tool": "summarize_experiment", "measurement": measurement, "level": "group"},
+    )
+    return {
+        "measurement": measurement,
+        "sample_table": sample_table_name,
+        "group_table": group_table_name,
+        "n_samples": int(sample_summary[sample_col].nunique()),
+        "n_groups": int(group_summary[group_by].nunique(dropna=False)),
+    }

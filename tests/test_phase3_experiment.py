@@ -498,3 +498,50 @@ def test_run_recipe_on_samples_no_samples_returns_empty() -> None:
     res = workflows.run_recipe_on_samples(recipe_name="r_empty", sample_names=[])
     assert res["n_samples"] == 0
     assert res["runs"] == []
+
+
+# --- Task 11: summarize_experiment -------------------------------------------
+
+def test_summarize_experiment_sample_and_group_levels() -> None:
+    df = pd.DataFrame(
+        {
+            "label": [1, 2, 1, 2, 1, 2],
+            "sample_id": ["c1", "c1", "c2", "c2", "t1", "t1"],
+            "sample_name": ["c1", "c1", "c2", "c2", "t1", "t1"],
+            "group": ["control", "control", "control", "control", "treatment", "treatment"],
+            "mean_intensity": [10.0, 20.0, 12.0, 18.0, 50.0, 60.0],
+            "area": [100, 110, 105, 115, 90, 95],
+        }
+    )
+    state.put_table("measurements", df)
+
+    res = experiment.summarize_experiment(measurement="mean_intensity")
+    sample_tbl = state.get_table(res["sample_table"])
+    assert set(sample_tbl["sample_name"]) == {"c1", "c2", "t1"}
+    c1 = sample_tbl[sample_tbl["sample_name"] == "c1"].iloc[0]
+    assert c1["mean"] == 15.0
+    assert c1["count"] == 2
+
+    group_tbl = state.get_table(res["group_table"])
+    assert set(group_tbl["group"]) == {"control", "treatment"}
+    ctrl = group_tbl[group_tbl["group"] == "control"].iloc[0]
+    assert ctrl["mean"] == 15.0  # mean of sample means (15, 15)
+    assert ctrl["n_samples"] == 2
+    assert ctrl["n_objects"] == 4
+
+
+def test_summarize_experiment_handles_missing_group() -> None:
+    df = pd.DataFrame(
+        {
+            "label": [1, 2],
+            "sample_id": ["s1", "s1"],
+            "sample_name": ["s1", "s1"],
+            "group": [None, None],
+            "mean_intensity": [5.0, 7.0],
+        }
+    )
+    state.put_table("measurements", df)
+
+    res = experiment.summarize_experiment(measurement="mean_intensity")
+    group_tbl = state.get_table(res["group_table"])
+    assert len(group_tbl) >= 1
