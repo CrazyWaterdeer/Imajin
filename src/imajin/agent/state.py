@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import asdict, dataclass, field
-from typing import Any
+from typing import Any, Literal
 
 import pandas as pd
 
@@ -16,6 +16,29 @@ class TableEntry:
 
 
 _TABLES: dict[str, TableEntry] = {}
+QCStatus = Literal["pass", "warning", "fail", "not_checked"]
+
+
+@dataclass
+class QCRecord:
+    source: str
+    status: QCStatus = "not_checked"
+    warnings: list[str] = field(default_factory=list)
+    metrics: dict[str, Any] = field(default_factory=dict)
+    reviewed_by_user: bool = False
+    notes: str | None = None
+
+
+_QC_RECORDS: dict[str, QCRecord] = {}
+
+
+def _autosave_project(reason: str) -> None:
+    try:
+        from imajin.project import autosave_current_project
+
+        autosave_current_project(reason)
+    except Exception:
+        pass
 
 
 def _slugify(name: str) -> str:
@@ -61,6 +84,7 @@ def put_file(
         notes=notes,
         load_status=load_status,
     )
+    _autosave_project("file_registered")
     return file_id
 
 
@@ -81,6 +105,7 @@ def update_file_status(file_id: str, status: str, notes: str | None = None) -> N
     rec.load_status = status
     if notes is not None:
         rec.notes = notes
+    _autosave_project("file_status_updated")
 
 
 def reset_files() -> None:
@@ -127,6 +152,7 @@ def put_recipe(
         colocalization=list(colocalization or []),
         notes=notes,
     )
+    _autosave_project("recipe_saved")
     return name
 
 
@@ -186,6 +212,7 @@ def put_run(
         summary=dict(summary or {}),
         error=error,
     )
+    _autosave_project("analysis_run_saved")
     return run_id
 
 
@@ -202,6 +229,42 @@ def list_runs() -> list[dict[str, Any]]:
 def reset_runs() -> None:
     _RUNS.clear()
     _RUN_COUNTER[0] = 0
+
+
+def put_qc_record(
+    source: str,
+    status: QCStatus = "not_checked",
+    warnings: list[str] | None = None,
+    metrics: dict[str, Any] | None = None,
+    reviewed_by_user: bool = False,
+    notes: str | None = None,
+) -> str:
+    if status not in {"pass", "warning", "fail", "not_checked"}:
+        raise ValueError("status must be pass, warning, fail, or not_checked")
+    _QC_RECORDS[source] = QCRecord(
+        source=source,
+        status=status,
+        warnings=list(warnings or []),
+        metrics=dict(metrics or {}),
+        reviewed_by_user=reviewed_by_user,
+        notes=notes,
+    )
+    _autosave_project("qc_record_saved")
+    return source
+
+
+def get_qc_record(source: str) -> QCRecord:
+    if source not in _QC_RECORDS:
+        raise KeyError(f"QC source {source!r} not found. Available: {list(_QC_RECORDS)}")
+    return _QC_RECORDS[source]
+
+
+def list_qc_records() -> list[dict[str, Any]]:
+    return [asdict(record) for record in _QC_RECORDS.values()]
+
+
+def reset_qc_records() -> None:
+    _QC_RECORDS.clear()
 
 
 @dataclass
@@ -501,6 +564,17 @@ def put_table(
         i += 1
     _TABLES[name] = TableEntry(df=df, spec=dict(spec or {}))
     _emit_tables_changed()
+    _autosave_project("table_saved")
+    return name
+
+
+def set_table(
+    name: str, df: pd.DataFrame, spec: dict[str, Any] | None = None
+) -> str:
+    """Set or replace a table by exact name for project restore paths."""
+    _TABLES[name] = TableEntry(df=df, spec=dict(spec or {}))
+    _emit_tables_changed()
+    _autosave_project("table_restored")
     return name
 
 
@@ -509,6 +583,7 @@ def update_table(name: str, df: pd.DataFrame) -> None:
         raise KeyError(f"Table {name!r} not found")
     _TABLES[name].df = df
     _emit_tables_changed()
+    _autosave_project("table_updated")
 
 
 def list_tables() -> list[str]:
@@ -547,6 +622,7 @@ def attach_sample_columns_to_table(
             df[col] = value
     _TABLES[table_name].df = df
     _emit_tables_changed()
+    _autosave_project("table_sample_columns_attached")
 
 
 def put_sample(
@@ -575,6 +651,7 @@ def put_sample(
         notes=notes,
         extra=dict(extra or {}),
     )
+    _autosave_project("sample_annotation_saved")
     return sample_name
 
 
@@ -618,6 +695,7 @@ def put_channel_annotation(
         biological_target=biological_target,
         notes=notes,
     )
+    _autosave_project("channel_annotation_saved")
     return resolved_layer
 
 
@@ -627,6 +705,123 @@ def list_channel_annotations() -> list[dict[str, Any]]:
 
 def reset_channel_annotations() -> None:
     _CHANNELS.clear()
+
+
+def snapshot_session_state() -> dict[str, Any]:
+    """Return JSON-friendly session state used by project persistence."""
+    return {
+        "files": list_files(),
+        "samples": list_samples(),
+        "channels": list_channel_annotations(),
+        "recipes": list_recipes(),
+        "runs": list_runs(),
+        "qc_records": list_qc_records(),
+        "tables": [
+            {"name": name, "spec": dict(entry.spec)}
+            for name, entry in _TABLES.items()
+        ],
+    }
+
+
+def restore_session_state(
+    *,
+    files: list[dict[str, Any]] | None = None,
+    samples: list[dict[str, Any]] | None = None,
+    channels: list[dict[str, Any]] | None = None,
+    recipes: list[dict[str, Any]] | None = None,
+    runs: list[dict[str, Any]] | None = None,
+    qc_records: list[dict[str, Any]] | None = None,
+    clear_existing: bool = True,
+) -> None:
+    """Restore persistent state without requiring napari layers to exist."""
+    if clear_existing:
+        reset_files()
+        reset_samples()
+        reset_channel_annotations()
+        reset_recipes()
+        reset_runs()
+        reset_qc_records()
+
+    for rec in files or []:
+        file_id = str(rec.get("file_id") or rec.get("original_name") or "file")
+        _FILES[file_id] = FileRecord(
+            file_id=file_id,
+            path=str(rec.get("path") or rec.get("original_path") or ""),
+            original_name=str(rec.get("original_name") or file_id),
+            file_type=rec.get("file_type"),
+            metadata_summary=dict(rec.get("metadata_summary") or {}),
+            load_status=str(rec.get("load_status") or rec.get("status") or "unloaded"),
+            notes=rec.get("notes"),
+        )
+
+    for rec in samples or []:
+        put_sample(
+            sample_name=str(rec.get("sample_name") or rec.get("sample_id") or "sample"),
+            group=rec.get("group"),
+            layers=list(rec.get("layers") or rec.get("layer_names") or []),
+            files=list(rec.get("files") or []),
+            file_ids=list(rec.get("file_ids") or []),
+            notes=rec.get("notes"),
+            sample_id=rec.get("sample_id"),
+            extra=dict(rec.get("extra") or {}),
+        )
+
+    for rec in channels or []:
+        layer_name = str(rec.get("layer_name") or "")
+        if not layer_name:
+            continue
+        _CHANNELS[layer_name] = ChannelEntry(
+            layer_name=layer_name,
+            role=str(rec.get("role") or "target"),
+            color=rec.get("color"),
+            marker=rec.get("marker"),
+            biological_target=rec.get("biological_target"),
+            notes=rec.get("notes"),
+        )
+
+    for rec in recipes or []:
+        put_recipe(
+            name=str(rec.get("name") or rec.get("recipe_id") or "recipe"),
+            target_channel=rec.get("target_channel"),
+            preprocessing=list(rec.get("preprocessing") or []),
+            segmentation=dict(rec.get("segmentation") or {}),
+            measurement=dict(rec.get("measurement") or {}),
+            timecourse=rec.get("timecourse"),
+            colocalization=list(rec.get("colocalization") or []),
+            notes=rec.get("notes"),
+        )
+
+    max_run = 0
+    for rec in runs or []:
+        run_id = rec.get("run_id")
+        put_run(
+            sample_id=str(rec.get("sample_id") or ""),
+            file_id=str(rec.get("file_id") or ""),
+            recipe_id=str(rec.get("recipe_id") or ""),
+            status=str(rec.get("status") or "pending"),
+            table_names=list(rec.get("table_names") or []),
+            layer_names=list(rec.get("layer_names") or []),
+            summary=dict(rec.get("summary") or {}),
+            error=rec.get("error"),
+            run_id=run_id,
+        )
+        if isinstance(run_id, str) and run_id.startswith("run_"):
+            try:
+                max_run = max(max_run, int(run_id.rsplit("_", 1)[1]))
+            except (IndexError, ValueError):
+                pass
+    if max_run:
+        _RUN_COUNTER[0] = max(_RUN_COUNTER[0], max_run)
+
+    for rec in qc_records or []:
+        put_qc_record(
+            source=str(rec.get("source") or ""),
+            status=rec.get("status") or "not_checked",
+            warnings=list(rec.get("warnings") or []),
+            metrics=dict(rec.get("metrics") or {}),
+            reviewed_by_user=bool(rec.get("reviewed_by_user", False)),
+            notes=rec.get("notes"),
+        )
 
 
 @dataclass

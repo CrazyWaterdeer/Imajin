@@ -3,8 +3,8 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from qtpy.QtCore import Qt, Signal
-from qtpy.QtGui import QKeyEvent
+from qtpy.QtCore import QEvent, Qt, Signal
+from qtpy.QtGui import QInputMethodEvent, QKeyEvent
 from qtpy.QtWidgets import (
     QFrame,
     QHBoxLayout,
@@ -16,6 +16,7 @@ from qtpy.QtWidgets import (
 )
 
 from imajin.agent.qt_tool_runner import MainThreadToolRunner
+from imajin.agent.execution import get_execution_service
 from imajin.ui.chat_transcript import ChatTranscript
 from imajin.ui.provider_status import ProviderStatus, compute_statuses
 from imajin.ui.theme import apply_dock_theme
@@ -134,6 +135,10 @@ class _ComposerInput(QPlainTextEdit):
         super().__init__()
         self._max_visible_lines = max_visible_lines
         self._frame_padding = 12
+        self._has_preedit = False
+        self.setAttribute(Qt.WidgetAttribute.WA_InputMethodEnabled, True)
+        self.setInputMethodHints(Qt.InputMethodHint.ImhNone)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.setFixedHeight(34)  # provisional; refined once the font is realized
         self.document().contentsChanged.connect(self._adjust_height)
 
@@ -150,8 +155,23 @@ class _ComposerInput(QPlainTextEdit):
         target = visible * line_h + self._frame_padding
         self.setFixedHeight(target)
 
+    def inputMethodEvent(self, event: QInputMethodEvent) -> None:
+        self._has_preedit = bool(event.preeditString())
+        super().inputMethodEvent(event)
+        if event.commitString():
+            self._has_preedit = False
+
+    def event(self, event) -> bool:
+        if event.type() == QEvent.Type.ShortcutOverride and self.hasFocus():
+            event.accept()
+            return True
+        return super().event(event)
+
     def keyPressEvent(self, event: QKeyEvent) -> None:
         if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            if self._has_preedit:
+                super().keyPressEvent(event)
+                return
             if event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
                 super().keyPressEvent(event)
             else:
@@ -173,6 +193,7 @@ class ChatDock(QWidget):
         # Lives on the main (Qt) thread; tool calls from worker are routed
         # through this so napari Layer creation stays on the main thread.
         self._tool_runner = MainThreadToolRunner(parent=self)
+        self.execution_service = get_execution_service()
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(8, 8, 8, 8)
@@ -226,6 +247,7 @@ class ChatDock(QWidget):
 
         composer_layout.addLayout(toolbar)
         layout.addWidget(composer)
+        self.input.setFocus(Qt.FocusReason.OtherFocusReason)
 
     def invalidate_runner(self) -> None:
         self._runner = None
@@ -277,10 +299,21 @@ class ChatDock(QWidget):
         ):
             return self._runner
         provider = self._make_provider()
+
+        def call_tool_via_jobs(name: str, **kwargs: Any) -> Any:
+            return self.execution_service.call_tool_blocking(
+                name,
+                kwargs=kwargs,
+                source="llm",
+                driver=f"llm:{provider.model}",
+                title=name,
+                tool_caller=self._tool_runner.call,
+            )
+
         self._runner = AgentRunner(
             provider,
             build_system_prompt(),
-            tool_caller=self._tool_runner.call,
+            tool_caller=call_tool_via_jobs,
         )
         self._provider_kind = kind
         self._provider_model = model
@@ -329,6 +362,7 @@ class ChatDock(QWidget):
     def _on_cancel(self) -> None:
         if self._runner is not None:
             self._runner.cancel()
+        self.execution_service.cancel_running(source="llm")
         if self._worker is not None:
             try:
                 self._worker.quit()

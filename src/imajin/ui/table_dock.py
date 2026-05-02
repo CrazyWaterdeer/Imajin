@@ -134,6 +134,14 @@ class TableDock(QWidget):
         except (KeyError, ValueError):
             return
 
+        try:
+            from imajin.tools.qc import jump_to_object
+
+            jump_to_object(self.table_picker.currentText(), label_id)
+            return
+        except Exception:
+            pass
+
         labels_spec = state.get_table_entry(self.table_picker.currentText()).spec.get(
             "labels_layer"
         )

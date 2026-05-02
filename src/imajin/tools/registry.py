@@ -114,8 +114,8 @@ def iter_tools() -> list[ToolEntry]:
     return list(_REGISTRY.values())
 
 
-def call_tool(name: str, **kwargs: Any) -> Any:
-    entry = _REGISTRY[name]
+def call_tool(tool_name: str, **kwargs: Any) -> Any:
+    entry = _REGISTRY[tool_name]
     validated = entry.input_model(**kwargs)
     return entry.func(**validated.model_dump())
 

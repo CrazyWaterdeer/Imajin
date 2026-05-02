@@ -31,3 +31,28 @@ def test_dataframe_model_renders_floats(qtbot, viewer) -> None:
     idx = model.index(0, 0)
     text = model.data(idx, Qt.ItemDataRole.DisplayRole)
     assert text == "1.235"
+
+
+def test_table_dock_row_click_jumps_to_object(qtbot, viewer) -> None:
+    from imajin.ui.table_dock import TableDock
+
+    viewer.add_labels([[0, 0], [0, 2]], name="masks", scale=(0.5, 0.25))
+    state.set_table(
+        "measurements",
+        pd.DataFrame(
+            {
+                "label": [2],
+                "centroid-0": [1.0],
+                "centroid-1": [1.0],
+                "area": [1],
+            }
+        ),
+        spec={"tool": "measure_intensity", "labels_layer": "masks"},
+    )
+    dock = TableDock(viewer=viewer)
+    qtbot.addWidget(dock)
+
+    dock._on_row_click(dock._model.index(0, 0))
+
+    assert viewer.layers["masks"].selected_label == 2
+    assert viewer.camera.center == (0.5, 0.25)

@@ -45,11 +45,20 @@ _TOOL_PHRASES: dict[str, str] = {
     ),
     "max_projection": "maximum-intensity projection was generated along the {axis} axis",
     "orthogonal_views": "orthogonal XZ and YZ projection views were generated",
+    "enhance_neural_processes": (
+        "neural process signal was enhanced ({method}) before tracing"
+    ),
+    "segment_neural_processes": (
+        "neural processes were thresholded into a process mask ({threshold})"
+    ),
     "skeletonize": "the segmentation was skeletonized (skan / scikit-image)",
     "extract_branch_metrics": (
         "per-branch morphology metrics (length, branch type, tortuosity) were "
         "extracted with skan"
     ),
+    "prune_skeleton": "short skeleton branches were pruned below {min_branch_length_um}",
+    "compute_sholl_analysis": "Sholl-style intersections were computed from the skeleton",
+    "export_neural_trace": "neural trace data were exported as {format}",
     "track_cells": "cells were tracked across the time series with btrack",
     "analyze_target_cells": (
         "cells were segmented from the user-confirmed target channel ({channel}) "
@@ -91,6 +100,10 @@ def _format_phrase(tool_name: str, inputs: dict[str, Any]) -> str | None:
     args["image_b"] = inputs.get("image_b", "?")
     args["image_layer"] = inputs.get("image_layer", "?")
     args["axis"] = inputs.get("axis", "?")
+    args["method"] = inputs.get("method", "?")
+    args["threshold"] = inputs.get("threshold", "?")
+    args["format"] = inputs.get("format", "?")
+    args["min_branch_length_um"] = inputs.get("min_branch_length_um", "?")
     args["timepoint"] = inputs.get("t", inputs.get("timepoint", "?"))
     pct = inputs.get("percentiles")
     if pct is None:
@@ -120,6 +133,12 @@ def _select_pipeline_records(records: list[dict[str, Any]]) -> list[dict[str, An
         "filter_table",
         "set_view",
         "set_colormap",
+        "compute_segmentation_qc",
+        "compute_measurement_qc",
+        "compute_timecourse_qc",
+        "create_label_outline",
+        "jump_to_object",
+        "mark_qc_status",
         "annotate_sample",
         "list_sample_annotations",
         "annotate_channel",
@@ -210,11 +229,65 @@ def _render_channels_markdown(channels: list[dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
+def _render_qc_markdown(qc_records: list[dict[str, Any]]) -> str:
+    if not qc_records:
+        return ""
+    lines = [
+        "## Quality Control",
+        "",
+        "| Source | Status | Warnings | Reviewed |",
+        "|---|---|---|---|",
+    ]
+    for record in qc_records:
+        warnings = "; ".join(str(w) for w in (record.get("warnings") or []))
+        warnings = warnings.replace("|", "/") or "—"
+        source = str(record.get("source") or "—").replace("|", "/")
+        status = str(record.get("status") or "not_checked").replace("|", "/")
+        reviewed = "yes" if record.get("reviewed_by_user") else "no"
+        lines.append(f"| {source} | {status} | {warnings} | {reviewed} |")
+    lines.append("")
+    return "\n".join(lines)
+
+
+def _render_neural_traces_markdown(
+    traces: list[dict[str, Any]],
+    qc_records: list[dict[str, Any]],
+) -> str:
+    if not traces:
+        return ""
+    qc_by_source = {str(r.get("source")): r for r in qc_records}
+    lines = [
+        "## Neural Morphology",
+        "",
+        "| Trace | Source | Status | Paths | Components | Total length | Tables |",
+        "|---|---|---|---:|---:|---:|---|",
+    ]
+    for trace in traces:
+        trace_id = str(trace.get("trace_id") or "—")
+        qc = qc_by_source.get(trace_id, {})
+        metrics = qc.get("metrics") or {}
+        total_length = metrics.get("total_length", "—")
+        if isinstance(total_length, float):
+            total_length = f"{total_length:.3g}"
+        source = str(trace.get("source_layer") or "—").replace("|", "/")
+        status = str(trace.get("status") or "—").replace("|", "/")
+        table_names = trace.get("table_names") or {}
+        tables = ", ".join(str(v) for v in table_names.values()) or "—"
+        lines.append(
+            f"| {trace_id} | {source} | {status} | {trace.get('n_paths', 0)} "
+            f"| {trace.get('n_components', 0)} | {total_length} | {tables} |"
+        )
+    lines.append("")
+    return "\n".join(lines)
+
+
 def _render_report_html(
     records: list[dict[str, Any]],
     methods_md: str,
     samples_md: str = "",
     channels_md: str = "",
+    qc_md: str = "",
+    neural_md: str = "",
 ) -> str:
     pipeline = _select_pipeline_records(records)
     rows = "".join(
@@ -233,6 +306,8 @@ def _render_report_html(
         f"<pre>{escape(methods_md)}</pre>"
         f"{'<pre>' + escape(samples_md) + '</pre>' if samples_md else ''}"
         f"{'<pre>' + escape(channels_md) + '</pre>' if channels_md else ''}"
+        f"{'<pre>' + escape(neural_md) + '</pre>' if neural_md else ''}"
+        f"{'<pre>' + escape(qc_md) + '</pre>' if qc_md else ''}"
         f"<h2>Operations</h2><table><tr><th>Tool</th><th>Inputs</th><th>Time</th></tr>"
         f"{rows}</table></body></html>"
     )
@@ -278,7 +353,12 @@ def generate_report(
     format: str = "html",
 ) -> dict[str, Any]:
     from imajin.agent import provenance
-    from imajin.agent.state import list_channel_annotations, list_samples
+    from imajin.agent.state import (
+        list_channel_annotations,
+        list_qc_records,
+        list_samples,
+    )
+    from imajin.tools.trace import list_trace_records
 
     if format not in ("html", "md"):
         raise ValueError(f"format must be 'html' or 'md', got {format!r}")
@@ -289,6 +369,10 @@ def generate_report(
     samples_md = _render_samples_markdown(samples)
     channels = list_channel_annotations()
     channels_md = _render_channels_markdown(channels)
+    qc_records = list_qc_records()
+    qc_md = _render_qc_markdown(qc_records)
+    neural_traces = list_trace_records()
+    neural_md = _render_neural_traces_markdown(neural_traces, qc_records)
     out = Path(path).expanduser().resolve()
     out.parent.mkdir(parents=True, exist_ok=True)
 
@@ -298,10 +382,14 @@ def generate_report(
             extra += "\n" + samples_md
         if channels_md:
             extra += "\n" + channels_md
+        if neural_md:
+            extra += "\n" + neural_md
+        if qc_md:
+            extra += "\n" + qc_md
         out.write_text(methods + extra, encoding="utf-8")
     else:
         out.write_text(
-            _render_report_html(records, methods, samples_md, channels_md),
+            _render_report_html(records, methods, samples_md, channels_md, qc_md, neural_md),
             encoding="utf-8",
         )
 
@@ -312,6 +400,8 @@ def generate_report(
         "n_records": len(records),
         "n_samples": len(samples),
         "n_channels": len(channels),
+        "n_qc_records": len(qc_records),
+        "n_neural_traces": len(neural_traces),
     }
 
 
@@ -405,10 +495,12 @@ def generate_experiment_report(
     from imajin.agent import provenance
     from imajin.agent.state import (
         list_files,
+        list_qc_records,
         list_recipes,
         list_runs,
         list_samples,
     )
+    from imajin.tools.trace import list_trace_records
 
     if format not in ("md", "html"):
         raise ValueError(f"format must be 'md' or 'html', got {format!r}")
@@ -417,6 +509,8 @@ def generate_experiment_report(
     samples = list_samples()
     recipes = list_recipes()
     runs = list_runs()
+    qc_records = list_qc_records()
+    neural_traces = list_trace_records()
 
     records = provenance.read_session(session_id)
     methods_md = _render_methods_markdown(records)
@@ -430,6 +524,8 @@ def generate_experiment_report(
             _render_recipes(recipes),
             _render_runs(runs),
             methods_md,
+            _render_neural_traces_markdown(neural_traces, qc_records),
+            _render_qc_markdown(qc_records),
             _render_warnings(runs),
         ]
     )
@@ -455,6 +551,8 @@ def generate_experiment_report(
         "n_groups": len({s.get("group") for s in samples if s.get("group")}),
         "n_files": len(files),
         "n_runs": len(runs),
+        "n_qc_records": len(qc_records),
+        "n_neural_traces": len(neural_traces),
         "n_failed": sum(1 for r in runs if r.get("status") == "failed"),
         "session_id": session_id or provenance.current_session_id(),
     }

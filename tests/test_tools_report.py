@@ -186,6 +186,26 @@ def test_generate_report_includes_channel_annotations(fake_session, tmp_path, vi
     assert res["n_channels"] == 1
 
 
+def test_generate_report_includes_qc_records(fake_session, tmp_path) -> None:
+    from imajin.agent import state
+
+    state.put_qc_record(
+        "masks",
+        status="warning",
+        warnings=["Some labeled objects touch the image border."],
+        metrics={"n_objects": 4},
+    )
+
+    out = tmp_path / "report.md"
+    res = report.generate_report(str(out), format="md")
+    body = out.read_text(encoding="utf-8")
+
+    assert "Quality Control" in body
+    assert "masks" in body
+    assert "warning" in body
+    assert res["n_qc_records"] == 1
+
+
 def test_generate_report_rejects_bad_format(fake_session, tmp_path) -> None:
     with pytest.raises(ValueError, match="format must be"):
         report.generate_report(str(tmp_path / "x.pdf"), format="pdf")

@@ -38,6 +38,22 @@ def _apply_ui_scale_env(ui_scale_setting: str) -> None:
     os.environ.setdefault("QT_SCALE_FACTOR_ROUNDING_POLICY", "PassThrough")
 
 
+def _setup_input_method_env() -> None:
+    """Preserve the desktop IME for CJK text entry before Qt starts."""
+    if os.environ.get("QT_IM_MODULE"):
+        return
+    for key in ("GTK_IM_MODULE", "XMODIFIERS"):
+        value = os.environ.get(key, "").lower()
+        if "fcitx" in value:
+            os.environ["QT_IM_MODULE"] = "fcitx"
+            return
+        if "ibus" in value:
+            os.environ["QT_IM_MODULE"] = "ibus"
+            return
+    if _is_wsl() and "wayland" in os.environ.get("QT_QPA_PLATFORM", "wayland").lower():
+        os.environ["QT_IM_MODULE"] = "wayland"
+
+
 def _setup_wsl_env() -> None:
     if not _is_wsl():
         return
@@ -154,6 +170,7 @@ def main() -> int:
 
     settings = Settings.from_env()
     _setup_wsl_env()
+    _setup_input_method_env()
     _apply_ui_scale_env(settings.ui_scale)
     _ensure_ollama(settings.ollama_base_url)
     parser = argparse.ArgumentParser(

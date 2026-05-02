@@ -63,23 +63,23 @@ class MainThreadToolRunner(QObject):
             raise payload["error"]
         return payload["result"]
 
-    def call(self, name: str, **kwargs: Any) -> Any:
+    def call(self, tool_name: str, **kwargs: Any) -> Any:
         from imajin.tools import call_tool
         from imajin.tools.registry import get_tool
 
         # Same thread? Just call directly — no marshalling needed.
         if QThread.currentThread() == self.thread():
-            return call_tool(name, **kwargs)
+            return call_tool(tool_name, **kwargs)
 
         try:
-            entry = get_tool(name)
+            entry = get_tool(tool_name)
         except KeyError:
             entry = None
         if entry is not None and entry.worker:
-            return call_tool(name, **kwargs)
+            return call_tool(tool_name, **kwargs)
 
         payload: dict[str, Any] = {
-            "name": name,
+            "name": tool_name,
             "kwargs": kwargs,
             "result": None,
             "error": None,
