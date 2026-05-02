@@ -168,3 +168,154 @@ def analyze_target_cells(
         "has_physical_units": bool(measure_result.get("has_physical_units")),
         "warnings": warnings,
     }
+
+
+def _resolve_sample_inputs(sample_name: str) -> dict[str, Any]:
+    """Pick the layer name + file path the recipe should operate on for one sample."""
+    from imajin.agent.state import _FILES, get_sample
+
+    s = get_sample(sample_name)
+    layer_name = s.layers[0] if s.layers else None
+    file_path: str | None = None
+    file_id: str | None = None
+    if s.file_ids:
+        file_id = s.file_ids[0]
+        rec = _FILES.get(file_id)
+        if rec is not None:
+            file_path = rec.path
+    elif s.files:
+        file_path = s.files[0]
+    return {
+        "sample": s,
+        "layer_name": layer_name,
+        "file_path": file_path,
+        "file_id": file_id,
+    }
+
+
+@tool(
+    description="Apply a stored analysis recipe to one or more annotated samples. "
+    "Iterates samples one by one: resolves the target channel/layer, runs the "
+    "Phase-2 analyze_target_cells pipeline, attaches sample/group/file columns to "
+    "the resulting measurement table, and records a per-sample AnalysisRun. A "
+    "failure on one sample never aborts the batch.",
+    phase="3",
+    worker=True,
+)
+def run_recipe_on_samples(
+    recipe_name: str,
+    sample_names: list[str] | None = None,
+) -> dict[str, Any]:
+    from imajin.agent.state import (
+        attach_sample_columns_to_table,
+        get_recipe,
+        list_samples,
+        put_run,
+    )
+
+    recipe = get_recipe(recipe_name)
+    if sample_names is None:
+        sample_names = [s["sample_name"] for s in list_samples()]
+    if not sample_names:
+        return {
+            "recipe": recipe_name,
+            "n_samples": 0,
+            "n_complete": 0,
+            "n_failed": 0,
+            "runs": [],
+        }
+
+    seg = recipe.segmentation or {}
+    pre_steps = recipe.preprocessing or []
+    pre_choice = pre_steps[0]["step"] if pre_steps else None
+
+    runs: list[dict[str, Any]] = []
+    n_complete = 0
+    n_failed = 0
+    for name in sample_names:
+        info = _resolve_sample_inputs(name)
+        s = info["sample"]
+        try:
+            result = analyze_target_cells(
+                target=recipe.target_channel,
+                do_3D=seg.get("do_3D"),
+                diameter=seg.get("diameter"),
+                preprocess=pre_choice,
+            )
+        except Exception as exc:  # noqa: BLE001
+            run_id = put_run(
+                sample_id=s.sample_id,
+                file_id=info["file_id"] or "",
+                recipe_id=recipe.recipe_id,
+                status="failed",
+                error=str(exc),
+            )
+            runs.append({"run_id": run_id, "status": "failed", "error": str(exc)})
+            n_failed += 1
+            continue
+
+        if not result.get("ok"):
+            run_id = put_run(
+                sample_id=s.sample_id,
+                file_id=info["file_id"] or "",
+                recipe_id=recipe.recipe_id,
+                status="failed",
+                error=result.get("error", "analysis returned ok=false"),
+                summary=result,
+            )
+            runs.append(
+                {
+                    "run_id": run_id,
+                    "status": "failed",
+                    "error": result.get("error"),
+                }
+            )
+            n_failed += 1
+            continue
+
+        table_name = result.get("table_name")
+        if table_name:
+            attach_sample_columns_to_table(
+                table_name=table_name,
+                sample_id=s.sample_id,
+                sample_name=s.sample_name,
+                group=s.group,
+                file_id=info["file_id"],
+                source_file=info["file_path"],
+                source_layer=result.get("target_channel"),
+            )
+
+        run_id = put_run(
+            sample_id=s.sample_id,
+            file_id=info["file_id"] or "",
+            recipe_id=recipe.recipe_id,
+            status="complete",
+            table_names=[table_name] if table_name else [],
+            layer_names=[
+                ln
+                for ln in (result.get("labels_layer"), result.get("preprocessed_layer"))
+                if ln
+            ],
+            summary={
+                "n_objects": result.get("n_objects"),
+                "target_channel": result.get("target_channel"),
+                "warnings": result.get("warnings", []),
+            },
+        )
+        runs.append(
+            {
+                "run_id": run_id,
+                "status": "complete",
+                "sample_name": s.sample_name,
+                "table_names": [table_name] if table_name else [],
+            }
+        )
+        n_complete += 1
+
+    return {
+        "recipe": recipe_name,
+        "n_samples": len(sample_names),
+        "n_complete": n_complete,
+        "n_failed": n_failed,
+        "runs": runs,
+    }

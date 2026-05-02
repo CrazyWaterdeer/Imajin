@@ -520,6 +520,35 @@ def reset_tables() -> None:
     _emit_tables_changed()
 
 
+def attach_sample_columns_to_table(
+    table_name: str,
+    sample_id: str,
+    sample_name: str,
+    group: str | None,
+    file_id: str | None,
+    source_file: str | None,
+    source_layer: str | None,
+) -> None:
+    """Add identifier columns required by the Phase-3 spec onto an existing table.
+    No-op if the table doesn't exist or already has these columns."""
+    if table_name not in _TABLES:
+        return
+    df = _TABLES[table_name].df
+    additions = {
+        "sample_id": sample_id,
+        "sample_name": sample_name,
+        "group": group,
+        "file_id": file_id,
+        "source_file": source_file,
+        "source_layer": source_layer,
+    }
+    for col, value in additions.items():
+        if col not in df.columns:
+            df[col] = value
+    _TABLES[table_name].df = df
+    _emit_tables_changed()
+
+
 def put_sample(
     sample_name: str,
     group: str | None = None,

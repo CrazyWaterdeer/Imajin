@@ -341,3 +341,79 @@ def test_create_analysis_recipe_minimal_inputs() -> None:
     r = state.get_recipe("r2")
     assert r.segmentation == {}
     assert r.measurement == {}
+
+
+# --- Task 9: run_recipe_on_samples (single sample) ---------------------------
+
+def _two_label_image() -> tuple[np.ndarray, np.ndarray]:
+    labels = np.zeros((20, 20), dtype=np.int32)
+    labels[2:8, 2:8] = 1
+    labels[12:18, 12:18] = 2
+    img = np.zeros_like(labels, dtype=np.float32)
+    img[2:8, 2:8] = 100.0
+    img[12:18, 12:18] = 50.0
+    return labels, img
+
+
+def _stub_cellpose(monkeypatch, mask: np.ndarray) -> None:
+    from imajin.tools import segment
+
+    class _FakeModel:
+        def eval(self, data, **kwargs):  # noqa: ANN001
+            return mask, None, None
+
+    monkeypatch.setattr(
+        segment, "_get_cellpose_model", lambda *a, **kw: _FakeModel()
+    )
+
+
+def test_run_recipe_on_samples_single_sample_attaches_columns(
+    viewer, monkeypatch, tmp_path: Path
+) -> None:
+    from imajin.tools import workflows
+
+    labels, img = _two_label_image()
+    viewer.add_image(img, name="ctrl_1_ch0", scale=(0.5, 0.5))
+    state.put_channel_annotation("ctrl_1_ch0", role="target", color="green")
+
+    p = tmp_path / "ctrl_1.lsm"
+    p.write_bytes(b"")
+    experiment.register_files([str(p)])
+    experiment.annotate_samples(
+        [
+            {
+                "sample_name": "ctrl_1",
+                "group": "control",
+                "files": [str(p)],
+                "layers": ["ctrl_1_ch0"],
+            }
+        ]
+    )
+    experiment.create_analysis_recipe(
+        name="r1",
+        target_channel="green",
+        segmentation={"tool": "cellpose_sam"},
+        measurement={"properties": ["area", "centroid", "mean_intensity"]},
+    )
+    _stub_cellpose(monkeypatch, labels)
+
+    res = workflows.run_recipe_on_samples(recipe_name="r1")
+    assert res["n_samples"] == 1
+    assert res["n_complete"] == 1
+    assert res["n_failed"] == 0
+    run = res["runs"][0]
+    assert run["status"] == "complete"
+    df = state.get_table(run["table_names"][0])
+    for col in (
+        "sample_id",
+        "sample_name",
+        "group",
+        "file_id",
+        "source_file",
+        "source_layer",
+    ):
+        assert col in df.columns, f"missing required column: {col}"
+    assert (df["sample_name"] == "ctrl_1").all()
+    assert (df["group"] == "control").all()
+    assert (df["file_id"] == "ctrl_1").all()
+    assert (df["source_layer"] == "ctrl_1_ch0").all()
