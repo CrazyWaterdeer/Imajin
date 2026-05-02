@@ -313,3 +313,148 @@ def generate_report(
         "n_samples": len(samples),
         "n_channels": len(channels),
     }
+
+
+def _render_overview(files, samples, recipes) -> str:
+    n_groups = len({s.get("group") for s in samples if s.get("group")})
+    return (
+        "## Overview\n\n"
+        f"- Files registered: {len(files)}\n"
+        f"- Samples: {len(samples)}\n"
+        f"- Groups: {n_groups}\n"
+        f"- Recipes: {len(recipes)}\n"
+    )
+
+
+def _render_sample_table(samples) -> str:
+    if not samples:
+        return "## Sample Table\n\n_No samples registered._\n"
+    lines = ["## Sample Table", "", "| Sample | Group | Files | Notes |", "|---|---|---|---|"]
+    for s in samples:
+        files = ", ".join(s.get("file_ids") or []) or ", ".join(s.get("files") or [])
+        notes = (s.get("notes") or "").replace("|", "/")
+        extra = "; ".join(f"{k}={v}" for k, v in (s.get("extra") or {}).items())
+        if extra:
+            notes = f"{notes} ({extra})" if notes else extra
+        lines.append(
+            f"| {s.get('sample_name', '?')} | {s.get('group') or '—'} "
+            f"| {files or '—'} | {notes or '—'} |"
+        )
+    lines.append("")
+    return "\n".join(lines)
+
+
+def _render_recipes(recipes) -> str:
+    if not recipes:
+        return "## Analysis Recipe\n\n_No recipes defined._\n"
+    parts = ["## Analysis Recipe", ""]
+    for r in recipes:
+        parts.append(f"### {r.get('name')}")
+        parts.append(f"- target channel: `{r.get('target_channel') or 'unspecified'}`")
+        if r.get("preprocessing"):
+            parts.append(f"- preprocessing: `{r['preprocessing']}`")
+        if r.get("segmentation"):
+            parts.append(f"- segmentation: `{r['segmentation']}`")
+        if r.get("measurement"):
+            parts.append(f"- measurement: `{r['measurement']}`")
+        if r.get("notes"):
+            parts.append(f"- notes: {r['notes']}")
+        parts.append("")
+    return "\n".join(parts)
+
+
+def _render_runs(runs) -> str:
+    if not runs:
+        return "## Results\n\n_No runs recorded._\n"
+    lines = ["## Results", "", "| Sample | Status | Objects | Tables |", "|---|---|---|---|"]
+    for r in runs:
+        n_obj = (r.get("summary") or {}).get("n_objects") or "—"
+        tables = ", ".join(r.get("table_names") or []) or "—"
+        lines.append(
+            f"| {r.get('sample_id', '?')} | {r.get('status', '?')} | {n_obj} | {tables} |"
+        )
+    lines.append("")
+    return "\n".join(lines)
+
+
+def _render_warnings(runs) -> str:
+    failed = [r for r in runs if r.get("status") == "failed"]
+    if not failed:
+        return "## Warnings\n\n_No failures recorded._\n"
+    lines = ["## Warnings", ""]
+    for r in failed:
+        lines.append(
+            f"- **{r.get('sample_id')}** failed: {r.get('error') or 'unknown error'}"
+        )
+    lines.append("")
+    return "\n".join(lines)
+
+
+@tool(
+    description="Write a Phase-3 experiment-level report to disk (markdown or HTML). "
+    "Includes overview, sample table, analysis recipe, per-sample results, the "
+    "deterministic Methods paragraph from session provenance, and a warnings "
+    "section listing failed samples.",
+    phase="3",
+)
+def generate_experiment_report(
+    path: str,
+    session_id: str | None = None,
+    format: str = "md",
+) -> dict[str, Any]:
+    from imajin.agent import provenance
+    from imajin.agent.state import (
+        list_files,
+        list_recipes,
+        list_runs,
+        list_samples,
+    )
+
+    if format not in ("md", "html"):
+        raise ValueError(f"format must be 'md' or 'html', got {format!r}")
+
+    files = list_files()
+    samples = list_samples()
+    recipes = list_recipes()
+    runs = list_runs()
+
+    records = provenance.read_session(session_id)
+    methods_md = _render_methods_markdown(records)
+
+    body = "\n".join(
+        [
+            "# Experiment Report",
+            "",
+            _render_overview(files, samples, recipes),
+            _render_sample_table(samples),
+            _render_recipes(recipes),
+            _render_runs(runs),
+            methods_md,
+            _render_warnings(runs),
+        ]
+    )
+
+    out = Path(path).expanduser().resolve()
+    out.parent.mkdir(parents=True, exist_ok=True)
+    if format == "md":
+        out.write_text(body, encoding="utf-8")
+    else:
+        out.write_text(
+            "<!doctype html><html><head><meta charset='utf-8'>"
+            "<title>imajin experiment report</title>"
+            "<style>body{font-family:system-ui,sans-serif;max-width:780px;"
+            "margin:2em auto;padding:0 1em;line-height:1.5}</style>"
+            f"</head><body><pre>{escape(body)}</pre></body></html>",
+            encoding="utf-8",
+        )
+
+    return {
+        "path": str(out),
+        "format": format,
+        "n_samples": len(samples),
+        "n_groups": len({s.get("group") for s in samples if s.get("group")}),
+        "n_files": len(files),
+        "n_runs": len(runs),
+        "n_failed": sum(1 for r in runs if r.get("status") == "failed"),
+        "session_id": session_id or provenance.current_session_id(),
+    }

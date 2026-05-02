@@ -545,3 +545,77 @@ def test_summarize_experiment_handles_missing_group() -> None:
     res = experiment.summarize_experiment(measurement="mean_intensity")
     group_tbl = state.get_table(res["group_table"])
     assert len(group_tbl) >= 1
+
+
+# --- Task 12: generate_experiment_report -------------------------------------
+
+def test_generate_experiment_report_md_includes_all_sections(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from imajin.tools import report
+
+    p = tmp_path / "ctrl_1.lsm"
+    p.write_bytes(b"")
+    experiment.register_files([str(p)])
+    experiment.annotate_samples(
+        [
+            {"sample_name": "ctrl_1", "group": "control", "files": [str(p)]},
+            {"sample_name": "trt_1", "group": "treatment"},
+        ]
+    )
+    experiment.create_analysis_recipe(
+        name="r1",
+        target_channel="green",
+        segmentation={"tool": "cellpose_sam", "do_3D": True},
+        measurement={"properties": ["area", "mean_intensity"]},
+    )
+    state.put_run(
+        sample_id="ctrl_1",
+        file_id="ctrl_1",
+        recipe_id="r1",
+        status="complete",
+        summary={"n_objects": 42},
+    )
+    state.put_run(
+        sample_id="trt_1",
+        file_id="",
+        recipe_id="r1",
+        status="failed",
+        error="no file registered",
+    )
+
+    log_path = tmp_path / "session.jsonl"
+    log_path.write_text("", encoding="utf-8")
+    from imajin.agent import provenance
+    monkeypatch.setattr(provenance, "_LOG_PATH", log_path)
+
+    out = tmp_path / "exp_report.md"
+    res = report.generate_experiment_report(str(out), format="md")
+    body = out.read_text(encoding="utf-8")
+
+    assert "# Experiment Report" in body
+    assert "## Overview" in body
+    assert "## Sample Table" in body
+    assert "ctrl_1" in body and "trt_1" in body
+    assert "## Analysis Recipe" in body
+    assert "cellpose_sam" in body
+    assert "## Methods" in body
+    assert "## Warnings" in body
+    assert "trt_1" in body  # failed sample listed in warnings
+    assert res["n_samples"] == 2
+    assert res["n_failed"] == 1
+
+
+def test_generate_experiment_report_html_writes_file(tmp_path, monkeypatch) -> None:
+    from imajin.tools import report
+
+    log_path = tmp_path / "session.jsonl"
+    log_path.write_text("", encoding="utf-8")
+    from imajin.agent import provenance
+    monkeypatch.setattr(provenance, "_LOG_PATH", log_path)
+
+    out = tmp_path / "exp_report.html"
+    res = report.generate_experiment_report(str(out), format="html")
+    body = out.read_text(encoding="utf-8")
+    assert "<html>" in body
+    assert res["format"] == "html"
