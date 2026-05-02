@@ -181,3 +181,61 @@ def annotate_samples(samples: list[dict[str, Any]]) -> dict[str, Any]:
             }
         )
     return {"n_samples": len(out), "samples": out}
+
+
+@tool(
+    description="Return the current experiment session state: registered files, "
+    "sample annotations, analysis recipes, and runs. Use this before batch "
+    "analysis or report generation to confirm the experiment shape with the user.",
+    phase="3",
+)
+def list_experiment() -> dict[str, Any]:
+    from imajin.agent.state import (
+        list_files,
+        list_recipes,
+        list_runs,
+        list_samples,
+    )
+
+    return {
+        "files": list_files(),
+        "samples": list_samples(),
+        "recipes": list_recipes(),
+        "runs": list_runs(),
+    }
+
+
+@tool(
+    description="Create or replace a reusable analysis recipe. Captures target "
+    "channel, segmentation/measurement/preprocessing settings, and optional "
+    "time-course or colocalization parameters so the same pipeline can be applied "
+    "across many samples in a batch.",
+    phase="3",
+)
+def create_analysis_recipe(
+    name: str,
+    target_channel: str | None = None,
+    segmentation: dict[str, Any] | None = None,
+    measurement: dict[str, Any] | None = None,
+    preprocessing: list[dict[str, Any]] | None = None,
+    timecourse: dict[str, Any] | None = None,
+    colocalization: list[tuple[str, str]] | None = None,
+    notes: str | None = None,
+) -> dict[str, Any]:
+    from imajin.agent.state import put_recipe
+
+    recipe_id = put_recipe(
+        name=name,
+        target_channel=target_channel,
+        segmentation=segmentation,
+        measurement=measurement,
+        preprocessing=preprocessing,
+        timecourse=timecourse,
+        colocalization=colocalization,
+        notes=notes,
+    )
+    return {
+        "recipe_id": recipe_id,
+        "name": recipe_id,
+        "target_channel": target_channel,
+    }

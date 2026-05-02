@@ -290,3 +290,54 @@ def test_annotate_samples_does_not_invent_extra_from_filename(tmp_path: Path) ->
     )
     s = state.list_samples()[0]
     assert s["extra"] == {}
+
+
+# --- Task 7: list_experiment --------------------------------------------------
+
+def test_list_experiment_returns_all_collections(tmp_path: Path) -> None:
+    p = tmp_path / "x.lsm"
+    p.write_bytes(b"")
+    experiment.register_files([str(p)])
+    experiment.annotate_samples(
+        [{"sample_name": "s1", "group": "control", "files": [str(p)]}]
+    )
+    state.put_recipe(name="r1", target_channel="green")
+    state.put_run(
+        sample_id="s1", file_id="x", recipe_id="r1", status="pending"
+    )
+
+    res = experiment.list_experiment()
+    assert {f["file_id"] for f in res["files"]} == {"x"}
+    assert {s["sample_name"] for s in res["samples"]} == {"s1"}
+    assert {r["name"] for r in res["recipes"]} == {"r1"}
+    assert res["runs"][0]["sample_id"] == "s1"
+
+
+def test_list_experiment_handles_empty_state() -> None:
+    res = experiment.list_experiment()
+    assert res == {"files": [], "samples": [], "recipes": [], "runs": []}
+
+
+# --- Task 8: create_analysis_recipe ------------------------------------------
+
+def test_create_analysis_recipe_stores_full_payload() -> None:
+    res = experiment.create_analysis_recipe(
+        name="gut_GFP",
+        target_channel="green",
+        segmentation={"tool": "cellpose_sam", "do_3D": True, "diameter": None},
+        measurement={"properties": ["area", "centroid", "mean_intensity"]},
+        preprocessing=[{"step": "rolling_ball", "radius": 25}],
+    )
+    assert res["recipe_id"] == "gut_GFP"
+    r = state.get_recipe("gut_GFP")
+    assert r.target_channel == "green"
+    assert r.segmentation["do_3D"] is True
+    assert r.preprocessing == [{"step": "rolling_ball", "radius": 25}]
+
+
+def test_create_analysis_recipe_minimal_inputs() -> None:
+    res = experiment.create_analysis_recipe(name="r2", target_channel="red")
+    assert res["recipe_id"] == "r2"
+    r = state.get_recipe("r2")
+    assert r.segmentation == {}
+    assert r.measurement == {}
