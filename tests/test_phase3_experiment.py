@@ -190,3 +190,48 @@ def test_put_run_marks_failed_with_error() -> None:
     r = state.get_run(run_id)
     assert r.status == "failed"
     assert r.error == "cellpose returned zero objects"
+
+
+# --- Task 5: register_files ---------------------------------------------------
+
+from imajin.tools import experiment  # if not already imported
+
+
+def test_register_files_creates_records_without_loading(tmp_path: Path) -> None:
+    a = tmp_path / "ctrl_1.lsm"
+    b = tmp_path / "ctrl_2.lsm"
+    a.write_bytes(b"")
+    b.write_bytes(b"")
+
+    res = experiment.register_files([str(a), str(b)])
+    assert res["n_registered"] == 2
+    assert {f["original_name"] for f in res["files"]} == {"ctrl_1.lsm", "ctrl_2.lsm"}
+    assert all(f["load_status"] == "unloaded" for f in res["files"])
+    assert {f["file_id"] for f in res["files"]} == {"ctrl_1", "ctrl_2"}
+
+
+def test_register_files_marks_missing_unsupported(tmp_path: Path) -> None:
+    real = tmp_path / "ok.lsm"
+    real.write_bytes(b"")
+    missing = tmp_path / "ghost.lsm"  # not created
+    weird = tmp_path / "data.xyz"
+    weird.write_bytes(b"")
+
+    res = experiment.register_files([str(real), str(missing), str(weird)])
+    by_name = {f["original_name"]: f for f in res["files"]}
+    assert by_name["ok.lsm"]["supported"] is True
+    assert by_name["ok.lsm"]["exists"] is True
+    assert by_name["ghost.lsm"]["exists"] is False
+    assert by_name["data.xyz"]["supported"] is False
+    assert res["n_unsupported"] == 1
+    assert res["n_missing"] == 1
+
+
+def test_register_files_does_not_parse_filename_into_group(tmp_path: Path) -> None:
+    """Spec rule: never silently parse J41/vF/midgut/R3/trailing-numbers."""
+    p = tmp_path / "J41 + 1234 vF midgut R3 1.lsm"
+    p.write_bytes(b"")
+    res = experiment.register_files([str(p)])
+    rec = res["files"][0]
+    for forbidden in ("group", "condition", "replicate", "tissue"):
+        assert forbidden not in rec or rec[forbidden] in (None, "")
