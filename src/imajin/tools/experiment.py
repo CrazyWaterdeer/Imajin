@@ -106,3 +106,78 @@ def register_files(paths: list[str]) -> dict[str, Any]:
         "n_missing": n_missing,
         "files": out,
     }
+
+
+def _resolve_files_for_sample(
+    files: list[str] | None,
+    file_ids: list[str] | None,
+) -> tuple[list[str], list[str]]:
+    """Return (file_paths, file_ids). Either input can be empty.
+    Paths are matched against registered FileRecords; unmatched paths are
+    accepted but get no file_id."""
+    from imajin.agent.state import _FILES, get_file
+
+    resolved_paths: list[str] = []
+    resolved_ids: list[str] = list(file_ids or [])
+    by_path = {rec.path: rec for rec in _FILES.values()}
+
+    for raw in files or []:
+        p = str(Path(raw).expanduser().resolve())
+        rec = by_path.get(p) or by_path.get(str(Path(raw).expanduser()))
+        if rec is not None:
+            resolved_paths.append(rec.path)
+            if rec.file_id not in resolved_ids:
+                resolved_ids.append(rec.file_id)
+        else:
+            resolved_paths.append(p)
+
+    # If user passed file_ids only, fill in paths from the registry.
+    for fid in file_ids or []:
+        try:
+            rec = get_file(fid)
+        except KeyError:
+            continue
+        if rec.path not in resolved_paths:
+            resolved_paths.append(rec.path)
+
+    return resolved_paths, resolved_ids
+
+
+@tool(
+    description="Bulk-annotate samples with user-confirmed group/condition/replicate "
+    "metadata. Pass a list of dicts, each with sample_name (required), group, files "
+    "(paths) or file_ids (registered ids), layers, notes, and extra (a dict of "
+    "user-confirmed fields like genotype/tissue/region/replicate). The agent must "
+    "never invent these fields from filenames — only store what the user confirmed.",
+    phase="3",
+)
+def annotate_samples(samples: list[dict[str, Any]]) -> dict[str, Any]:
+    from imajin.agent.state import put_sample
+
+    out: list[dict[str, Any]] = []
+    for entry in samples:
+        if "sample_name" not in entry:
+            raise ValueError("each sample must have a sample_name")
+        files, file_ids = _resolve_files_for_sample(
+            entry.get("files"), entry.get("file_ids")
+        )
+        name = put_sample(
+            sample_name=entry["sample_name"],
+            group=entry.get("group"),
+            layers=list(entry.get("layers") or []),
+            files=files,
+            file_ids=file_ids,
+            notes=entry.get("notes"),
+            sample_id=entry.get("sample_id"),
+            extra=dict(entry.get("extra") or {}),
+        )
+        out.append(
+            {
+                "sample_name": name,
+                "group": entry.get("group"),
+                "file_ids": file_ids,
+                "files": files,
+                "extra": dict(entry.get("extra") or {}),
+            }
+        )
+    return {"n_samples": len(out), "samples": out}

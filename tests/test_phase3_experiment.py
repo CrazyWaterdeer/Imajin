@@ -235,3 +235,58 @@ def test_register_files_does_not_parse_filename_into_group(tmp_path: Path) -> No
     rec = res["files"][0]
     for forbidden in ("group", "condition", "replicate", "tissue"):
         assert forbidden not in rec or rec[forbidden] in (None, "")
+
+
+# --- Task 6: annotate_samples (bulk) -----------------------------------------
+
+def test_annotate_samples_bulk_creates_two_groups(tmp_path: Path) -> None:
+    a = tmp_path / "ctrl_1.lsm"
+    b = tmp_path / "trt_1.lsm"
+    a.write_bytes(b"")
+    b.write_bytes(b"")
+    experiment.register_files([str(a), str(b)])
+
+    res = experiment.annotate_samples(
+        [
+            {"sample_name": "ctrl_1", "group": "control", "files": [str(a)]},
+            {
+                "sample_name": "trt_1",
+                "group": "treatment",
+                "files": [str(b)],
+                "extra": {"genotype": "w1118", "tissue": "midgut"},
+            },
+        ]
+    )
+    assert res["n_samples"] == 2
+    samples = state.list_samples()
+    by_name = {s["sample_name"]: s for s in samples}
+    assert by_name["ctrl_1"]["group"] == "control"
+    assert by_name["ctrl_1"]["file_ids"] == ["ctrl_1"]
+    assert by_name["trt_1"]["extra"]["genotype"] == "w1118"
+
+
+def test_annotate_samples_accepts_file_ids_directly(tmp_path: Path) -> None:
+    p = tmp_path / "x.lsm"
+    p.write_bytes(b"")
+    experiment.register_files([str(p)])
+
+    experiment.annotate_samples(
+        [{"sample_name": "s1", "group": "g", "file_ids": ["x"]}]
+    )
+    s = state.list_samples()[0]
+    assert s["file_ids"] == ["x"]
+    assert s["files"] == [str(p.resolve())]
+
+
+def test_annotate_samples_does_not_invent_extra_from_filename(tmp_path: Path) -> None:
+    """A user passing only sample_name/group/files must not get genotype/tissue/etc.
+    autofilled from substrings in the filename."""
+    p = tmp_path / "J41 + 1234 vF midgut R3 1.lsm"
+    p.write_bytes(b"")
+    experiment.register_files([str(p)])
+
+    experiment.annotate_samples(
+        [{"sample_name": "s1", "group": "control", "files": [str(p)]}]
+    )
+    s = state.list_samples()[0]
+    assert s["extra"] == {}
