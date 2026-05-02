@@ -127,3 +127,31 @@ def test_render_samples_handles_none_group(tmp_path, monkeypatch) -> None:
     body = out.read_text(encoding="utf-8")
     assert "**unassigned**" in body
     assert "**None**" not in body
+
+
+# --- Task 3: AnalysisRecipe ---------------------------------------------------
+
+def test_put_recipe_round_trips() -> None:
+    recipe_id = state.put_recipe(
+        name="gut_GFP",
+        target_channel="green",
+        preprocessing=[{"step": "rolling_ball", "radius": 25}],
+        segmentation={"tool": "cellpose_sam", "do_3D": True, "diameter": None},
+        measurement={"properties": ["area", "centroid", "mean_intensity"]},
+        notes="adult midgut R3",
+    )
+    assert recipe_id == "gut_GFP"
+    r = state.get_recipe(recipe_id)
+    assert r.target_channel == "green"
+    assert r.preprocessing == [{"step": "rolling_ball", "radius": 25}]
+    assert r.segmentation["do_3D"] is True
+    assert r.measurement["properties"] == ["area", "centroid", "mean_intensity"]
+    assert state.list_recipes()[0]["name"] == "gut_GFP"
+
+
+def test_put_recipe_dedups_by_name() -> None:
+    state.put_recipe(name="r1", target_channel="green")
+    state.put_recipe(name="r1", target_channel="red")  # overwrite
+    rs = state.list_recipes()
+    assert len(rs) == 1
+    assert rs[0]["target_channel"] == "red"

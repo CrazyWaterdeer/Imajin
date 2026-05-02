@@ -87,8 +87,61 @@ def reset_files() -> None:
     _FILES.clear()
 
 
+@dataclass
+class AnalysisRecipe:
+    recipe_id: str
+    name: str
+    target_channel: str | None = None
+    preprocessing: list[dict[str, Any]] = field(default_factory=list)
+    segmentation: dict[str, Any] = field(default_factory=dict)
+    measurement: dict[str, Any] = field(default_factory=dict)
+    timecourse: dict[str, Any] | None = None
+    colocalization: list[tuple[str, str]] = field(default_factory=list)
+    notes: str | None = None
+
+
+_RECIPES: dict[str, AnalysisRecipe] = {}
+
+
+def put_recipe(
+    name: str,
+    target_channel: str | None = None,
+    preprocessing: list[dict[str, Any]] | None = None,
+    segmentation: dict[str, Any] | None = None,
+    measurement: dict[str, Any] | None = None,
+    timecourse: dict[str, Any] | None = None,
+    colocalization: list[tuple[str, str]] | None = None,
+    notes: str | None = None,
+) -> str:
+    name = name.strip()
+    if not name:
+        raise ValueError("recipe name must not be empty")
+    _RECIPES[name] = AnalysisRecipe(
+        recipe_id=name,
+        name=name,
+        target_channel=target_channel,
+        preprocessing=list(preprocessing or []),
+        segmentation=dict(segmentation or {}),
+        measurement=dict(measurement or {}),
+        timecourse=dict(timecourse) if timecourse else None,
+        colocalization=list(colocalization or []),
+        notes=notes,
+    )
+    return name
+
+
+def get_recipe(name: str) -> AnalysisRecipe:
+    if name not in _RECIPES:
+        raise KeyError(f"Recipe {name!r} not found. Available: {list(_RECIPES)}")
+    return _RECIPES[name]
+
+
+def list_recipes() -> list[dict[str, Any]]:
+    return [asdict(r) for r in _RECIPES.values()]
+
+
 def reset_recipes() -> None:
-    """Stub — real implementation in Task 3."""
+    _RECIPES.clear()
 
 
 def reset_runs() -> None:
