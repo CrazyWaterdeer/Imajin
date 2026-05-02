@@ -426,7 +426,7 @@ def put_sample(
         raise ValueError("sample_name must not be empty")
     if group is not None:
         group = group.strip() or None
-    sid = (sample_id or sample_name).strip()
+    sid = (sample_id or "").strip() or sample_name
     _SAMPLES[sample_name] = SampleAnnotation(
         sample_name=sample_name,
         sample_id=sid,

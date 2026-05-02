@@ -184,7 +184,9 @@ def _render_samples_markdown(samples: list[dict[str, Any]]) -> str:
     lines = ["## Sample Groups", ""]
     grouped: dict[str, list[dict[str, Any]]] = {}
     for sample in samples:
-        grouped.setdefault(str(sample.get("group", "unassigned")), []).append(sample)
+        raw = sample.get("group")
+        key = str(raw).strip() if raw not in (None, "") else "unassigned"
+        grouped.setdefault(key, []).append(sample)
     for group, entries in sorted(grouped.items()):
         names = ", ".join(str(e.get("sample_name", "?")) for e in entries)
         lines.append(f"- **{group}**: {names}")

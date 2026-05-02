@@ -103,3 +103,27 @@ def test_put_sample_keeps_legacy_files_and_layers() -> None:
     assert s["files"] == ["/data/t1.lsm"]
     assert s["layers"] == ["t1_ch0", "t1_ch1"]
     assert s["group"] == "treatment"
+
+
+def test_put_sample_falls_back_to_name_for_whitespace_sample_id() -> None:
+    state.put_sample(sample_name="abc", sample_id="   ")
+    s = state.list_samples()[0]
+    assert s["sample_id"] == "abc"
+
+
+def test_render_samples_handles_none_group(tmp_path, monkeypatch) -> None:
+    """Samples with group=None should render under 'unassigned', not 'None'."""
+    from imajin.agent import provenance
+    from imajin.tools import report
+
+    state.put_sample(sample_name="ctrl_1", group=None)
+
+    log_path = tmp_path / "session.jsonl"
+    log_path.write_text("", encoding="utf-8")
+    monkeypatch.setattr(provenance, "_LOG_PATH", log_path)
+
+    out = tmp_path / "r.md"
+    report.generate_report(str(out), format="md")
+    body = out.read_text(encoding="utf-8")
+    assert "**unassigned**" in body
+    assert "**None**" not in body
