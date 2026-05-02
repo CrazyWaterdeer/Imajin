@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+import re
+from dataclasses import asdict, dataclass, field
 from typing import Any
 
 import pandas as pd
@@ -15,6 +16,83 @@ class TableEntry:
 
 
 _TABLES: dict[str, TableEntry] = {}
+
+
+def _slugify(name: str) -> str:
+    base = name.rsplit(".", 1)[0]  # strip extension only on the rightmost dot
+    base = re.sub(r"[^A-Za-z0-9_]+", "_", base).strip("_")
+    return base or "file"
+
+
+@dataclass
+class FileRecord:
+    file_id: str
+    path: str
+    original_name: str
+    file_type: str | None = None
+    metadata_summary: dict[str, Any] = field(default_factory=dict)
+    load_status: str = "unloaded"  # "unloaded" | "loaded" | "failed"
+    notes: str | None = None
+
+
+_FILES: dict[str, FileRecord] = {}
+
+
+def put_file(
+    path: str,
+    original_name: str,
+    file_type: str | None = None,
+    metadata_summary: dict[str, Any] | None = None,
+    notes: str | None = None,
+    load_status: str = "unloaded",
+) -> str:
+    base = _slugify(original_name)
+    file_id = base
+    n = 2
+    while file_id in _FILES:
+        file_id = f"{base}_{n}"
+        n += 1
+    _FILES[file_id] = FileRecord(
+        file_id=file_id,
+        path=path,
+        original_name=original_name,
+        file_type=file_type,
+        metadata_summary=dict(metadata_summary or {}),
+        notes=notes,
+        load_status=load_status,
+    )
+    return file_id
+
+
+def get_file(file_id: str) -> FileRecord:
+    if file_id not in _FILES:
+        raise KeyError(
+            f"File id {file_id!r} not found. Available: {list(_FILES)}"
+        )
+    return _FILES[file_id]
+
+
+def list_files() -> list[dict[str, Any]]:
+    return [asdict(rec) for rec in _FILES.values()]
+
+
+def update_file_status(file_id: str, status: str, notes: str | None = None) -> None:
+    rec = get_file(file_id)
+    rec.load_status = status
+    if notes is not None:
+        rec.notes = notes
+
+
+def reset_files() -> None:
+    _FILES.clear()
+
+
+def reset_recipes() -> None:
+    """Stub — real implementation in Task 3."""
+
+
+def reset_runs() -> None:
+    """Stub — real implementation in Task 4."""
 
 
 def set_viewer(v: Any) -> None:
