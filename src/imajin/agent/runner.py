@@ -180,6 +180,29 @@ class AgentRunner:
                         is_error=True,
                     )
 
+            # Anthropic API requires every tool_use in an assistant message to
+            # have a matching tool_result in the next user message. If dispatch
+            # was cancelled or otherwise terminated early, fill placeholders for
+            # the unmatched tool_use ids so the conversation stays valid.
+            done_ids = {b["tool_use_id"] for b in tool_result_blocks}
+            for block in assistant_blocks:
+                if block.get("type") != "tool_use" or block["id"] in done_ids:
+                    continue
+                tool_result_blocks.append(
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": block["id"],
+                        "content": "ERROR: cancelled before execution",
+                        "is_error": True,
+                    }
+                )
+                yield ToolResult(
+                    tool_use_id=block["id"],
+                    name=block["name"],
+                    output="cancelled before execution",
+                    is_error=True,
+                )
+
             if tool_result_blocks:
                 self.messages.append({"role": "user", "content": tool_result_blocks})
 

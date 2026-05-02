@@ -144,3 +144,65 @@ def test_runner_cancellation_stops_dispatch() -> None:
     events = list(runner.turn("anything"))
     done = [e for e in events if isinstance(e, TurnDone)]
     assert done[-1].stop_reason == "cancelled"
+
+
+def test_runner_cancel_mid_dispatch_fills_tool_result_placeholders() -> None:
+    """Cancelling between tool dispatches must still produce a tool_result for
+    every tool_use in the assistant message, otherwise the next API call hits
+    `tool_use ids ... without tool_result blocks immediately after`.
+    """
+    provider = _ScriptedProvider(
+        [
+            [
+                ToolUseStart(id="tu_1", name="t1"),
+                ToolUse(id="tu_1", name="t1", input={}),
+                ToolUseStart(id="tu_2", name="t2"),
+                ToolUse(id="tu_2", name="t2", input={}),
+                ToolUseStart(id="tu_3", name="t3"),
+                ToolUse(id="tu_3", name="t3", input={}),
+                Stop(reason="tool_use"),
+            ],
+        ]
+    )
+    runner = AgentRunner(provider, "test")
+    invoked: list[str] = []
+
+    def cancelling_caller(name: str, **kwargs: Any) -> int:
+        invoked.append(name)
+        if name == "t1":
+            runner.cancel()
+            return 1
+        raise AssertionError(f"unexpected dispatch after cancel: {name}")
+
+    runner._tool_caller = cancelling_caller
+    events = list(runner.turn("run three tools"))
+
+    assert invoked == ["t1"]
+
+    assistant_msgs = [m for m in runner.messages if m["role"] == "assistant"]
+    assert len(assistant_msgs) == 1
+    assistant_idx = runner.messages.index(assistant_msgs[0])
+    next_msg = runner.messages[assistant_idx + 1]
+    assert next_msg["role"] == "user"
+
+    tool_use_ids = {
+        b["id"] for b in assistant_msgs[0]["content"] if b.get("type") == "tool_use"
+    }
+    tool_result_ids = {
+        b["tool_use_id"]
+        for b in next_msg["content"]
+        if b.get("type") == "tool_result"
+    }
+    assert tool_use_ids == {"tu_1", "tu_2", "tu_3"}
+    assert tool_result_ids == tool_use_ids, (
+        "every tool_use must have a matching tool_result, even on cancel"
+    )
+
+    placeholders = [
+        b for b in next_msg["content"]
+        if b.get("type") == "tool_result" and b["tool_use_id"] in {"tu_2", "tu_3"}
+    ]
+    assert all(b.get("is_error") for b in placeholders)
+
+    done = [e for e in events if isinstance(e, TurnDone)]
+    assert done[-1].stop_reason == "cancelled"
