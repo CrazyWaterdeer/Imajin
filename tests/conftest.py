@@ -21,9 +21,15 @@ def _reset_sample_annotations():
 
     state.reset_samples()
     state.reset_channel_annotations()
+    state.reset_files()
+    state.reset_recipes()
+    state.reset_runs()
     yield
     state.reset_samples()
     state.reset_channel_annotations()
+    state.reset_files()
+    state.reset_recipes()
+    state.reset_runs()
 
 
 @pytest.fixture

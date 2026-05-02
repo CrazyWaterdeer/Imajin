@@ -144,8 +144,64 @@ def reset_recipes() -> None:
     _RECIPES.clear()
 
 
+@dataclass
+class AnalysisRun:
+    run_id: str
+    sample_id: str
+    file_id: str
+    recipe_id: str
+    status: str = "pending"  # "pending" | "running" | "complete" | "failed"
+    table_names: list[str] = field(default_factory=list)
+    layer_names: list[str] = field(default_factory=list)
+    summary: dict[str, Any] = field(default_factory=dict)
+    error: str | None = None
+
+
+_RUNS: dict[str, AnalysisRun] = {}
+_RUN_COUNTER: list[int] = [0]
+
+
+def put_run(
+    sample_id: str,
+    file_id: str,
+    recipe_id: str,
+    status: str = "pending",
+    table_names: list[str] | None = None,
+    layer_names: list[str] | None = None,
+    summary: dict[str, Any] | None = None,
+    error: str | None = None,
+    run_id: str | None = None,
+) -> str:
+    if run_id is None:
+        _RUN_COUNTER[0] += 1
+        run_id = f"run_{_RUN_COUNTER[0]:04d}"
+    _RUNS[run_id] = AnalysisRun(
+        run_id=run_id,
+        sample_id=sample_id,
+        file_id=file_id,
+        recipe_id=recipe_id,
+        status=status,
+        table_names=list(table_names or []),
+        layer_names=list(layer_names or []),
+        summary=dict(summary or {}),
+        error=error,
+    )
+    return run_id
+
+
+def get_run(run_id: str) -> AnalysisRun:
+    if run_id not in _RUNS:
+        raise KeyError(f"Run {run_id!r} not found. Available: {list(_RUNS)}")
+    return _RUNS[run_id]
+
+
+def list_runs() -> list[dict[str, Any]]:
+    return [asdict(r) for r in _RUNS.values()]
+
+
 def reset_runs() -> None:
-    """Stub — real implementation in Task 4."""
+    _RUNS.clear()
+    _RUN_COUNTER[0] = 0
 
 
 @dataclass

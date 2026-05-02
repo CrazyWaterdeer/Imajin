@@ -155,3 +155,38 @@ def test_put_recipe_dedups_by_name() -> None:
     rs = state.list_recipes()
     assert len(rs) == 1
     assert rs[0]["target_channel"] == "red"
+
+
+# --- Task 4: AnalysisRun ------------------------------------------------------
+
+def test_put_run_records_status_and_outputs() -> None:
+    run_id = state.put_run(
+        sample_id="ctrl_1",
+        file_id="ctrl_1",
+        recipe_id="gut_GFP",
+        status="complete",
+        table_names=["ctrl_1_measurements"],
+        layer_names=["ctrl_1_masks"],
+        summary={"n_objects": 42},
+    )
+    assert run_id  # non-empty
+    runs = state.list_runs()
+    assert len(runs) == 1
+    r = runs[0]
+    assert r["sample_id"] == "ctrl_1"
+    assert r["recipe_id"] == "gut_GFP"
+    assert r["status"] == "complete"
+    assert r["summary"] == {"n_objects": 42}
+
+
+def test_put_run_marks_failed_with_error() -> None:
+    run_id = state.put_run(
+        sample_id="t_1",
+        file_id="t_1",
+        recipe_id="gut_GFP",
+        status="failed",
+        error="cellpose returned zero objects",
+    )
+    r = state.get_run(run_id)
+    assert r.status == "failed"
+    assert r.error == "cellpose returned zero objects"
