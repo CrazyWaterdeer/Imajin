@@ -29,6 +29,7 @@ def annotate_channel(
     biological_target: str | None = None,
     notes: str | None = None,
 ) -> dict[str, Any]:
+    resolved_role = canonical_channel_role(role)
     layer_name = put_channel_annotation(
         layer_name=layer,
         role=role,
@@ -37,9 +38,18 @@ def annotate_channel(
         biological_target=biological_target,
         notes=notes,
     )
+    if resolved_role == "counterstain":
+        try:
+            from imajin.agent.state import get_layer
+
+            L = get_layer(layer_name)
+            if hasattr(L, "colormap"):
+                L.colormap = "gray"
+        except Exception:
+            pass
     return {
         "layer": layer_name,
-        "role": canonical_channel_role(role),
+        "role": resolved_role,
         "color": canonical_channel_color(color),
         "marker": marker,
         "biological_target": biological_target,

@@ -16,6 +16,7 @@ from typing import Any
 import pandas as pd
 
 from imajin import __version__
+from imajin.paths import normalize_user_path
 
 CURRENT_SCHEMA_VERSION = 1
 
@@ -55,7 +56,7 @@ def close_project() -> None:
 
 
 def create_project(path: str | Path, name: str | None = None, notes: str = "") -> dict[str, Any]:
-    root = Path(path).expanduser().resolve()
+    root = normalize_user_path(path).resolve()
     root.mkdir(parents=True, exist_ok=True)
     _ensure_layout(root)
 
@@ -80,7 +81,7 @@ def save_project(path: str | Path | None = None) -> dict[str, Any]:
     global _CURRENT_PROJECT, _LAST_AUTOSAVE, _LAST_AUTOSAVE_ERROR
 
     if path is not None:
-        root = Path(path).expanduser().resolve()
+        root = normalize_user_path(path).resolve()
         if _CURRENT_PROJECT is None or _CURRENT_PROJECT.path != root:
             create_project(root, name=root.stem)
     if _CURRENT_PROJECT is None:
@@ -125,7 +126,7 @@ def save_project(path: str | Path | None = None) -> dict[str, Any]:
 
 
 def load_project(path: str | Path) -> dict[str, Any]:
-    root = Path(path).expanduser().resolve()
+    root = normalize_user_path(path).resolve()
     metadata_raw = _read_json(root / "project.json")
     metadata_raw = migrate_project(metadata_raw)
     metadata = ProjectMetadata(**metadata_raw)
@@ -172,7 +173,7 @@ def relink_file(file_id: str, new_path: str | Path) -> dict[str, Any]:
     from imajin.agent import state
 
     project = _require_project()
-    p = Path(new_path).expanduser().resolve()
+    p = normalize_user_path(new_path).resolve()
     if file_id not in state._FILES:
         raise KeyError(f"File id {file_id!r} not found. Available: {list(state._FILES)}")
     rec = state._FILES[file_id]
@@ -201,7 +202,7 @@ def project_status() -> dict[str, Any]:
     payload = state.snapshot_session_state()
     missing: list[dict[str, Any]] = []
     for rec in payload["files"]:
-        path = Path(str(rec.get("path") or ""))
+        path = normalize_user_path(str(rec.get("path") or ""))
         if not path.exists():
             missing.append(
                 {
@@ -264,7 +265,7 @@ def export_project_summary(path: str | Path) -> dict[str, Any]:
     from imajin.agent import state
 
     payload = state.snapshot_session_state()
-    out = Path(path).expanduser().resolve()
+    out = normalize_user_path(path).resolve()
     out.parent.mkdir(parents=True, exist_ok=True)
     lines = [
         f"# {project.metadata.name}",
@@ -334,7 +335,7 @@ def _file_records_for_save(root: Path) -> list[dict[str, Any]]:
 
     records: list[dict[str, Any]] = []
     for rec in state.list_files():
-        p = Path(rec.get("path", "")).expanduser()
+        p = normalize_user_path(str(rec.get("path", "")))
         exists = p.exists()
         stat = p.stat() if exists else None
         out = dict(rec)
@@ -375,9 +376,9 @@ def _file_records_for_load(
 def _resolve_project_file_path(root: Path, rec: dict[str, Any]) -> Path:
     candidates: list[Path] = []
     if rec.get("original_path"):
-        candidates.append(Path(str(rec["original_path"])).expanduser())
+        candidates.append(normalize_user_path(str(rec["original_path"])))
     elif rec.get("path"):
-        candidates.append(Path(str(rec["path"])).expanduser())
+        candidates.append(normalize_user_path(str(rec["path"])))
     if rec.get("relative_path"):
         candidates.append((root / str(rec["relative_path"])).resolve())
     for candidate in candidates:

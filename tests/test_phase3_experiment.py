@@ -417,6 +417,10 @@ def test_run_recipe_on_samples_single_sample_attaches_columns(
     assert (df["group"] == "control").all()
     assert (df["file_id"] == "ctrl_1").all()
     assert (df["source_layer"] == "ctrl_1_ch0").all()
+    assert "ctrl_1_ch0" in viewer.layers
+    assert "ctrl_1_ch0_masks" not in viewer.layers
+    assert res["cleanup_enabled"] is True
+    assert run["cleanup_removed_layers"]
 
 
 # --- Task 10: run_recipe_on_samples (multi-sample, failure isolation) --------
@@ -489,6 +493,84 @@ def test_run_recipe_on_samples_multi_sample_one_fails(
     failed = next(r for r in runs if r["status"] == "failed")
     err = (failed["error"] or "").lower()
     assert "zero objects" in err or "ok=false" in err
+
+
+def test_run_recipe_on_samples_auto_loads_sample_local_target_and_cleans_layers(
+    viewer, monkeypatch, tmp_path: Path
+) -> None:
+    from imajin.tools import files, workflows
+
+    viewer.add_image(
+        np.ones((8, 8), dtype=np.float32),
+        name="representative_green",
+        metadata={"color": "green"},
+    )
+    a = tmp_path / "ctrl_1.tif"
+    b = tmp_path / "trt_1.tif"
+    a.write_bytes(b"fake")
+    b.write_bytes(b"fake")
+    registered = experiment.register_files([str(a), str(b)])
+    by_name = {rec["original_name"]: rec for rec in registered["files"]}
+    experiment.annotate_samples(
+        [
+            {
+                "sample_name": "ctrl_1",
+                "group": "control",
+                "file_ids": [by_name["ctrl_1.tif"]["file_id"]],
+            },
+            {
+                "sample_name": "trt_1",
+                "group": "treatment",
+                "file_ids": [by_name["trt_1.tif"]["file_id"]],
+            },
+        ]
+    )
+    experiment.create_analysis_recipe(
+        name="green_batch",
+        target_channel="green",
+        segmentation={"tool": "target_objects"},
+    )
+
+    targets: list[str] = []
+
+    def fake_load_file(path: str) -> dict[str, object]:
+        layer_name = f"{Path(path).stem}_green"
+        viewer.add_image(
+            np.zeros((8, 8), dtype=np.float32),
+            name=layer_name,
+            metadata={"color": "green"},
+        )
+        return {"layer_names": [layer_name]}
+
+    def fake_analyze_target_cells(target: str | None = None, **kwargs) -> dict[str, object]:
+        assert target is not None
+        targets.append(target)
+        labels_layer = f"{target}_masks"
+        table_name = f"{target}_measurements"
+        viewer.add_labels(np.ones((8, 8), dtype=np.uint16), name=labels_layer)
+        state.put_table(table_name, pd.DataFrame({"label": [1]}))
+        return {
+            "ok": True,
+            "target_channel": target,
+            "labels_layer": labels_layer,
+            "preprocessed_layer": None,
+            "table_name": table_name,
+            "n_objects": 1,
+            "object_unit": "object_or_roi",
+            "segmentation_method": "target_objects",
+            "analysis_dim": "2d",
+            "warnings": [],
+        }
+
+    monkeypatch.setattr(files, "load_file", fake_load_file)
+    monkeypatch.setattr(workflows, "analyze_target_cells", fake_analyze_target_cells)
+
+    res = workflows.run_recipe_on_samples(recipe_name="green_batch")
+
+    assert res["n_complete"] == 2
+    assert targets == ["ctrl_1_green", "trt_1_green"]
+    assert [layer.name for layer in viewer.layers] == ["representative_green"]
+    assert all(run["cleanup_removed_layers"] for run in res["runs"])
 
 
 def test_run_recipe_on_samples_no_samples_returns_empty() -> None:

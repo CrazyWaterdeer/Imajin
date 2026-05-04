@@ -128,9 +128,25 @@ def manual_tools() -> list[ToolEntry]:
     return [e for e in _REGISTRY.values() if e.manual]
 
 
+def _compact_json_schema(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {
+            str(k): _compact_json_schema(v)
+            for k, v in value.items()
+            if k not in {"title"}
+        }
+    if isinstance(value, list):
+        return [_compact_json_schema(v) for v in value]
+    return value
+
+
 def tools_for_anthropic(subagent: str | None = None) -> list[dict[str, Any]]:
     return [
-        {"name": e.name, "description": e.description, "input_schema": e.json_schema}
+        {
+            "name": e.name,
+            "description": e.description,
+            "input_schema": _compact_json_schema(e.json_schema),
+        }
         for e in _entries_for(subagent)
     ]
 
@@ -142,7 +158,7 @@ def tools_for_openai(subagent: str | None = None) -> list[dict[str, Any]]:
             "function": {
                 "name": e.name,
                 "description": e.description,
-                "parameters": e.json_schema,
+                "parameters": _compact_json_schema(e.json_schema),
             },
         }
         for e in _entries_for(subagent)

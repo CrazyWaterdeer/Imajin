@@ -3,10 +3,11 @@ from __future__ import annotations
 from pathlib import Path
 
 from imajin.io.dataset import Dataset
+from imajin.paths import normalize_user_path
 
 
 def load_dataset(path: str | Path) -> Dataset:
-    p = Path(path)
+    p = normalize_user_path(path)
     name = p.name.lower()
 
     if name.endswith(".lsm"):

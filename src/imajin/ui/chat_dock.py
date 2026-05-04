@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import Any
 
 from qtpy.QtCore import QEvent, Qt, Signal
-from qtpy.QtGui import QInputMethodEvent, QKeyEvent
+from qtpy.QtGui import QInputMethodEvent, QKeyEvent, QWheelEvent
 from qtpy.QtWidgets import (
     QFrame,
     QHBoxLayout,
@@ -131,15 +132,19 @@ class _ModelPickerButton(QPushButton):
 class _ComposerInput(QPlainTextEdit):
     submitted = Signal()
 
-    def __init__(self, max_visible_lines: int = 4) -> None:
+    def __init__(self, min_visible_lines: int = 2, max_visible_lines: int = 4) -> None:
         super().__init__()
+        self._min_visible_lines = min_visible_lines
         self._max_visible_lines = max_visible_lines
-        self._frame_padding = 12
+        self._frame_padding = 14
         self._has_preedit = False
         self.setAttribute(Qt.WidgetAttribute.WA_InputMethodEnabled, True)
         self.setInputMethodHints(Qt.InputMethodHint.ImhNone)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
-        self.setFixedHeight(34)  # provisional; refined once the font is realized
+        self.setLineWrapMode(QPlainTextEdit.LineWrapMode.WidgetWidth)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.setFixedHeight(52)  # provisional; refined once the font is realized
         self.document().contentsChanged.connect(self._adjust_height)
 
     def showEvent(self, event) -> None:
@@ -150,7 +155,7 @@ class _ComposerInput(QPlainTextEdit):
         line_h = self.fontMetrics().lineSpacing()
         if line_h <= 0:
             return
-        blocks = max(1, self.document().blockCount())
+        blocks = max(self._min_visible_lines, self.document().blockCount())
         visible = min(blocks, self._max_visible_lines)
         target = visible * line_h + self._frame_padding
         self.setFixedHeight(target)
@@ -164,8 +169,16 @@ class _ComposerInput(QPlainTextEdit):
     def event(self, event) -> bool:
         if event.type() == QEvent.Type.ShortcutOverride and self.hasFocus():
             event.accept()
-            return True
+            return False
         return super().event(event)
+
+    def wheelEvent(self, event: QWheelEvent) -> None:
+        scrollbar = self.verticalScrollBar()
+        if scrollbar is not None and scrollbar.maximum() > 0:
+            super().wheelEvent(event)
+            event.accept()
+            return
+        event.ignore()
 
     def keyPressEvent(self, event: QKeyEvent) -> None:
         if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
@@ -181,6 +194,8 @@ class _ComposerInput(QPlainTextEdit):
 
 
 class ChatDock(QWidget):
+    _job_updated = Signal(object)
+
     def __init__(self, viewer: Any, settings: Any) -> None:
         super().__init__()
         apply_dock_theme(self)
@@ -194,6 +209,9 @@ class ChatDock(QWidget):
         # through this so napari Layer creation stays on the main thread.
         self._tool_runner = MainThreadToolRunner(parent=self)
         self.execution_service = get_execution_service()
+        self._job_listener = lambda job: self._job_updated.emit(job)
+        self._job_updated.connect(self._on_job_update)
+        self.execution_service.add_listener(self._job_listener)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(8, 8, 8, 8)
@@ -300,13 +318,13 @@ class ChatDock(QWidget):
             return self._runner
         provider = self._make_provider()
 
-        def call_tool_via_jobs(name: str, **kwargs: Any) -> Any:
+        def call_tool_via_jobs(tool_name: str, **kwargs: Any) -> Any:
             return self.execution_service.call_tool_blocking(
-                name,
+                tool_name,
                 kwargs=kwargs,
                 source="llm",
                 driver=f"llm:{provider.model}",
-                title=name,
+                title=tool_name,
                 tool_caller=self._tool_runner.call,
             )
 
@@ -417,6 +435,68 @@ class ChatDock(QWidget):
                 usage_str = f" — tokens: in {inp} (cache_read {cache_r}), out {out}"
             self._append_system(f"[turn complete: {event.stop_reason}]{usage_str}")
 
+    def _on_job_update(self, job: Any) -> None:
+        if not self._should_show_job_progress(job):
+            return
+        self.transcript.upsert_system(
+            f"job-progress:{job.job_id}",
+            self._format_job_progress(job),
+        )
+
+    def _should_show_job_progress(self, job: Any) -> bool:
+        detail = dict(getattr(job, "progress_detail", {}) or {})
+        return bool(detail.get("show_in_chat"))
+
+    def _format_job_progress(self, job: Any) -> str:
+        detail = dict(getattr(job, "progress_detail", {}) or {})
+        total = _as_int(detail.get("total_files"))
+        completed = _as_int(detail.get("completed")) or 0
+        failed = _as_int(detail.get("failed")) or 0
+        skipped = _as_int(detail.get("skipped")) or 0
+        processed = completed + failed + skipped
+        stage = str(detail.get("stage") or getattr(job, "status", "running"))
+        pct = ""
+        if getattr(job, "progress", None) is not None:
+            pct = f" · {float(job.progress):.0%}"
+
+        status = getattr(job, "status", "")
+        if status == "complete":
+            title = "Batch complete"
+        elif status == "failed":
+            title = "Batch failed"
+        elif status == "cancelled":
+            title = "Batch cancelled"
+        else:
+            title = "Batch progress"
+
+        if total:
+            lines = [f"{title}: {processed}/{total} files processed{pct}"]
+        else:
+            lines = [f"{title}{pct}"]
+
+        current = detail.get("current_file")
+        if current and status not in {"complete", "cancelled"}:
+            lines.append(f"Current: {_display_path_name(str(current))}")
+        lines.append(f"Stage: {stage}")
+
+        counts: list[str] = []
+        if completed:
+            counts.append(f"{completed} complete")
+        if failed:
+            counts.append(f"{failed} failed")
+        if skipped:
+            counts.append(f"{skipped} skipped")
+        if total:
+            remaining = max(total - processed, 0)
+            counts.append(f"{remaining} remaining")
+        if counts:
+            lines.append("Status: " + " · ".join(counts))
+
+        message = getattr(job, "message", None)
+        if message and message not in {"Running.", "Complete.", stage}:
+            lines.append(str(message))
+        return "\n".join(lines)
+
     def _append_user(self, text: str) -> None:
         self.transcript.append_user(text)
 
@@ -428,3 +508,22 @@ class ChatDock(QWidget):
 
     def _append_system(self, msg: str) -> None:
         self.transcript.append_system(msg)
+
+    def closeEvent(self, event) -> None:
+        self.execution_service.remove_listener(self._job_listener)
+        super().closeEvent(event)
+
+
+def _as_int(value: Any) -> int | None:
+    try:
+        if value is None:
+            return None
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _display_path_name(path: str) -> str:
+    normalized = path.replace("\\", "/")
+    name = normalized.rsplit("/", 1)[-1]
+    return name or Path(path).name or path

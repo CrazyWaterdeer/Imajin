@@ -124,6 +124,27 @@ def test_measure_intensity_over_time_static_rois(viewer) -> None:
     assert label1["mean_intensity"].tolist() == pytest.approx([100.0, 200.0, 300.0])
 
 
+def test_measure_projected_intensity_uses_average_projection(viewer) -> None:
+    labels, a, _ = _two_label_image()
+    stack = np.stack([a, a * 2, a * 3], axis=0)
+    viewer.add_labels(labels, name="rois", scale=(0.5, 0.5))
+    viewer.add_image(stack, name="calexa", scale=(1.0, 0.5, 0.5), metadata={"axes": "ZYX"})
+
+    res = measure.measure_projected_intensity(
+        labels_layer="rois",
+        image_layer="calexa",
+        projection="mean",
+        properties=["label", "area", "mean_intensity"],
+    )
+
+    assert res["projection"] == "mean"
+    assert res["projected_layer"] == "calexa_avg_z"
+    df = state.get_table(res["table_name"])
+    label1 = df[df["label"] == 1].iloc[0]
+    assert label1["mean_intensity_calexa_avg_z"] == pytest.approx(200.0)
+    assert "area_um2" in df.columns
+
+
 def test_measure_intensity_over_time_dynamic_labels(viewer) -> None:
     labels, a, _ = _two_label_image()
     labels_t = np.stack([labels, np.where(labels == 2, 0, labels)], axis=0)

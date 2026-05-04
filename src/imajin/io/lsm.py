@@ -6,13 +6,19 @@ from typing import Any
 
 import tifffile
 
-from imajin.io.channel_metadata import build_channel_info
+from imajin.io.channel_metadata import (
+    build_channel_info,
+    color_from_name,
+    display_color_name,
+    rgb_from_8bit_triplet,
+)
 from imajin.io.dataset import Dataset
 from imajin.io.memory import (
     array_nbytes,
     available_memory_bytes,
     should_load_into_memory,
 )
+from imajin.paths import normalize_user_path
 
 
 def _voxel_size_um(lsm_meta: dict[str, Any]) -> tuple[float, float, float]:
@@ -54,9 +60,99 @@ def _first_present(d: dict[str, Any], *keys: str) -> Any:
     return None
 
 
+def _channel_display_colors(lsm_meta: dict[str, Any]) -> list[dict[str, Any]]:
+    channel_colors = lsm_meta.get("ChannelColors", {})
+    if not isinstance(channel_colors, dict):
+        return []
+    raw_colors = channel_colors.get("Colors")
+    if not isinstance(raw_colors, list):
+        return []
+    out: list[dict[str, Any]] = []
+    for raw in raw_colors:
+        rgb = rgb_from_8bit_triplet(raw)
+        if rgb is None:
+            out.append({})
+            continue
+        item: dict[str, Any] = {
+            "display_color_rgb": tuple(float(v) for v in rgb),
+            "display_color_source": "lsm_channel_colors",
+        }
+        name = display_color_name(rgb)
+        if name:
+            item["display_color_name"] = name
+        out.append(item)
+    return out
+
+
+def _emission_from_detection_channel(ch: dict[str, Any]) -> float | None:
+    explicit = _first_present(
+        ch,
+        "EmissionWavelength",
+        "DetectionWavelength",
+        "AcquisitionWavelength",
+    )
+    if explicit is not None:
+        try:
+            return float(explicit)
+        except (TypeError, ValueError):
+            return None
+
+    start = _first_present(ch, "SpiWavelengthStart", "WavelengthStart")
+    stop = _first_present(ch, "SpiWavelengthStop", "WavelengthStop")
+    try:
+        lo = float(start) if start is not None else None
+        hi = float(stop) if stop is not None else None
+    except (TypeError, ValueError):
+        return None
+    if hi is None or hi <= 0:
+        return None
+    if lo is None or lo <= 0:
+        return hi
+    return (lo + hi) / 2.0
+
+
+def _channel_info_from_detection_channel(
+    ch: dict[str, Any], fallback_name: str | None = None
+) -> dict[str, Any]:
+    channel_name = _first_present(ch, "ChannelName", "Name") or fallback_name
+    dye_name = _first_present(ch, "DyeName", "Dye", "Fluorophore")
+    excitation = _first_present(
+        ch,
+        "ExcitationWavelength",
+        "LaserWavelength",
+        "IlluminationWavelength",
+    )
+    emission = _emission_from_detection_channel(ch)
+    extra: dict[str, Any] = {}
+    if dye_name:
+        extra["dye_name"] = str(dye_name)
+    for src_key, dst_key in (
+        ("FilterName", "filter_name"),
+        ("FilterSetName", "filter_set_name"),
+        ("PointDetectorName", "detector_name"),
+        ("ChannelName", "channel_name"),
+    ):
+        value = _first_present(ch, src_key)
+        if value is not None:
+            extra[dst_key] = str(value)
+
+    info = build_channel_info(
+        name=str(channel_name) if channel_name is not None else None,
+        excitation=excitation,
+        emission=emission,
+        extra=extra,
+    )
+    if "color" not in info and dye_name:
+        color = color_from_name(str(dye_name))
+        if color:
+            info["color"] = color
+    return info
+
+
 def _channel_metadata(lsm_meta: dict[str, Any]) -> list[dict[str, Any]]:
     names = _channel_names(lsm_meta)
     out: list[dict[str, Any]] = []
+    display_colors = _channel_display_colors(lsm_meta)
 
     si = lsm_meta.get("ScanInformation", {})
     if isinstance(si, dict):
@@ -64,6 +160,15 @@ def _channel_metadata(lsm_meta: dict[str, Any]) -> list[dict[str, Any]]:
         for track in tracks if isinstance(tracks, list) else []:
             if not isinstance(track, dict):
                 continue
+            detection = track.get("DetectionChannels", [])
+            if isinstance(detection, list) and detection:
+                for ch in detection:
+                    if not isinstance(ch, dict):
+                        continue
+                    fallback = names[len(out)] if len(out) < len(names) else None
+                    out.append(_channel_info_from_detection_channel(ch, fallback))
+                continue
+
             illumination = track.get("IlluminationChannels", [])
             illum_wavelengths: list[Any] = []
             for illum in illumination if isinstance(illumination, list) else []:
@@ -108,6 +213,10 @@ def _channel_metadata(lsm_meta: dict[str, Any]) -> list[dict[str, Any]]:
 
     if not out:
         out = [build_channel_info(name=name) for name in names]
+    for i, display in enumerate(display_colors):
+        if i >= len(out):
+            break
+        out[i].update(display)
     return out
 
 
@@ -128,7 +237,7 @@ def _memmap_lsm_array(path: Path, axes: str, position_index: int) -> tuple[Any, 
 
 
 def load_lsm(path: Path | str, position_index: int = 0) -> Dataset:
-    p = Path(path)
+    p = normalize_user_path(path)
     with tifffile.TiffFile(str(p)) as tf:
         lsm_meta = tf.lsm_metadata or {}
         series = tf.series[0]

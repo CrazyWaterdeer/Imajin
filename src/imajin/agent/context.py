@@ -75,7 +75,13 @@ def _layer_summary(layer: Any) -> dict[str, Any]:
     return info
 
 
-def summarize_viewer_state() -> str:
+def summarize_viewer_state(
+    *,
+    max_layers: int = 12,
+    max_tables: int = 12,
+    max_samples: int = 20,
+    max_channels: int = 20,
+) -> str:
     from imajin.agent.state import (
         list_channel_annotations,
         list_samples,
@@ -85,24 +91,39 @@ def summarize_viewer_state() -> str:
 
     viewer = viewer_or_none()
     if viewer is None:
+        samples = list_samples()
+        channels = list_channel_annotations()
         return json.dumps(
             {
                 "layers": [],
                 "tables": [],
-                "samples": list_samples(),
-                "channels": list_channel_annotations(),
+                "samples": samples[:max_samples],
+                "channels": channels[:max_channels],
+                "omitted": {
+                    "samples": max(0, len(samples) - max_samples),
+                    "channels": max(0, len(channels) - max_channels),
+                },
                 "note": "viewer not initialized",
             }
         )
 
-    layers = [_layer_summary(L) for L in viewer.layers]
+    layer_list = list(viewer.layers)
+    layers = [_layer_summary(L) for L in layer_list[:max_layers]]
     tables = list_tables()
+    samples = list_samples()
+    channels = list_channel_annotations()
     return json.dumps(
         {
             "layers": layers,
-            "tables": tables,
-            "samples": list_samples(),
-            "channels": list_channel_annotations(),
+            "tables": tables[:max_tables],
+            "samples": samples[:max_samples],
+            "channels": channels[:max_channels],
+            "omitted": {
+                "layers": max(0, len(layer_list) - max_layers),
+                "tables": max(0, len(tables) - max_tables),
+                "samples": max(0, len(samples) - max_samples),
+                "channels": max(0, len(channels) - max_channels),
+            },
         },
         default=str,
     )

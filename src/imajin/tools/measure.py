@@ -303,6 +303,46 @@ def measure_intensity(
 
 
 @tool(
+    description="Project a z-stack image first, then measure ROI/cell intensity from "
+    "2D Labels on the projected image. Default projection='mean' because average "
+    "projection is the standard for intensity comparison workflows; use projection="
+    "'max' for representative morphology figures.",
+    phase="4",
+    worker=True,
+)
+def measure_projected_intensity(
+    labels_layer: str,
+    image_layer: str,
+    projection: str = "mean",
+    axis: int | str = "z",
+    properties: list[str] | None = None,
+    table_name: str | None = None,
+) -> dict[str, Any]:
+    from imajin.tools import view
+
+    mode = projection.lower().strip()
+    if mode in {"mean", "avg", "average"}:
+        proj = view.average_projection(image_layer, axis=axis)
+    elif mode in {"max", "mip", "maximum"}:
+        proj = view.max_projection(image_layer, axis=axis)
+    else:
+        raise ValueError("projection must be mean or max")
+
+    measured = measure_intensity(
+        labels_layer=labels_layer,
+        image_layers=[proj["new_layer"]],
+        properties=properties,
+        table_name=table_name,
+    )
+    return {
+        **measured,
+        "projection": "mean" if mode in {"mean", "avg", "average"} else "max",
+        "projected_layer": proj["new_layer"],
+        "source_image_layer": image_layer,
+    }
+
+
+@tool(
     description="Measure ROI/cell intensity over time for live imaging or time-series "
     "confocal data. Provide a Labels layer defining ROIs and one Image layer with a "
     "time axis. Labels may be static (YX/ZYX) or time-varying (TYX/TZYX). Stores a "

@@ -46,6 +46,12 @@ def _add_imajin_menu(viewer: Any, settings: Any, chat_dock: Any) -> None:
     menubar = qmain.menuBar()
     menu = menubar.addMenu("Imajin")
 
+    open_image_action = QAction("Open Image…", qmain)
+    open_image_action.triggered.connect(lambda: _open_image_file(qmain))
+    menu.addAction(open_image_action)
+
+    menu.addSeparator()
+
     new_project_action = QAction("New Project…", qmain)
     new_project_action.triggered.connect(lambda: _new_project(qmain))
     menu.addAction(new_project_action)
@@ -121,6 +127,43 @@ def _open_settings(parent: Any, settings: Any, chat_dock: Any) -> None:
     dialog = SettingsDialog(settings, parent=parent)
     if dialog.exec():
         chat_dock.invalidate_runner()
+
+
+def _open_image_file(parent: Any) -> None:
+    from qtpy.QtCore import QUrl
+    from qtpy.QtWidgets import QFileDialog, QMessageBox
+
+    from imajin.paths import windows_file_dialog_locations
+    from imajin.tools.files import load_file
+
+    dialog = QFileDialog(parent, "Open Image")
+    dialog.setFileMode(QFileDialog.FileMode.ExistingFile)
+    dialog.setNameFilters(
+        [
+            "Microscopy images (*.lsm *.czi *.ome.tif *.ome.tiff *.tif *.tiff)",
+            "All files (*)",
+        ]
+    )
+    locations = windows_file_dialog_locations()
+    if locations:
+        dialog.setSidebarUrls([QUrl.fromLocalFile(str(p)) for p in locations])
+        dialog.setDirectory(str(locations[0]))
+    if not dialog.exec():
+        return
+    selected = dialog.selectedFiles()
+    if not selected:
+        return
+    try:
+        result = load_file(selected[0])
+    except Exception as exc:  # noqa: BLE001
+        QMessageBox.critical(parent, "Imajin Open Image", str(exc))
+        return
+    layers = ", ".join(result.get("layer_names") or [])
+    QMessageBox.information(
+        parent,
+        "Imajin Open Image",
+        f"Loaded:<br><b>{result.get('path')}</b><br>Layers: {layers}",
+    )
 
 
 def _new_project(parent: Any) -> None:

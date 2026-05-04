@@ -6,6 +6,7 @@ from xml.etree import ElementTree as ET
 
 from imajin.io.channel_metadata import build_channel_info
 from imajin.io.dataset import Dataset
+from imajin.paths import normalize_user_path
 
 
 def _local_name(tag: str) -> str:
@@ -47,7 +48,7 @@ def _channel_metadata_from_xml(metadata: Any) -> list[dict[str, Any]]:
 def load_czi(path: Path | str) -> Dataset:
     from bioio import BioImage
 
-    p = Path(path)
+    p = normalize_user_path(path)
     img = BioImage(str(p))
     data = img.dask_data
 

@@ -5,7 +5,9 @@ import os
 
 import numpy as np
 import pytest
+from PIL import Image
 
+from imajin.agent import state
 from imajin.tools import view
 
 needs_gl = pytest.mark.skipif(
@@ -93,6 +95,49 @@ def test_max_projection_integer_axis(viewer) -> None:
     res = view.max_projection("vol", axis=1)
     assert res["shape"] == (8, 32)
     assert res["axis"] == 1
+
+
+def test_average_projection_z_axis(viewer) -> None:
+    data = _zstack(viewer, name="vol")
+    res = view.average_projection("vol", axis="z")
+    assert res["shape"] == (32, 32)
+    out = np.asarray(viewer.layers[res["new_layer"]].data)
+    np.testing.assert_allclose(out, data.mean(axis=0))
+
+
+def test_export_channel_composite_png_with_scalebar_and_counterstain_gray(
+    viewer, tmp_path
+) -> None:
+    yy, xx = np.mgrid[:16, :16]
+    green = np.stack([(xx + z).astype(np.float32) for z in range(3)], axis=0)
+    counter = np.stack([(yy + z).astype(np.float32) for z in range(3)], axis=0)
+    viewer.add_image(green, name="CaLexA_green", scale=(1.0, 0.5, 0.5), metadata={"axes": "ZYX"})
+    viewer.add_image(counter, name="TOPRO_farred", scale=(1.0, 0.5, 0.5), metadata={"axes": "ZYX"})
+    state.put_channel_annotation(
+        "TOPRO_farred",
+        role="counterstain",
+        color="ir",
+        marker="TOPRO",
+    )
+
+    out = tmp_path / "composite.png"
+    res = view.export_channel_composite_png(
+        layers=["CaLexA_green", "TOPRO_farred"],
+        path=str(out),
+        projection="mean",
+        scale_bar_um=2.0,
+        scale_bar_thickness_px=1,
+        scale_bar_margin_px=1,
+    )
+
+    assert out.exists()
+    assert res["projection"] == "mean"
+    assert res["colors"] == ["inferno", "gray"]
+    assert res["scale_bar"]["length_px"] == 4
+    assert res["layer"] == "composite_composite"
+    img = np.asarray(Image.open(out))
+    assert img.shape == (16, 16, 3)
+    assert img[14, 14].tolist() == [255, 255, 255]
 
 
 def test_orthogonal_views_adds_xz_yz(viewer) -> None:

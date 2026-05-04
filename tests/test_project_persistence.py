@@ -42,6 +42,26 @@ def test_create_project_writes_initial_layout(tmp_path: Path) -> None:
     assert payload["project_id"].startswith("proj_")
 
 
+def test_create_project_accepts_windows_style_path(tmp_path: Path, monkeypatch) -> None:
+    from imajin import project as project_module
+
+    target = tmp_path / "windows_project.imajin"
+    win_path = r"C:\Users\Jin\Documents\School\GIST\Lab\Project\test"
+    seen: list[str] = []
+
+    def fake_normalize(path: str | Path) -> Path:
+        seen.append(str(path))
+        return target if str(path) == win_path else Path(path)
+
+    monkeypatch.setattr(project_module, "normalize_user_path", fake_normalize)
+
+    res = project_module.create_project(win_path)
+
+    assert seen[0] == win_path
+    assert res["path"] == str(target.resolve())
+    assert (target / "project.json").exists()
+
+
 def test_save_and_load_project_round_trip(tmp_path: Path, viewer) -> None:
     from imajin.agent import provenance, state
     from imajin.agent.execution import get_execution_service

@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any
 
 from imajin.agent.state import list_samples, put_sample
+from imajin.paths import normalize_user_path
 from imajin.tools.registry import tool
 
 
@@ -23,7 +25,7 @@ def annotate_sample(
 ) -> dict[str, Any]:
     if not group or not group.strip():
         raise ValueError("group must not be empty for annotate_sample()")
-    normalized_files = [str(Path(f).expanduser()) for f in (files or [])]
+    normalized_files = [str(normalize_user_path(f)) for f in (files or [])]
     name = put_sample(
         sample_name=sample_name,
         group=group,
@@ -60,22 +62,143 @@ def _classify_extension(name: str) -> tuple[bool, str | None]:
     return False, None
 
 
+def _coerce_terms(terms: list[str] | None) -> list[str]:
+    return [str(term).strip() for term in (terms or []) if str(term).strip()]
+
+
+def _match_forms(value: str) -> tuple[str, str, str]:
+    normalized = " ".join(
+        str(value)
+        .lower()
+        .replace("\\", "/")
+        .replace("_", " ")
+        .replace("-", " ")
+        .split()
+    )
+    compact = normalized.replace(" ", "")
+    alnum = re.sub(r"[^a-z0-9]+", "", normalized)
+    return normalized, compact, alnum
+
+
+def _contains_user_term(haystack: str, term: str) -> bool:
+    hay_norm, hay_compact, hay_alnum = _match_forms(haystack)
+    term_norm, term_compact, term_alnum = _match_forms(term)
+    return (
+        bool(term_norm)
+        and (
+            term_norm in hay_norm
+            or term_compact in hay_compact
+            or term_alnum in hay_alnum
+        )
+    )
+
+
+def _record_search_text(record: dict[str, Any]) -> str:
+    parts = [
+        record.get("file_id"),
+        record.get("original_name"),
+        record.get("path"),
+        record.get("notes"),
+    ]
+    return " ".join(str(part) for part in parts if part)
+
+
+def _record_matches_terms(
+    record: dict[str, Any],
+    include: list[str] | None,
+    exclude: list[str] | None,
+) -> bool:
+    include_terms = _coerce_terms(include)
+    exclude_terms = _coerce_terms(exclude)
+    text = _record_search_text(record)
+    return all(_contains_user_term(text, term) for term in include_terms) and not any(
+        _contains_user_term(text, term) for term in exclude_terms
+    )
+
+
+def _path_matches_terms(
+    path: Path,
+    include: list[str] | None,
+    exclude: list[str] | None,
+) -> bool:
+    record = {
+        "file_id": path.stem,
+        "original_name": path.name,
+        "path": str(path),
+    }
+    return _record_matches_terms(record, include, exclude)
+
+
+def _scan_image_directory(
+    root: Path, *, recursive: bool
+) -> tuple[list[Path], int, int, list[str]]:
+    files: list[Path] = []
+    ignored_non_image = 0
+    scanned_dirs = 0
+    warnings: list[str] = []
+    pending = [root]
+    while pending:
+        directory = pending.pop(0)
+        try:
+            children = sorted(directory.iterdir(), key=lambda p: p.name.lower())
+        except OSError as exc:
+            warnings.append(f"Could not scan directory {directory}: {exc}")
+            continue
+        scanned_dirs += 1
+        for child in children:
+            try:
+                if child.is_dir():
+                    if recursive and not child.is_symlink():
+                        pending.append(child)
+                    continue
+                if not child.is_file():
+                    continue
+            except OSError as exc:
+                warnings.append(f"Could not inspect path {child}: {exc}")
+                continue
+            supported, _file_type = _classify_extension(child.name)
+            if supported:
+                files.append(child)
+            else:
+                ignored_non_image += 1
+    return files, ignored_non_image, scanned_dirs, warnings
+
+
 @tool(
     description="Register one or more imaging files with the experiment without "
     "loading them into napari. Use this when the user names files or folders to "
-    "include in a batch analysis. Returns one record per file with file_id, "
-    "supported/missing flags, and any cheap metadata. Filenames are NOT parsed "
-    "into condition/replicate/tissue — call annotate_samples for that.",
+    "include in a batch analysis. Folder inputs are expanded into supported image "
+    "files (.lsm/.czi/.tif/.tiff). Returns one record per file with file_id, "
+    "supported/missing flags, and any cheap metadata. Set recursive=True only when "
+    "subfolders should be scanned. If the user explicitly names a line, condition, "
+    "tissue, region, or other filename text, pass it in include so unrelated files "
+    "from the same folder are not registered for the requested batch. Filenames are "
+    "NOT parsed into condition/replicate/tissue — call annotate_samples for that.",
     phase="3",
 )
-def register_files(paths: list[str]) -> dict[str, Any]:
+def register_files(
+    paths: list[str],
+    recursive: bool = False,
+    include: list[str] | None = None,
+    exclude: list[str] | None = None,
+) -> dict[str, Any]:
     from imajin.agent.state import put_file
 
     out: list[dict[str, Any]] = []
     n_unsupported = 0
     n_missing = 0
-    for raw in paths:
-        p = Path(raw).expanduser()
+    n_discarded_by_filter = 0
+    n_input_dirs = 0
+    n_scanned_dirs = 0
+    n_ignored_non_image = 0
+    directories: list[dict[str, Any]] = []
+    warnings: list[str] = []
+
+    def register_one(p: Path) -> None:
+        nonlocal n_unsupported, n_missing, n_discarded_by_filter
+        if not _path_matches_terms(p, include, exclude):
+            n_discarded_by_filter += 1
+            return
         original_name = p.name
         supported, file_type = _classify_extension(original_name)
         exists = p.exists()
@@ -83,15 +206,16 @@ def register_files(paths: list[str]) -> dict[str, Any]:
             n_unsupported += 1
         if not exists:
             n_missing += 1
+        resolved = p.resolve() if exists else p
         file_id = put_file(
-            path=str(p.resolve() if exists else p),
+            path=str(resolved),
             original_name=original_name,
             file_type=file_type,
         )
         out.append(
             {
                 "file_id": file_id,
-                "path": str(p.resolve() if exists else p),
+                "path": str(resolved),
                 "original_name": original_name,
                 "file_type": file_type,
                 "supported": supported,
@@ -99,13 +223,158 @@ def register_files(paths: list[str]) -> dict[str, Any]:
                 "load_status": "unloaded",
             }
         )
-    return {
+
+    for raw in paths:
+        p = normalize_user_path(raw)
+        if p.is_dir():
+            n_input_dirs += 1
+            found, ignored, scanned, scan_warnings = _scan_image_directory(
+                p, recursive=recursive
+            )
+            n_scanned_dirs += scanned
+            n_ignored_non_image += ignored
+            warnings.extend(scan_warnings)
+            directories.append(
+                {
+                    "input": raw,
+                    "path": str(p.resolve()),
+                    "recursive": recursive,
+                    "n_found": len(found),
+                    "n_ignored_non_image": ignored,
+                    "n_scanned_dirs": scanned,
+                }
+            )
+            for child in found:
+                register_one(child)
+            continue
+        register_one(p)
+    result = {
         "n_registered": len(out),
         "n_supported": len(out) - n_unsupported,
         "n_unsupported": n_unsupported,
         "n_missing": n_missing,
+        "n_discarded_by_filter": n_discarded_by_filter,
         "files": out,
+        "n_input_dirs": n_input_dirs,
+        "n_scanned_dirs": n_scanned_dirs,
+        "n_ignored_non_image": n_ignored_non_image,
+        "directories": directories,
     }
+    include_terms = _coerce_terms(include)
+    exclude_terms = _coerce_terms(exclude)
+    if include_terms:
+        result["include"] = include_terms
+    if exclude_terms:
+        result["exclude"] = exclude_terms
+    if warnings:
+        result["warnings"] = warnings
+    return result
+
+
+def _query_registered_file_records(
+    *,
+    include: list[str] | None = None,
+    exclude: list[str] | None = None,
+    file_ids: list[str] | None = None,
+    offset: int = 0,
+    limit: int = 50,
+) -> dict[str, Any]:
+    from imajin.agent.state import list_files
+
+    records = list_files()
+    if file_ids:
+        wanted = {str(file_id) for file_id in file_ids}
+        records = [rec for rec in records if str(rec.get("file_id")) in wanted]
+
+    records = sorted(
+        records,
+        key=lambda rec: (
+            str(rec.get("original_name", "")).lower(),
+            str(rec.get("path", "")).lower(),
+        ),
+    )
+    matched = [
+        rec
+        for rec in records
+        if _record_matches_terms(rec, include=include, exclude=exclude)
+    ]
+
+    safe_offset = max(0, int(offset))
+    safe_limit = max(1, min(int(limit), 200))
+    page = matched[safe_offset : safe_offset + safe_limit]
+    next_offset = safe_offset + safe_limit
+    representative = matched[0] if matched else None
+
+    result: dict[str, Any] = {
+        "n_registered": len(records),
+        "n_matched": len(matched),
+        "n_unmatched": len(records) - len(matched),
+        "offset": safe_offset,
+        "limit": safe_limit,
+        "has_more": next_offset < len(matched),
+        "next_offset": next_offset if next_offset < len(matched) else None,
+        "files": page,
+        "file_ids": [str(rec.get("file_id")) for rec in page],
+        "paths": [str(rec.get("path")) for rec in page],
+        "representative_file": representative,
+        "representative_path": representative.get("path") if representative else None,
+    }
+    include_terms = _coerce_terms(include)
+    exclude_terms = _coerce_terms(exclude)
+    if include_terms:
+        result["include"] = include_terms
+    if exclude_terms:
+        result["exclude"] = exclude_terms
+    if file_ids:
+        result["file_id_filter"] = [str(file_id) for file_id in file_ids]
+    return result
+
+
+@tool(
+    description="List registered imaging files from the experiment registry with "
+    "optional include/exclude filename text filters and pagination. Use this instead "
+    "of relying on old tool output when you need the full file list. If has_more is "
+    "true, call again with next_offset. This does not parse filenames into metadata.",
+    phase="3",
+)
+def list_registered_files(
+    include: list[str] | None = None,
+    exclude: list[str] | None = None,
+    file_ids: list[str] | None = None,
+    offset: int = 0,
+    limit: int = 50,
+) -> dict[str, Any]:
+    return _query_registered_file_records(
+        include=include,
+        exclude=exclude,
+        file_ids=file_ids,
+        offset=offset,
+        limit=limit,
+    )
+
+
+@tool(
+    description="Filter the current registered file registry by exact user-provided "
+    "filename/path text, such as a genotype line ('2966 + 1234'), condition "
+    "('venerose'), tissue ('midgut'), or replicate token. Use this immediately after "
+    "register_files when a folder contains files outside the user's requested scope. "
+    "If n_matched is zero, ask the user instead of falling back to unrelated files.",
+    phase="3",
+)
+def filter_registered_files(
+    include: list[str] | None = None,
+    exclude: list[str] | None = None,
+    file_ids: list[str] | None = None,
+    offset: int = 0,
+    limit: int = 50,
+) -> dict[str, Any]:
+    return _query_registered_file_records(
+        include=include,
+        exclude=exclude,
+        file_ids=file_ids,
+        offset=offset,
+        limit=limit,
+    )
 
 
 def _resolve_files_for_sample(
@@ -122,8 +391,9 @@ def _resolve_files_for_sample(
     by_path = {rec.path: rec for rec in _FILES.values()}
 
     for raw in files or []:
-        p = str(Path(raw).expanduser().resolve())
-        rec = by_path.get(p) or by_path.get(str(Path(raw).expanduser()))
+        raw_path = normalize_user_path(raw)
+        p = str(raw_path.resolve())
+        rec = by_path.get(p) or by_path.get(str(raw_path))
         if rec is not None:
             resolved_paths.append(rec.path)
             if rec.file_id not in resolved_ids:

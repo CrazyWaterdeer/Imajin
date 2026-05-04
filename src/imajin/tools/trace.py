@@ -11,6 +11,7 @@ import pandas as pd
 from imajin.agent import state
 from imajin.agent.qt_dispatch import call_on_main
 from imajin.agent.state import get_layer, get_viewer, put_table
+from imajin.paths import normalize_user_path
 from imajin.tools.napari_ops import (
     add_image_from_worker,
     add_labels_from_worker,
@@ -1030,7 +1031,7 @@ def export_neural_trace(
 ) -> dict[str, Any]:
     entry = _entry(skeleton_id)
     fmt = format.lower().strip()
-    out = Path(output_path).expanduser().resolve()
+    out = normalize_user_path(output_path).resolve()
     written: list[str] = []
 
     if fmt == "csv":

@@ -14,6 +14,7 @@ from imajin.io.memory import (
     available_memory_bytes,
     should_load_into_memory,
 )
+from imajin.paths import normalize_user_path
 
 _OME_NS = {"ome": "http://www.openmicroscopy.org/Schemas/OME/2016-06"}
 
@@ -72,7 +73,7 @@ def _memmap_tiff_array(path: Path):
 
 
 def load_ome(path: Path | str) -> Dataset:
-    p = Path(path)
+    p = normalize_user_path(path)
     with tifffile.TiffFile(str(p)) as tf:
         ome_xml = tf.ome_metadata or ""
         series = tf.series[0]

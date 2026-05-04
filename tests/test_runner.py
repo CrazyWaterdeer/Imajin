@@ -9,7 +9,7 @@ from imajin.agent.providers.base import (
     ToolUse,
     ToolUseStart,
 )
-from imajin.agent.runner import AgentRunner, ToolResult, TurnDone
+from imajin.agent.runner import AgentRunner, ToolResult, TurnDone, _compact_tool_result
 from imajin.tools import tool
 from imajin.tools import registry as registry_mod
 
@@ -206,3 +206,135 @@ def test_runner_cancel_mid_dispatch_fills_tool_result_placeholders() -> None:
 
     done = [e for e in events if isinstance(e, TurnDone)]
     assert done[-1].stop_reason == "cancelled"
+
+
+def test_runner_compacts_large_tool_result_before_history() -> None:
+    @tool()
+    def many_files() -> dict[str, Any]:
+        return {
+            "n_registered": 40,
+            "files": [
+                {"file_id": f"f{i}", "path": f"/data/sample_{i}.lsm"}
+                for i in range(40)
+            ],
+        }
+
+    provider = _ScriptedProvider(
+        [
+            [
+                ToolUseStart(id="tu_1", name="many_files"),
+                ToolUse(id="tu_1", name="many_files", input={}),
+                Stop(reason="tool_use"),
+            ],
+            [TextDelta(text="registered"), Stop(reason="end_turn")],
+        ]
+    )
+
+    runner = AgentRunner(provider, "test")
+    events = list(runner.turn("register folder"))
+
+    tool_event = next(e for e in events if isinstance(e, ToolResult))
+    assert tool_event.output["n_registered"] == 40
+    tool_result_msg = next(
+        m for m in runner.messages
+        if m["role"] == "user"
+        and m["content"]
+        and m["content"][0].get("type") == "tool_result"
+    )
+    content = tool_result_msg["content"][0]["content"]
+    assert "sample_0.lsm" in content
+    assert "sample_39.lsm" not in content
+    assert "_omitted_items" in content
+
+
+def test_runner_preserves_registered_file_identities_when_compacting() -> None:
+    output = {
+        "n_registered": 31,
+        "files": [
+            {
+                "file_id": f"sample_{i}",
+                "original_name": f"{i:05d} + 1234 sample {i}.lsm",
+                "path": f"/mnt/c/data/{i:05d} + 1234 sample {i}.lsm",
+                "supported": True,
+                "exists": True,
+            }
+            for i in range(31)
+        ],
+    }
+
+    compact = _compact_tool_result("register_files", output)
+
+    assert "00000 + 1234 sample 0.lsm" in compact
+    assert "00030 + 1234 sample 30.lsm" in compact
+    assert "_omitted_items" not in compact
+    assert "path_note" in compact
+
+
+def test_runner_compacts_old_messages_without_orphaning_tool_results() -> None:
+    provider = _ScriptedProvider([[TextDelta(text="ok"), Stop(reason="end_turn")]])
+    runner = AgentRunner(provider, "test")
+    runner.messages = [
+        {"role": "user", "content": [{"type": "text", "text": "old " + ("x" * 5000)}]}
+        for _ in range(20)
+    ]
+    runner.messages.extend(
+        [
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "id": "tu_keep",
+                        "name": "list_layers",
+                        "input": {},
+                    }
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "tu_keep",
+                        "content": "{}",
+                    }
+                ],
+            },
+        ]
+    )
+
+    runner._compact_messages(force=True)
+
+    assert runner.messages[0]["role"] == "user"
+    assert "Compacted earlier conversation" in runner.messages[0]["content"][0]["text"]
+    assert runner.messages[-2]["role"] == "assistant"
+    assert runner.messages[-1]["content"][0]["tool_use_id"] == "tu_keep"
+
+
+def test_runner_recovers_once_from_context_limit_error() -> None:
+    @tool()
+    def noop() -> int:
+        return 1
+
+    class _FlakyContextProvider(_ScriptedProvider):
+        def stream(self, messages, tools, system):
+            if not self.calls:
+                self.calls.append((list(messages), list(tools), system))
+                raise RuntimeError("maximum context length exceeded")
+            self.calls.append((list(messages), list(tools), system))
+            for event in self._scripts[0]:
+                yield event
+
+    provider = _FlakyContextProvider(
+        [[TextDelta(text="recovered"), Stop(reason="end_turn")]]
+    )
+    runner = AgentRunner(provider, "test")
+    runner.messages = [
+        {"role": "user", "content": [{"type": "text", "text": "old " + ("x" * 5000)}]}
+        for _ in range(20)
+    ]
+
+    events = list(runner.turn("continue"))
+
+    assert any(isinstance(e, TextDelta) and e.text == "recovered" for e in events)
+    assert len(provider.calls) == 2

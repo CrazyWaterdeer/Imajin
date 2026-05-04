@@ -26,6 +26,21 @@ def test_annotate_channel_canonicalizes_far_red(viewer) -> None:
     assert entry["color"] == "ir"
 
 
+def test_annotate_counterstain_sets_gray_colormap(viewer) -> None:
+    viewer.add_image(np.zeros((8, 8), dtype=np.uint16), name="TOPRO")
+
+    res = channels.annotate_channel(
+        layer="TOPRO",
+        role="counterstain",
+        color="far red",
+        marker="TOPRO",
+    )
+
+    assert res["role"] == "counterstain"
+    assert res["color"] == "ir"
+    assert viewer.layers["TOPRO"].colormap.name == "gray"
+
+
 def test_resolve_channel_uses_annotation_and_get_layer_alias(viewer) -> None:
     layer = viewer.add_image(np.ones((8, 8), dtype=np.uint16), name="reporter_ch1")
     channels.annotate_channel(
@@ -76,3 +91,23 @@ def test_resolve_channel_uses_file_wavelength_metadata(viewer) -> None:
     assert channels.resolve_channel("green")["layer"] == "ch1"
     assert channels.resolve_channel("red")["layer"] == "ch2"
     assert channels.resolve_channel("far red")["layer"] == "ch3"
+
+
+def test_resolve_channel_preserves_fiji_style_channel_numbers(viewer) -> None:
+    shared_metadata = {
+        "channel_names": ["Ch1", "Ch2"],
+        "channel_metadata": [
+            {"name": "Ch1", "dye_name": "Alexa Fluor 488", "color": "green"},
+            {"name": "Ch2", "dye_name": "Alexa Fluor 633", "color": "ir"},
+        ],
+    }
+    for name in shared_metadata["channel_names"]:
+        viewer.add_image(
+            np.ones((8, 8), dtype=np.uint16),
+            name=name,
+            metadata=shared_metadata,
+        )
+
+    assert channels.resolve_channel("GFP")["layer"] == "Ch1"
+    assert channels.resolve_channel("green")["layer"] == "Ch1"
+    assert channels.resolve_channel("far red")["layer"] == "Ch2"

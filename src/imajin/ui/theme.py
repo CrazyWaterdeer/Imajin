@@ -184,7 +184,7 @@ class Theme:
                 background-color: transparent;
                 border: 1px solid {cls.BORDER};
                 color: {cls.TEXT_SECONDARY};
-                padding: 3px 10px;
+                padding: 3px 10px 3px 18px;
                 border-radius: 4px;
                 font-weight: normal;
                 font-size: 11px;

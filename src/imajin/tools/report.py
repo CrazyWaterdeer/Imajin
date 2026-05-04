@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from collections import Counter
 from html import escape
-from pathlib import Path
 from typing import Any
 
+from imajin.paths import normalize_user_path
 from imajin.tools.registry import tool
 
 
@@ -28,6 +28,15 @@ _TOOL_PHRASES: dict[str, str] = {
         "cells were segmented with Cellpose-SAM ({model_str}{do_3d_str}) on "
         "channel {channel}"
     ),
+    "segment_intensity_regions": (
+        "reporter-positive ROIs/regions were segmented by intensity thresholding "
+        "({threshold_method}) on channel {channel}"
+    ),
+    "segment_target_objects": (
+        "target-positive objects/ROIs were segmented after local background "
+        "correction ({background_method}, radius={background_radius}px) on "
+        "channel {channel}"
+    ),
     "measure_intensity": (
         "per-object intensity features ({properties}) were extracted with "
         "scikit-image regionprops_table on channel(s) {channels}"
@@ -35,6 +44,9 @@ _TOOL_PHRASES: dict[str, str] = {
     "measure_intensity_over_time": (
         "ROI intensity time courses were extracted with scikit-image "
         "regionprops_table from {image_layer}"
+    ),
+    "measure_projected_intensity": (
+        "ROI intensity was measured from a {projection} projection of {image_layer}"
     ),
     "manders_coefficients": (
         "Manders M1/M2 colocalization coefficients were computed between "
@@ -44,6 +56,10 @@ _TOOL_PHRASES: dict[str, str] = {
         "Pearson correlation was computed between {image_a} and {image_b}"
     ),
     "max_projection": "maximum-intensity projection was generated along the {axis} axis",
+    "average_projection": "average-intensity projection was generated along the {axis} axis",
+    "export_channel_composite_png": (
+        "a merged channel PNG was exported with {projection} projection and scale bar"
+    ),
     "orthogonal_views": "orthogonal XZ and YZ projection views were generated",
     "enhance_neural_processes": (
         "neural process signal was enhanced ({method}) before tracing"
@@ -61,8 +77,9 @@ _TOOL_PHRASES: dict[str, str] = {
     "export_neural_trace": "neural trace data were exported as {format}",
     "track_cells": "cells were tracked across the time series with btrack",
     "analyze_target_cells": (
-        "cells were segmented from the user-confirmed target channel ({channel}) "
-        "with Cellpose-SAM ({do_3d_str}), and per-object intensity and size were "
+        "target-positive objects/ROIs were segmented from the user-confirmed "
+        "target channel ({channel}) "
+        "with {segmentation_method} ({do_3d_str}), and per-object intensity and size were "
         "measured on the same target channel"
     ),
 }
@@ -100,8 +117,13 @@ def _format_phrase(tool_name: str, inputs: dict[str, Any]) -> str | None:
     args["image_b"] = inputs.get("image_b", "?")
     args["image_layer"] = inputs.get("image_layer", "?")
     args["axis"] = inputs.get("axis", "?")
+    args["projection"] = inputs.get("projection", "?")
     args["method"] = inputs.get("method", "?")
     args["threshold"] = inputs.get("threshold", "?")
+    args["threshold_method"] = inputs.get("threshold_method", "?")
+    args["segmentation_method"] = inputs.get("segmentation_method", "Cellpose-SAM")
+    args["background_method"] = inputs.get("background_method", "?")
+    args["background_radius"] = inputs.get("background_radius", "?")
     args["format"] = inputs.get("format", "?")
     args["min_branch_length_um"] = inputs.get("min_branch_length_um", "?")
     args["timepoint"] = inputs.get("t", inputs.get("timepoint", "?"))
@@ -127,6 +149,7 @@ def _select_pipeline_records(records: list[dict[str, Any]]) -> list[dict[str, An
         "screenshot",
         "export_table",
         "save_labels",
+        "save_result_bundle",
         "export_script",
         "refresh_measurement",
         "summarize_table",
@@ -373,7 +396,7 @@ def generate_report(
     qc_md = _render_qc_markdown(qc_records)
     neural_traces = list_trace_records()
     neural_md = _render_neural_traces_markdown(neural_traces, qc_records)
-    out = Path(path).expanduser().resolve()
+    out = normalize_user_path(path).resolve()
     out.parent.mkdir(parents=True, exist_ok=True)
 
     if format == "md":
@@ -530,7 +553,7 @@ def generate_experiment_report(
         ]
     )
 
-    out = Path(path).expanduser().resolve()
+    out = normalize_user_path(path).resolve()
     out.parent.mkdir(parents=True, exist_ok=True)
     if format == "md":
         out.write_text(body, encoding="utf-8")

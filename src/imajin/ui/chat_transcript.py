@@ -79,6 +79,7 @@ class ChatTranscript(QScrollArea):
         self._vbox.addStretch(1)
 
         self._bubbles: list[MessageBubble] = []
+        self._keyed_bubbles: dict[str, MessageBubble] = {}
         self._current_assistant: MessageBubble | None = None
         self._placeholder_label: QLabel | None = None
         self._show_placeholder()
@@ -116,6 +117,18 @@ class ChatTranscript(QScrollArea):
         self._add_row(bubble, align="center")
         self._current_assistant = None
 
+    def upsert_system(self, key: str, text: str) -> None:
+        self._hide_placeholder()
+        bubble = self._keyed_bubbles.get(key)
+        if bubble is None:
+            bubble = MessageBubble("system", text)
+            self._keyed_bubbles[key] = bubble
+            self._add_row(bubble, align="center")
+        else:
+            bubble.label.setText(text)
+            self._defer_scroll_to_bottom()
+        self._current_assistant = None
+
     def begin_assistant(self) -> MessageBubble:
         self._hide_placeholder()
         bubble = MessageBubble("assistant", "")
@@ -142,6 +155,7 @@ class ChatTranscript(QScrollArea):
                 w.setParent(None)
                 w.deleteLater()
         self._bubbles.clear()
+        self._keyed_bubbles.clear()
         self._current_assistant = None
         self._placeholder_label = None
         self._show_placeholder()

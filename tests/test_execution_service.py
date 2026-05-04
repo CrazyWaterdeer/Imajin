@@ -76,6 +76,42 @@ def test_call_tool_blocking_returns_result_and_records_driver(tmp_path) -> None:
     assert payload["tool"] == "double"
 
 
+def test_report_progress_updates_current_job() -> None:
+    from imajin.agent.execution import (
+        ToolExecutionService,
+        current_job_id,
+        report_progress,
+    )
+    from imajin.tools import tool
+
+    @tool()
+    def work() -> bool:
+        assert current_job_id() is not None
+        return report_progress(
+            progress=0.4,
+            stage="segmentation",
+            current_file="sample_1.lsm",
+            file_index=1,
+            total_files=3,
+            completed=0,
+            failed=0,
+            show_in_chat=True,
+            message="Segmenting sample_1.lsm.",
+        )
+
+    service = ToolExecutionService()
+    job = service.submit_tool("work", {}, source="llm", wait=True)
+
+    assert job.status == "complete"
+    assert job.result is True
+    assert job.progress == 1.0
+    assert job.progress_detail["progress"] == 0.4
+    assert job.progress_detail["stage"] == "segmentation"
+    assert job.progress_detail["current_file"] == "sample_1.lsm"
+    assert job.progress_detail["total_files"] == 3
+    assert job.progress_detail["show_in_chat"] is True
+
+
 def test_validation_error_fails_job() -> None:
     from imajin.agent.execution import ToolExecutionService
     from imajin.tools import tool

@@ -1,12 +1,58 @@
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Any
 
-from imajin.io.channel_metadata import pad_channel_metadata
+from imajin.io.channel_metadata import display_color_name, pad_channel_metadata
+from imajin.paths import normalize_user_path
 
 LayerData = tuple[Any, dict, str]
 _SUPPORTED = (".lsm", ".czi", ".ome.tif", ".ome.tiff", ".tif", ".tiff")
+
+
+def _fallback_colormap_for_color(color: str | None) -> str | None:
+    if color == "green":
+        return "green"
+    if color == "red":
+        return "red"
+    if color == "uv":
+        return "blue"
+    if color == "ir":
+        return "magenta"
+    return None
+
+
+def _napari_colormap_from_rgb(
+    rgb: tuple[float, float, float], name: str
+):  # noqa: ANN202 - napari's Colormap type is optional at import time
+    builtin = display_color_name(rgb)
+    if builtin:
+        return builtin
+    try:
+        from napari.utils import Colormap
+
+        return Colormap(
+            colors=[
+                (0.0, 0.0, 0.0, 1.0),
+                (float(rgb[0]), float(rgb[1]), float(rgb[2]), 1.0),
+            ],
+            name=name,
+        )
+    except Exception:
+        return "gray"
+
+
+def _colormap_for_channel(info: dict[str, Any], index: int) -> Any:
+    rgb_raw = info.get("display_color_rgb")
+    if isinstance(rgb_raw, (list, tuple)) and len(rgb_raw) >= 3:
+        try:
+            rgb = (float(rgb_raw[0]), float(rgb_raw[1]), float(rgb_raw[2]))
+        except (TypeError, ValueError):
+            rgb = None
+        if rgb is not None:
+            name = str(info.get("display_color_name") or f"channel_{index + 1}_display")
+            return _napari_colormap_from_rgb(rgb, name)
+    fallback = _fallback_colormap_for_color(str(info.get("color")) if info.get("color") else None)
+    return fallback or "gray"
 
 
 def _to_layer(ds) -> LayerData:
@@ -42,6 +88,11 @@ def _to_layer(ds) -> LayerData:
             n_channels=n_ch,
             names=list(kwargs["name"]),
         )
+        kwargs["colormap"] = [
+            _colormap_for_channel(info, i)
+            for i, info in enumerate(metadata["channel_metadata"])
+        ]
+        kwargs["blending"] = "additive"
     else:
         kwargs["name"] = base
         kwargs["scale"] = tuple(scale_per_axis.get(a, 1.0) for a in ds.axes)
@@ -65,7 +116,7 @@ def _matches(path) -> bool:
         if not path:
             return False
         path = path[0]
-    name = Path(path).name.lower()
+    name = normalize_user_path(path).name.lower()
     return any(name.endswith(s) for s in _SUPPORTED)
 
 

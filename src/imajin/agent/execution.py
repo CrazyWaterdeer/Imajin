@@ -4,7 +4,7 @@ import threading
 import uuid
 from collections.abc import Callable
 from contextvars import ContextVar
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from typing import Any, Literal
 
@@ -32,6 +32,7 @@ class Job:
     status: JobStatus = "queued"
     progress: float | None = None
     message: str | None = None
+    progress_detail: dict[str, Any] = field(default_factory=dict)
     started_at: str | None = None
     finished_at: str | None = None
     result: Any | None = None
@@ -44,10 +45,27 @@ class ProgressEvent:
     job_id: str
     progress: float | None = None
     message: str | None = None
+    stage: str | None = None
+    current_file: str | None = None
+    file_index: int | None = None
+    total_files: int | None = None
+    completed: int | None = None
+    failed: int | None = None
+    skipped: int | None = None
+    show_in_chat: bool | None = None
+    detail: dict[str, Any] | None = None
 
 
 _CURRENT_TOKEN: ContextVar[CancellationToken | None] = ContextVar(
     "imajin_current_cancellation_token",
+    default=None,
+)
+_CURRENT_JOB_ID: ContextVar[str | None] = ContextVar(
+    "imajin_current_job_id",
+    default=None,
+)
+_CURRENT_SERVICE: ContextVar["ToolExecutionService | None"] = ContextVar(
+    "imajin_current_execution_service",
     default=None,
 )
 
@@ -60,6 +78,49 @@ def raise_if_cancelled() -> None:
     token = current_cancellation_token()
     if token is not None:
         token.raise_if_cancelled()
+
+
+def current_job_id() -> str | None:
+    return _CURRENT_JOB_ID.get()
+
+
+def report_progress(
+    *,
+    progress: float | None = None,
+    message: str | None = None,
+    stage: str | None = None,
+    current_file: str | None = None,
+    file_index: int | None = None,
+    total_files: int | None = None,
+    completed: int | None = None,
+    failed: int | None = None,
+    skipped: int | None = None,
+    show_in_chat: bool | None = None,
+    detail: dict[str, Any] | None = None,
+) -> bool:
+    """Report structured progress for the currently running job.
+
+    Returns False when called outside a ToolExecutionService job.
+    """
+    service = _CURRENT_SERVICE.get()
+    job_id = _CURRENT_JOB_ID.get()
+    if service is None or job_id is None:
+        return False
+    service.update_progress(
+        job_id,
+        progress=progress,
+        message=message,
+        stage=stage,
+        current_file=current_file,
+        file_index=file_index,
+        total_files=total_files,
+        completed=completed,
+        failed=failed,
+        skipped=skipped,
+        show_in_chat=show_in_chat,
+        detail=detail,
+    )
+    return True
 
 
 class ToolExecutionService:
@@ -249,6 +310,58 @@ class ToolExecutionService:
         for job in jobs:
             self._notify(job)
 
+    def update_progress(
+        self,
+        job_id: str,
+        *,
+        progress: float | None = None,
+        message: str | None = None,
+        stage: str | None = None,
+        current_file: str | None = None,
+        file_index: int | None = None,
+        total_files: int | None = None,
+        completed: int | None = None,
+        failed: int | None = None,
+        skipped: int | None = None,
+        show_in_chat: bool | None = None,
+        detail: dict[str, Any] | None = None,
+    ) -> ProgressEvent:
+        progress_value = None
+        if progress is not None:
+            progress_value = max(0.0, min(1.0, float(progress)))
+        event = ProgressEvent(
+            job_id=job_id,
+            progress=progress_value,
+            message=message,
+            stage=stage,
+            current_file=current_file,
+            file_index=file_index,
+            total_files=total_files,
+            completed=completed,
+            failed=failed,
+            skipped=skipped,
+            show_in_chat=show_in_chat,
+            detail=dict(detail or {}) or None,
+        )
+        with self._lock:
+            job = self._jobs[job_id]
+            if progress_value is not None:
+                job.progress = progress_value
+            if message is not None:
+                job.message = message
+            merged = dict(job.progress_detail or {})
+            for key, value in asdict(event).items():
+                if key in {"job_id", "detail"} or value is None:
+                    continue
+                merged[key] = value
+            if event.detail:
+                nested = dict(merged.get("detail") or {})
+                nested.update(event.detail)
+                merged["detail"] = nested
+            job.progress_detail = merged
+        self._notify(job)
+        return event
+
     def _new_job(
         self,
         *,
@@ -410,6 +523,8 @@ class ToolExecutionService:
         self._notify(job)
 
         token_var = _CURRENT_TOKEN.set(token)
+        job_id_var = _CURRENT_JOB_ID.set(job.job_id)
+        service_var = _CURRENT_SERVICE.set(self)
         try:
             token.raise_if_cancelled()
             provenance.set_driver(driver or _driver_for_source(source))
@@ -456,6 +571,8 @@ class ToolExecutionService:
             return None
         finally:
             _CURRENT_TOKEN.reset(token_var)
+            _CURRENT_JOB_ID.reset(job_id_var)
+            _CURRENT_SERVICE.reset(service_var)
 
     def _notify(self, job: Job) -> None:
         for listener in list(self._listeners):

@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Any
 
 from imajin.agent.state import get_table, get_viewer
+from imajin.paths import normalize_user_path
 from imajin.tools.registry import tool
 
 
@@ -16,7 +16,8 @@ def load_file(path: str) -> dict[str, Any]:
     from imajin.io import load_dataset
     from imajin.io.napari_reader import _to_layer
 
-    ds = load_dataset(path)
+    resolved_path = normalize_user_path(path).resolve()
+    ds = load_dataset(resolved_path)
     viewer = get_viewer()
 
     data, kwargs, _ = _to_layer(ds)
@@ -25,7 +26,7 @@ def load_file(path: str) -> dict[str, Any]:
         layers = [layers]
 
     return {
-        "path": str(Path(path).resolve()),
+        "path": str(resolved_path),
         "axes": ds.axes,
         "shape": tuple(int(s) for s in ds.data.shape),
         "voxel_size_um": tuple(ds.voxel_size),
@@ -84,7 +85,7 @@ def export_table(
     table_name: str, path: str, format: str = "csv"
 ) -> dict[str, Any]:
     df = get_table(table_name)
-    out_path = Path(path).expanduser().resolve()
+    out_path = normalize_user_path(path).resolve()
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
     fmt = format.lower()

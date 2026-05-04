@@ -9,12 +9,163 @@ import numpy as np
 
 from imajin.agent.qt_dispatch import call_on_main
 from imajin.agent.state import get_layer, get_viewer
+from imajin.paths import normalize_user_path
 from imajin.tools.napari_ops import add_image_from_worker, snapshot_layer
 from imajin.tools.registry import tool
 
 
 def _materialize(arr) -> np.ndarray:
     return np.asarray(arr.compute() if hasattr(arr, "compute") else arr)
+
+
+def _projection_scale(layer, axis_idx: int) -> tuple[float, ...]:
+    scale_in = tuple(float(s) for s in layer.scale)
+    return tuple(s for i, s in enumerate(scale_in) if i != axis_idx)
+
+
+def _project(data: np.ndarray, projection: str, axis_idx: int) -> np.ndarray:
+    mode = projection.lower().strip()
+    if mode in {"max", "mip", "maximum"}:
+        return np.max(data, axis=axis_idx)
+    if mode in {"mean", "avg", "average"}:
+        return np.mean(data, axis=axis_idx)
+    if mode in {"none", "off"}:
+        if data.ndim != 2:
+            raise ValueError("projection='none' requires a 2D layer")
+        return data
+    raise ValueError("projection must be max, mean, or none")
+
+
+def _normalize_plane(
+    plane: np.ndarray,
+    percentile_limits: tuple[float, float] = (0.5, 99.5),
+) -> np.ndarray:
+    arr = np.asarray(plane, dtype=np.float32)
+    finite = arr[np.isfinite(arr)]
+    if finite.size == 0:
+        return np.zeros_like(arr, dtype=np.float32)
+    lo, hi = np.percentile(finite, percentile_limits)
+    if not np.isfinite(lo) or not np.isfinite(hi) or hi <= lo:
+        return np.zeros_like(arr, dtype=np.float32)
+    return np.clip((arr - lo) / (hi - lo), 0.0, 1.0).astype(np.float32)
+
+
+def _solid_color(name: str) -> tuple[float, float, float] | None:
+    key = name.lower().replace("-", "").replace(" ", "")
+    table = {
+        "green": (0.0, 1.0, 0.0),
+        "gfp": (0.0, 1.0, 0.0),
+        "red": (1.0, 0.0, 0.0),
+        "rfp": (1.0, 0.0, 0.0),
+        "uv": (0.0, 0.25, 1.0),
+        "blue": (0.0, 0.25, 1.0),
+        "dapi": (0.0, 0.25, 1.0),
+        "ir": (1.0, 0.0, 1.0),
+        "farred": (1.0, 0.0, 1.0),
+        "cy5": (1.0, 0.0, 1.0),
+        "gray": (1.0, 1.0, 1.0),
+        "grey": (1.0, 1.0, 1.0),
+        "white": (1.0, 1.0, 1.0),
+        "counterstain": (1.0, 1.0, 1.0),
+        "cyan": (0.0, 1.0, 1.0),
+        "yellow": (1.0, 1.0, 0.0),
+    }
+    return table.get(key)
+
+
+def _apply_lut(values: np.ndarray, color: str) -> np.ndarray:
+    key = color.lower().replace("-", "").replace(" ", "")
+    if key == "inferno":
+        try:
+            from matplotlib import colormaps
+
+            return colormaps["inferno"](values)[..., :3].astype(np.float32)
+        except Exception:
+            # Fall back to a simple black-red-yellow ramp if matplotlib is unavailable.
+            return np.stack(
+                [
+                    np.clip(values * 1.8, 0, 1),
+                    np.clip((values - 0.35) * 1.7, 0, 1),
+                    np.clip((values - 0.75) * 4.0, 0, 1),
+                ],
+                axis=-1,
+            ).astype(np.float32)
+    solid = _solid_color(color) or (1.0, 1.0, 1.0)
+    return values[..., None] * np.asarray(solid, dtype=np.float32)
+
+
+def _infer_export_color(layer_name: str) -> str:
+    from imajin.agent import state
+
+    for rec in state.list_channel_annotations():
+        if rec.get("layer_name") != layer_name:
+            continue
+        if rec.get("role") == "counterstain":
+            return "gray"
+        if rec.get("color"):
+            return str(rec["color"])
+    lname = layer_name.lower()
+    for token, color in (
+        ("calexa", "inferno"),
+        ("gcamp", "green"),
+        ("gfp", "green"),
+        ("fitc", "green"),
+        ("mcherry", "red"),
+        ("rfp", "red"),
+        ("tritc", "red"),
+        ("dapi", "uv"),
+        ("hoechst", "uv"),
+        ("cy5", "ir"),
+        ("647", "ir"),
+        ("farred", "ir"),
+        ("far red", "ir"),
+    ):
+        if token in lname:
+            return color
+    return "gray"
+
+
+def _draw_scale_bar(
+    rgb: np.ndarray,
+    *,
+    scale: tuple[float, ...],
+    scale_bar_um: float,
+    thickness_px: int | None,
+    margin_px: int,
+) -> tuple[np.ndarray, dict[str, Any] | None]:
+    if scale_bar_um <= 0:
+        return rgb, None
+    if not scale:
+        return rgb, None
+    x_um_per_px = float(scale[-1])
+    if x_um_per_px <= 0:
+        return rgb, None
+
+    from PIL import Image, ImageDraw
+
+    h, w = rgb.shape[:2]
+    length_px = int(round(float(scale_bar_um) / x_um_per_px))
+    if length_px <= 0:
+        return rgb, None
+    length_px = min(length_px, max(1, w - 2 * margin_px))
+    if thickness_px is None:
+        thickness_px = max(2, int(round(8 * (w / 2048.0))))
+    thickness_px = max(1, int(thickness_px))
+
+    x1 = max(0, w - margin_px - length_px)
+    x2 = min(w - 1, x1 + length_px)
+    y2 = max(0, h - margin_px)
+    y1 = max(0, y2 - thickness_px)
+
+    img = Image.fromarray((np.clip(rgb, 0, 1) * 255).astype(np.uint8))
+    draw = ImageDraw.Draw(img)
+    draw.rectangle([x1, y1, x2, y2], fill=(255, 255, 255))
+    return np.asarray(img).astype(np.float32) / 255.0, {
+        "scale_bar_um": float(scale_bar_um),
+        "length_px": int(length_px),
+        "thickness_px": int(thickness_px),
+        "x_um_per_px": x_um_per_px,
+    }
 
 
 def _resolve_axis(layer, axis: int | str) -> int:
@@ -146,7 +297,7 @@ def screenshot(path: str | None = None) -> dict[str, Any]:
     if path:
         from PIL import Image
 
-        out = Path(path).expanduser().resolve()
+        out = normalize_user_path(path).resolve()
         out.parent.mkdir(parents=True, exist_ok=True)
         Image.fromarray(arr).save(out)
         saved_path = str(out)
@@ -183,10 +334,8 @@ def max_projection(layer: str, axis: int | str = "z") -> dict[str, Any]:
     if idx < 0 or idx >= data.ndim:
         raise ValueError(f"axis index {idx} out of range for {data.ndim}-D layer")
 
-    proj = np.max(data, axis=idx)
-
-    scale_in = tuple(float(s) for s in L.scale)
-    new_scale = tuple(s for i, s in enumerate(scale_in) if i != idx)
+    proj = _project(data, "max", idx)
+    new_scale = _projection_scale(L, idx)
 
     suffix = axis if isinstance(axis, str) else f"ax{idx}"
     new_name = f"{L.name}_mip_{suffix}"
@@ -201,6 +350,138 @@ def max_projection(layer: str, axis: int | str = "z") -> dict[str, Any]:
         "new_layer": new.name,
         "shape": tuple(int(s) for s in proj.shape),
         "axis": idx,
+    }
+
+
+@tool(
+    description="Average-intensity projection along an axis. Use this for intensity "
+    "comparison workflows where mean signal across the z-stack matters. axis accepts "
+    "'z'/'y'/'x'/'t' or an integer index.",
+    phase="5",
+    worker=True,
+)
+def average_projection(layer: str, axis: int | str = "z") -> dict[str, Any]:
+    L = call_on_main(snapshot_layer, layer)
+    data = _materialize(L.data)
+    idx = _resolve_axis(L, axis)
+    if idx < 0 or idx >= data.ndim:
+        raise ValueError(f"axis index {idx} out of range for {data.ndim}-D layer")
+
+    proj = _project(data, "mean", idx).astype(np.float32)
+    new_scale = _projection_scale(L, idx)
+    suffix = axis if isinstance(axis, str) else f"ax{idx}"
+    new = call_on_main(
+        add_image_from_worker,
+        proj,
+        name=f"{L.name}_avg_{suffix}",
+        scale=new_scale,
+        metadata={"source_layer": L.name, "op": "average_projection", "axis": idx},
+    )
+    return {
+        "new_layer": new.name,
+        "shape": tuple(int(s) for s in proj.shape),
+        "axis": idx,
+    }
+
+
+@tool(
+    description="Export a publication-style RGB PNG from multiple channels. Each channel "
+    "can be max- or average-projected before merge. Counterstain-annotated channels "
+    "default to gray; CaLexA-like layers default to inferno. Adds a 50 um scale bar "
+    "by default.",
+    phase="5",
+    worker=True,
+)
+def export_channel_composite_png(
+    layers: list[str],
+    path: str,
+    projection: str = "max",
+    axis: int | str = "z",
+    colors: list[str] | None = None,
+    scale_bar_um: float = 50.0,
+    scale_bar_thickness_px: int | None = None,
+    scale_bar_margin_px: int = 32,
+    percentile_limits: tuple[float, float] = (0.5, 99.5),
+    add_layer: bool = True,
+) -> dict[str, Any]:
+    if not layers:
+        raise ValueError("layers must be a non-empty list")
+    if colors is not None and len(colors) != len(layers):
+        raise ValueError("colors must have the same length as layers")
+
+    planes: list[np.ndarray] = []
+    used_colors: list[str] = []
+    output_scale: tuple[float, ...] | None = None
+    for i, layer_name in enumerate(layers):
+        L = call_on_main(snapshot_layer, layer_name)
+        data = _materialize(L.data)
+        if data.ndim == 2:
+            plane = data
+            scale = tuple(float(s) for s in L.scale)
+        else:
+            idx = _resolve_axis(L, axis)
+            plane = _project(data, projection, idx)
+            scale = _projection_scale(L, idx)
+        if plane.ndim != 2:
+            raise ValueError(f"layer {layer_name!r} did not reduce to 2D; got {plane.shape}")
+        if planes and plane.shape != planes[0].shape:
+            raise ValueError(
+                f"all layers must reduce to the same YX shape; got {plane.shape} "
+                f"for {layer_name!r} vs {planes[0].shape}"
+            )
+        planes.append(_normalize_plane(plane, percentile_limits))
+        used_colors.append(colors[i] if colors is not None else _infer_export_color(layer_name))
+        if output_scale is None:
+            output_scale = scale
+
+    rgb = np.zeros((*planes[0].shape, 3), dtype=np.float32)
+    for plane, color in zip(planes, used_colors, strict=False):
+        rgb = np.clip(rgb + _apply_lut(plane, color), 0.0, 1.0)
+
+    scale_bar: dict[str, Any] | None = None
+    if output_scale is not None:
+        rgb, scale_bar = _draw_scale_bar(
+            rgb,
+            scale=output_scale,
+            scale_bar_um=scale_bar_um,
+            thickness_px=scale_bar_thickness_px,
+            margin_px=scale_bar_margin_px,
+        )
+
+    from PIL import Image
+
+    out = normalize_user_path(path).resolve()
+    out.parent.mkdir(parents=True, exist_ok=True)
+    Image.fromarray((np.clip(rgb, 0, 1) * 255).astype(np.uint8)).save(out)
+
+    layer_name: str | None = None
+    if add_layer:
+        layer = call_on_main(
+            add_image_from_worker,
+            rgb,
+            name=f"{Path(out).stem}_composite",
+            scale=output_scale or (),
+            metadata={
+                "op": "export_channel_composite_png",
+                "source_layers": list(layers),
+                "projection": projection,
+                "axis": axis,
+                "colors": used_colors,
+                "path": str(out),
+                "scale_bar": scale_bar,
+            },
+            rgb=True,
+        )
+        layer_name = layer.name
+
+    return {
+        "path": str(out),
+        "layer": layer_name,
+        "shape": tuple(int(s) for s in rgb.shape),
+        "source_layers": list(layers),
+        "projection": projection,
+        "colors": used_colors,
+        "scale_bar": scale_bar,
     }
 
 
@@ -270,7 +551,7 @@ def animate_z_rotation(
 
     viewer = get_viewer()
     viewer.dims.ndisplay = 3
-    out_path = Path(path).expanduser().resolve()
+    out_path = normalize_user_path(path).resolve()
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
     base_angles = list(viewer.camera.angles)

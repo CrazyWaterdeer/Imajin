@@ -2,7 +2,12 @@ from __future__ import annotations
 
 import pytest
 
-from imajin.io.channel_metadata import color_from_wavelengths, wavelength_nm
+from imajin.io.channel_metadata import (
+    color_from_wavelengths,
+    display_color_name,
+    rgb_from_8bit_triplet,
+    wavelength_nm,
+)
 from imajin.io.ome import _parse_ome_xml
 
 
@@ -21,6 +26,13 @@ def test_wavelengths_map_to_common_confocal_colors() -> None:
     assert color_from_wavelengths(emission_nm=520) == "green"
     assert color_from_wavelengths(emission_nm=610) == "red"
     assert color_from_wavelengths(emission_nm=670) == "ir"
+
+
+def test_display_color_helpers_parse_lsm_rgb_values() -> None:
+    assert rgb_from_8bit_triplet([0, 255, 0, 0]) == pytest.approx((0.0, 1.0, 0.0))
+    assert rgb_from_8bit_triplet([255, 255, 255, 0]) == pytest.approx((1.0, 1.0, 1.0))
+    assert display_color_name((0.0, 1.0, 0.0)) == "green"
+    assert display_color_name((1.0, 1.0, 1.0)) == "gray"
 
 
 def test_parse_ome_xml_extracts_channel_wavelengths() -> None:

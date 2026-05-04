@@ -85,6 +85,38 @@ def color_from_name(name: str | None) -> str | None:
     return None
 
 
+def display_color_name(rgb: tuple[float, float, float]) -> str | None:
+    r, g, b = rgb
+    candidates = {
+        "gray": (1.0, 1.0, 1.0),
+        "red": (1.0, 0.0, 0.0),
+        "green": (0.0, 1.0, 0.0),
+        "blue": (0.0, 0.0, 1.0),
+        "cyan": (0.0, 1.0, 1.0),
+        "magenta": (1.0, 0.0, 1.0),
+        "yellow": (1.0, 1.0, 0.0),
+    }
+    for name, target in candidates.items():
+        if all(abs(value - expected) < 1 / 255 for value, expected in zip(rgb, target)):
+            return name
+    return None
+
+
+def rgb_from_8bit_triplet(value: Any) -> tuple[float, float, float] | None:
+    if not isinstance(value, (list, tuple)) or len(value) < 3:
+        return None
+    try:
+        r, g, b = (float(value[0]), float(value[1]), float(value[2]))
+    except (TypeError, ValueError):
+        return None
+    if max(r, g, b) > 1.0:
+        r, g, b = r / 255.0, g / 255.0, b / 255.0
+    rgb = tuple(max(0.0, min(1.0, channel)) for channel in (r, g, b))
+    if not any(rgb):
+        return None
+    return rgb
+
+
 def build_channel_info(
     *,
     name: str | None = None,

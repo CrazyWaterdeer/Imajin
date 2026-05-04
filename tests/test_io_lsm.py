@@ -66,6 +66,55 @@ def test_channel_metadata_from_lsm_scan_wavelengths() -> None:
     assert metadata[0]["excitation_wavelength_nm"] == pytest.approx(488)
 
 
+def test_channel_metadata_prefers_detection_channels_over_laser_order() -> None:
+    meta = {
+        "ScanInformation": {
+            "Tracks": [
+                {
+                    # Zeiss/FIJI channel order follows DetectionChannels here.
+                    # IlluminationChannels may be listed in laser order instead.
+                    "IlluminationChannels": [
+                        {"Name": "639", "Wavelength": 639.0},
+                        {"Name": "488", "Wavelength": 488.0},
+                    ],
+                    "DetectionChannels": [
+                        {
+                            "ChannelName": "Ch1",
+                            "DyeName": "Alexa Fluor 488",
+                            "SpiWavelengthStart": 0.0,
+                            "SpiWavelengthStop": 550.0,
+                        },
+                        {
+                            "ChannelName": "Ch2",
+                            "DyeName": "Alexa Fluor 633",
+                            "SpiWavelengthStart": 644.0,
+                            "SpiWavelengthStop": 1000.0,
+                        },
+                    ],
+                    "DataChannels": [
+                        {"Name": "Ch1"},
+                        {"Name": "Ch2"},
+                    ],
+                }
+            ]
+        },
+        "ChannelColors": {
+            "ColorNames": ["Ch1", "Ch2"],
+            "Colors": [[0, 255, 0, 0], [255, 255, 255, 0]],
+        },
+    }
+
+    metadata = _channel_metadata(meta)
+
+    assert [m["name"] for m in metadata] == ["Ch1", "Ch2"]
+    assert [m["dye_name"] for m in metadata] == ["Alexa Fluor 488", "Alexa Fluor 633"]
+    assert [m["color"] for m in metadata] == ["green", "ir"]
+    assert metadata[0]["display_color_rgb"] == pytest.approx((0.0, 1.0, 0.0))
+    assert metadata[0]["display_color_name"] == "green"
+    assert metadata[1]["display_color_rgb"] == pytest.approx((1.0, 1.0, 1.0))
+    assert metadata[1]["display_color_name"] == "gray"
+
+
 def test_array_nbytes_uses_shape_and_dtype() -> None:
     assert array_nbytes((2, 3, 4), np.uint16) == 48
 

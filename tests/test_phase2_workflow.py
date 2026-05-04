@@ -220,12 +220,60 @@ def test_analyze_target_cells_full_path(viewer, monkeypatch) -> None:
     assert res["ok"] is True
     assert res["target_channel"] == "green_target"
     assert res["target_source"] == "annotation"
+    assert res["segmentation_method"] == "target_objects"
     assert res["n_objects"] == 2
     assert res["has_physical_units"] is True
     assert res["voxel_scale"] == [0.5, 0.5]
     df = state.get_table(res["table_name"])
     assert "mean_intensity_green_target" in df.columns
     assert "area_um2" in df.columns
+
+
+def test_analyze_target_cells_keeps_z_stack_measurement_3d(viewer) -> None:
+    img = np.zeros((4, 64, 64), dtype=np.float32)
+    img[1:4, 20:32, 22:34] = 100.0
+    viewer.add_image(
+        img,
+        name="vol_target",
+        scale=(1.0, 0.4, 0.4),
+        metadata={"axes": "ZYX"},
+    )
+
+    res = workflows.analyze_target_cells(
+        target="vol_target",
+        segmentation_options={
+            "background_radius": 8,
+            "min_size": 20,
+            "smoothing_sigma": 0,
+        },
+    )
+
+    assert res["ok"] is True
+    assert res["analysis_dim"] == "3d"
+    assert res["do_3D"] is True
+    assert "volume_um3" in res["table_columns"]
+    df = state.get_table(res["table_name"])
+    assert df["volume_um3"].iloc[0] > 0
+
+
+def test_analyze_target_cells_saves_result_bundle(viewer, tmp_path) -> None:
+    from imajin.project import create_project
+
+    create_project(tmp_path / "project")
+    img = np.zeros((256, 256), dtype=np.float32)
+    img[80:95, 90:105] = 100.0
+    img[150:168, 140:158] = 80.0
+    viewer.add_image(img, name="green_target", scale=(0.5, 0.5))
+
+    res = workflows.analyze_target_cells(target="green_target")
+
+    assert res["ok"] is True
+    assert res["result_bundle_path"].startswith(
+        str(tmp_path / "project" / "reports" / "bundles")
+    )
+    assert len(res["result_files"]["labels"]) == 1
+    assert len(res["result_files"]["tables"]) == 1
+    assert len(res["result_files"]["qc"]) == 1
 
 
 def test_analyze_target_cells_with_explicit_target(viewer, monkeypatch) -> None:
@@ -246,7 +294,7 @@ def test_analyze_target_cells_reports_zero_objects(viewer, monkeypatch) -> None:
     empty_mask = np.zeros_like(img, dtype=np.int32)
     _stub_cellpose(monkeypatch, empty_mask)
 
-    res = workflows.analyze_target_cells()
+    res = workflows.analyze_target_cells(segmentation_method="cellpose_sam")
     assert res["ok"] is False
     assert res["stage"] == "segment"
     assert "zero objects" in res["error"]
