@@ -72,7 +72,7 @@ def test_threshold_noise_floor_ignores_non_finite() -> None:
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `uv run --project /home/jin/py314 pytest tests/test_tools_segment.py::test_threshold_noise_floor_returns_value_above_dark_region -v`
+Run: `uv run pytest tests/test_tools_segment.py::test_threshold_noise_floor_returns_value_above_dark_region -v`
 
 Expected: FAIL with `AttributeError: module 'imajin.tools.segment' has no attribute '_threshold_noise_floor'`.
 
@@ -106,7 +106,7 @@ def _threshold_noise_floor(
 
 - [ ] **Step 4: Run all three tests to verify they pass**
 
-Run: `uv run --project /home/jin/py314 pytest tests/test_tools_segment.py -k threshold_noise_floor -v`
+Run: `uv run pytest tests/test_tools_segment.py -k threshold_noise_floor -v`
 
 Expected: 3 passed.
 
@@ -161,7 +161,7 @@ def test_intersect_labels_with_mask_renumbers_when_requested() -> None:
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `uv run --project /home/jin/py314 pytest tests/test_tools_segment.py::test_intersect_labels_with_mask_zeros_outside -v`
+Run: `uv run pytest tests/test_tools_segment.py::test_intersect_labels_with_mask_zeros_outside -v`
 
 Expected: FAIL with `AttributeError`.
 
@@ -196,7 +196,7 @@ def _intersect_labels_with_mask(
 
 - [ ] **Step 4: Run tests**
 
-Run: `uv run --project /home/jin/py314 pytest tests/test_tools_segment.py -k intersect_labels -v`
+Run: `uv run pytest tests/test_tools_segment.py -k intersect_labels -v`
 
 Expected: 2 passed.
 
@@ -307,7 +307,7 @@ def test_detect_counterstain_filters_by_sample_layers(viewer) -> None:
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `uv run --project /home/jin/py314 pytest tests/test_tools_channels.py -k detect_counterstain -v`
+Run: `uv run pytest tests/test_tools_channels.py -k detect_counterstain -v`
 
 Expected: All fail with `AttributeError: module 'imajin.tools.channels' has no attribute 'detect_counterstain_channel'`.
 
@@ -434,7 +434,7 @@ def detect_counterstain_channel(
 
 - [ ] **Step 4: Run all detect tests to verify they pass**
 
-Run: `uv run --project /home/jin/py314 pytest tests/test_tools_channels.py -k detect_counterstain -v`
+Run: `uv run pytest tests/test_tools_channels.py -k detect_counterstain -v`
 
 Expected: 5 passed.
 
@@ -512,7 +512,7 @@ def test_segment_expression_domain_labels_layer_naming(viewer) -> None:
 
 - [ ] **Step 2: Run tests to verify failure**
 
-Run: `uv run --project /home/jin/py314 pytest tests/test_tools_segment.py -k segment_expression_domain -v`
+Run: `uv run pytest tests/test_tools_segment.py -k segment_expression_domain -v`
 
 Expected: All fail with `AttributeError`.
 
@@ -754,7 +754,7 @@ def _dilate_binary_um(
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `uv run --project /home/jin/py314 pytest tests/test_tools_segment.py -k segment_expression_domain -v`
+Run: `uv run pytest tests/test_tools_segment.py -k segment_expression_domain -v`
 
 Expected: 3 passed.
 
@@ -834,7 +834,7 @@ def test_segment_expression_domain_skips_non_nuclear_counterstain(viewer) -> Non
 
 - [ ] **Step 2: Run tests**
 
-Run: `uv run --project /home/jin/py314 pytest tests/test_tools_segment.py -k counterstain -v`
+Run: `uv run pytest tests/test_tools_segment.py -k counterstain -v`
 
 Expected: 2 passed (logic was implemented in Task 4).
 
@@ -895,7 +895,7 @@ def test_segment_target_objects_default_unchanged(viewer) -> None:
 
 - [ ] **Step 2: Run tests to confirm boundary test fails, default still passes**
 
-Run: `uv run --project /home/jin/py314 pytest tests/test_tools_segment.py -k "segment_target_objects_boundary_mask or segment_target_objects_default_unchanged" -v`
+Run: `uv run pytest tests/test_tools_segment.py -k "segment_target_objects_boundary_mask or segment_target_objects_default_unchanged" -v`
 
 Expected: `boundary_mask_keeps_only_inside` fails with `TypeError: unexpected keyword argument 'boundary_mask'`. The default-unchanged test passes (regression baseline).
 
@@ -967,13 +967,13 @@ And in the final return dict (around line 1100), insert:
 
 - [ ] **Step 4: Run tests**
 
-Run: `uv run --project /home/jin/py314 pytest tests/test_tools_segment.py -k "segment_target_objects_boundary_mask or segment_target_objects_default_unchanged" -v`
+Run: `uv run pytest tests/test_tools_segment.py -k "segment_target_objects_boundary_mask or segment_target_objects_default_unchanged" -v`
 
 Expected: 2 passed.
 
 - [ ] **Step 5: Run full segment test file to verify no regression**
 
-Run: `uv run --project /home/jin/py314 pytest tests/test_tools_segment.py -v --no-header -q`
+Run: `uv run pytest tests/test_tools_segment.py -v --no-header -q`
 
 Expected: All previous tests still pass.
 
@@ -1027,7 +1027,7 @@ def test_qc_png_renders_secondary_outline(tmp_path) -> None:
 
 - [ ] **Step 2: Run test to verify failure**
 
-Run: `uv run --project /home/jin/py314 pytest tests/test_tools_segment.py::test_qc_png_renders_secondary_outline -v`
+Run: `uv run pytest tests/test_tools_segment.py::test_qc_png_renders_secondary_outline -v`
 
 Expected: FAIL with `TypeError: unexpected keyword argument 'secondary_outline_mask'`.
 
@@ -1076,7 +1076,7 @@ def _write_segmentation_qc_png(
 
 - [ ] **Step 4: Run test**
 
-Run: `uv run --project /home/jin/py314 pytest tests/test_tools_segment.py::test_qc_png_renders_secondary_outline -v`
+Run: `uv run pytest tests/test_tools_segment.py::test_qc_png_renders_secondary_outline -v`
 
 Expected: PASS.
 
@@ -1163,7 +1163,7 @@ def test_recipe_round_trip_without_domain_defaults_none(tmp_path) -> None:
 
 - [ ] **Step 2: Run tests to confirm failure**
 
-Run: `uv run --project /home/jin/py314 pytest tests/test_project_persistence.py -k "recipe_round_trip" -v`
+Run: `uv run pytest tests/test_project_persistence.py -k "recipe_round_trip" -v`
 
 Expected: FAIL with `TypeError: put_recipe() got an unexpected keyword argument 'cell_diameter_um'` or `AttributeError`.
 
@@ -1240,13 +1240,13 @@ After those lines, add:
 
 - [ ] **Step 4: Run tests to verify pass**
 
-Run: `uv run --project /home/jin/py314 pytest tests/test_project_persistence.py -k "recipe_round_trip" -v`
+Run: `uv run pytest tests/test_project_persistence.py -k "recipe_round_trip" -v`
 
 Expected: 2 passed.
 
 - [ ] **Step 5: Run all persistence tests to ensure no regression**
 
-Run: `uv run --project /home/jin/py314 pytest tests/test_project_persistence.py -v`
+Run: `uv run pytest tests/test_project_persistence.py -v`
 
 Expected: All passed.
 
@@ -1291,7 +1291,7 @@ def test_create_analysis_recipe_passes_through_domain(viewer) -> None:
 
 - [ ] **Step 2: Run test to verify failure**
 
-Run: `uv run --project /home/jin/py314 pytest tests/test_phase3_experiment.py::test_create_analysis_recipe_passes_through_domain -v`
+Run: `uv run pytest tests/test_phase3_experiment.py::test_create_analysis_recipe_passes_through_domain -v`
 
 Expected: FAIL.
 
@@ -1340,13 +1340,13 @@ If the original `create_analysis_recipe` had a different return shape, preserve 
 
 - [ ] **Step 4: Run test to verify pass**
 
-Run: `uv run --project /home/jin/py314 pytest tests/test_phase3_experiment.py::test_create_analysis_recipe_passes_through_domain -v`
+Run: `uv run pytest tests/test_phase3_experiment.py::test_create_analysis_recipe_passes_through_domain -v`
 
 Expected: PASS.
 
 - [ ] **Step 5: Run all experiment tests for regression**
 
-Run: `uv run --project /home/jin/py314 pytest tests/test_phase3_experiment.py -v`
+Run: `uv run pytest tests/test_phase3_experiment.py -v`
 
 Expected: All passed.
 
@@ -1399,7 +1399,7 @@ def test_derive_size_params_handles_missing_voxel() -> None:
 
 - [ ] **Step 2: Run tests to verify failure**
 
-Run: `uv run --project /home/jin/py314 pytest tests/test_phase2_workflow.py -k derive_size_params -v`
+Run: `uv run pytest tests/test_phase2_workflow.py -k derive_size_params -v`
 
 Expected: FAIL with `ImportError`.
 
@@ -1429,7 +1429,7 @@ Confirm `import numpy as np` is present at the top of `src/imajin/tools/workflow
 
 - [ ] **Step 4: Run tests to verify pass**
 
-Run: `uv run --project /home/jin/py314 pytest tests/test_phase2_workflow.py -k derive_size_params -v`
+Run: `uv run pytest tests/test_phase2_workflow.py -k derive_size_params -v`
 
 Expected: 3 passed.
 
@@ -1504,7 +1504,7 @@ def test_analyze_target_cells_single_tier_unchanged(viewer) -> None:
 
 - [ ] **Step 2: Run tests to verify failure**
 
-Run: `uv run --project /home/jin/py314 pytest tests/test_phase2_workflow.py -k "two_tier or single_tier_unchanged" -v`
+Run: `uv run pytest tests/test_phase2_workflow.py -k "two_tier or single_tier_unchanged" -v`
 
 Expected: `two_tier_produces_long_format` fails with `TypeError: unexpected keyword argument 'domain_strategy'`. `single_tier_unchanged` passes (regression baseline).
 
@@ -1676,13 +1676,13 @@ This avoids running domain segmentation twice.
 
 - [ ] **Step 4: Run tests to verify pass**
 
-Run: `uv run --project /home/jin/py314 pytest tests/test_phase2_workflow.py -k "two_tier or single_tier_unchanged" -v`
+Run: `uv run pytest tests/test_phase2_workflow.py -k "two_tier or single_tier_unchanged" -v`
 
 Expected: 2 passed.
 
 - [ ] **Step 5: Run full workflow test file for regression**
 
-Run: `uv run --project /home/jin/py314 pytest tests/test_phase2_workflow.py -v`
+Run: `uv run pytest tests/test_phase2_workflow.py -v`
 
 Expected: All tests pass.
 
@@ -1733,7 +1733,7 @@ def test_segment_target_objects_qc_includes_boundary_outline(viewer, tmp_path) -
 
 - [ ] **Step 2: Run test to verify failure**
 
-Run: `uv run --project /home/jin/py314 pytest tests/test_tools_segment.py::test_segment_target_objects_qc_includes_boundary_outline -v`
+Run: `uv run pytest tests/test_tools_segment.py::test_segment_target_objects_qc_includes_boundary_outline -v`
 
 Expected: FAIL because no secondary outline is being passed yet.
 
@@ -1808,13 +1808,13 @@ Then update the `_save_qc_png` call to pass it through:
 
 - [ ] **Step 4: Run test to verify pass**
 
-Run: `uv run --project /home/jin/py314 pytest tests/test_tools_segment.py::test_segment_target_objects_qc_includes_boundary_outline -v`
+Run: `uv run pytest tests/test_tools_segment.py::test_segment_target_objects_qc_includes_boundary_outline -v`
 
 Expected: PASS.
 
 - [ ] **Step 5: Run full segment tests for regression**
 
-Run: `uv run --project /home/jin/py314 pytest tests/test_tools_segment.py -v --no-header`
+Run: `uv run pytest tests/test_tools_segment.py -v --no-header`
 
 Expected: All passed.
 
@@ -1886,13 +1886,13 @@ def test_two_tier_recovers_cluster_periphery_vs_single_tier(viewer) -> None:
 
 - [ ] **Step 2: Run the test**
 
-Run: `uv run --project /home/jin/py314 pytest tests/test_phase2_workflow.py::test_two_tier_recovers_cluster_periphery_vs_single_tier -v`
+Run: `uv run pytest tests/test_phase2_workflow.py::test_two_tier_recovers_cluster_periphery_vs_single_tier -v`
 
 Expected: PASS. If it fails because `cell_area <= single_area`, this is a real signal — the boundary-grow flow is not actually recovering periphery, indicating a bug in Task 11 wiring (likely the `boundary_mask` plumbing).
 
 - [ ] **Step 3: Run the full suite**
 
-Run: `uv run --project /home/jin/py314 pytest tests/ -v --no-header`
+Run: `uv run pytest tests/ -v --no-header`
 
 Expected: All tests pass.
 
@@ -1936,7 +1936,7 @@ All names match across tasks.
 
 ## Execution Notes
 
-- Run `uv run --project /home/jin/py314 pytest <path>` consistently (project rule from `~/CLAUDE.md`).
+- Run `uv run pytest <path>` consistently (project rule from `~/CLAUDE.md`).
 - Each task is an independent commit. Avoid amending or batching commits.
 - If Task 11 wiring causes the integration test in Task 13 to fail, debug `boundary_mask` plumbing first (likely culprit: `seg_options.setdefault("boundary_mask", ...)` not reaching `segment_target_objects`).
 - The `viewer` fixture in `tests/conftest.py` already auto-resets channel/sample annotations between tests.
