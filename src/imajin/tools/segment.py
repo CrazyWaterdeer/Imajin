@@ -346,6 +346,26 @@ def _intersect_labels_with_mask(
     return remap[out]
 
 
+def _dilate_binary_um(
+    binary: np.ndarray,
+    *,
+    spacing: tuple[float, ...],
+    radius_um: float,
+) -> np.ndarray:
+    from scipy import ndimage as ndi
+
+    if radius_um <= 0:
+        return binary
+    pixel_radius_per_axis: list[int] = []
+    for sp in spacing[-binary.ndim:]:
+        pr = max(1, int(round(float(radius_um) / float(sp))))
+        pixel_radius_per_axis.append(pr)
+    structure = np.ones(
+        tuple(2 * r + 1 for r in pixel_radius_per_axis), dtype=bool
+    )
+    return ndi.binary_dilation(binary, structure=structure)
+
+
 def _xy_filter_size(ndim: int, radius: int) -> tuple[int, ...]:
     width = max(1, int(radius) * 2 + 1)
     if ndim == 3:
@@ -1159,4 +1179,212 @@ def segment_target_objects(
         "qc_png_path": saved_qc_png,
         "qc_png_error": qc_png_error,
         "qc_png_skipped_reason": qc_png_skipped_reason,
+    }
+
+
+@tool(
+    description="Segment a permissive expression domain on a reporter channel using "
+    "a noise-floor threshold (median + k*MAD of the dark percentile). No background "
+    "subtraction, so cluster interiors are preserved. Use as Tier 1 of two-tier "
+    "expression analyses where baseline expression must be captured alongside "
+    "active sub-objects. Returns one or a few large connected-component labels.",
+    phase="2",
+    worker=True,
+)
+def segment_expression_domain(
+    image_layer: str,
+    threshold_strategy: str = "noise_floor",
+    k_mad: float = 5.0,
+    dark_percentile: float = 10.0,
+    counterstain_layer: str | None = None,
+    counterstain_dilation_um: float = 0.0,
+    is_nuclear: bool | None = None,
+    min_area_um2: float = 5.0,
+    dilation_um: float = 0.0,
+    save_qc_png: bool = True,
+    qc_png_path: str | None = None,
+) -> dict[str, Any]:
+    if threshold_strategy != "noise_floor":
+        raise ValueError(
+            f"threshold_strategy must be 'noise_floor' (got {threshold_strategy!r})"
+        )
+
+    L = call_on_main(snapshot_layer, image_layer)
+    data = L.data
+    data = np.asarray(data.compute() if hasattr(data, "compute") else data)
+    raw = np.asarray(data, dtype=np.float32)
+
+    axes = _layer_axes_for_seg(L, raw.ndim)
+    if "T" in axes:
+        raise ValueError(
+            f"segment_expression_domain refuses to run on a time-series layer "
+            f"({axes}, shape {raw.shape})."
+        )
+    if raw.ndim < 2 or raw.ndim > 3:
+        raise ValueError(
+            f"segment_expression_domain expects 2D (YX) or 3D (ZYX), got {raw.shape}."
+        )
+
+    spacing = _voxel_spacing(tuple(L.scale), raw.ndim)
+    threshold = _threshold_noise_floor(
+        raw, k_mad=k_mad, dark_percentile=dark_percentile
+    )
+    binary = np.isfinite(raw) & (raw > threshold)
+
+    counterstain_used = False
+    counterstain_warnings: list[str] = []
+    if counterstain_layer is not None:
+        if not is_nuclear:
+            counterstain_warnings.append(
+                "counterstain marker is non-nuclear or unknown; reporter-only "
+                "domain used"
+            )
+        else:
+            cs_layer = call_on_main(snapshot_layer, counterstain_layer)
+            cs_data = cs_layer.data
+            cs_data = np.asarray(
+                cs_data.compute() if hasattr(cs_data, "compute") else cs_data,
+                dtype=np.float32,
+            )
+            if cs_data.shape != raw.shape:
+                counterstain_warnings.append(
+                    f"counterstain shape {cs_data.shape} differs from reporter "
+                    f"shape {raw.shape}; counterstain ignored"
+                )
+            else:
+                from skimage import filters as _filters
+                cs_finite = cs_data[np.isfinite(cs_data)]
+                if cs_finite.size and float(cs_finite.max()) > float(cs_finite.min()):
+                    cs_threshold = float(_filters.threshold_otsu(cs_finite))
+                    cs_binary = np.isfinite(cs_data) & (cs_data > cs_threshold)
+                    if counterstain_dilation_um > 0 and spacing is not None:
+                        cs_binary = _dilate_binary_um(
+                            cs_binary,
+                            spacing=spacing,
+                            radius_um=counterstain_dilation_um,
+                        )
+                    binary = binary & cs_binary
+                    counterstain_used = True
+                else:
+                    counterstain_warnings.append(
+                        "counterstain has no usable signal; reporter-only domain used"
+                    )
+
+    if min_area_um2 > 0 and spacing is not None:
+        physical_min_size = _min_size_from_physical(
+            min_size=None,
+            min_volume_um3=None,
+            min_area_um2=min_area_um2,
+            spacing=spacing,
+            ndim=raw.ndim,
+        )
+        if physical_min_size:
+            binary = _remove_small_binary_objects(binary, physical_min_size)
+
+    if dilation_um > 0 and spacing is not None:
+        binary = _dilate_binary_um(binary, spacing=spacing, radius_um=dilation_um)
+
+    if not np.any(binary):
+        empty = np.zeros(raw.shape, dtype=np.int32)
+        out_name = f"{L.name}_domain"
+        layer = call_on_main(
+            add_labels_from_worker,
+            empty,
+            name=out_name,
+            scale=tuple(L.scale),
+            metadata={
+                "source_layer": L.name,
+                "segmentation_method": "expression_domain",
+                "noise_floor_threshold": float(threshold),
+                "k_mad": float(k_mad),
+                "dark_percentile": float(dark_percentile),
+                "counterstain_used": counterstain_used,
+                "counterstain_warnings": counterstain_warnings,
+                "empty_mask": True,
+            },
+        )
+        return {
+            "labels_layer": layer.name,
+            "n_components": 0,
+            "domain_area_um2": 0.0,
+            "noise_floor_threshold": float(threshold),
+            "counterstain_used": counterstain_used,
+            "counterstain_warnings": counterstain_warnings,
+            "qc_png_path": None,
+            "qc_png_error": None,
+            "qc_png_skipped_reason": "empty mask",
+            "empty_mask": True,
+        }
+
+    from skimage import measure as _measure
+
+    labels = _measure.label(binary, connectivity=1).astype(np.int32)
+    n_components = int(labels.max())
+    if spacing is not None and len(spacing) >= 2:
+        if raw.ndim == 3:
+            voxel_area = float(spacing[1] * spacing[2])
+        else:
+            voxel_area = float(spacing[0] * spacing[1])
+        domain_area_um2 = float(np.count_nonzero(labels)) * voxel_area
+    else:
+        domain_area_um2 = float(np.count_nonzero(labels))
+
+    out_name = f"{L.name}_domain"
+    layer = call_on_main(
+        add_labels_from_worker,
+        labels,
+        name=out_name,
+        scale=tuple(L.scale),
+        metadata={
+            "source_layer": L.name,
+            "segmentation_method": "expression_domain",
+            "noise_floor_threshold": float(threshold),
+            "k_mad": float(k_mad),
+            "dark_percentile": float(dark_percentile),
+            "counterstain_used": counterstain_used,
+            "counterstain_warnings": counterstain_warnings,
+            "n_components": n_components,
+            "domain_area_um2": domain_area_um2,
+            "empty_mask": False,
+        },
+    )
+
+    saved_qc_png: str | None = None
+    qc_png_error: str | None = None
+    qc_png_skipped_reason: str | None = None
+    if save_qc_png:
+        try:
+            out_path = (
+                normalize_user_path(qc_png_path).resolve()
+                if qc_png_path
+                else _default_qc_png_path(layer.name)
+            )
+            saved_qc_png, qc_png_skipped_reason = _save_qc_png(
+                raw,
+                labels,
+                out_path,
+                labels_layer=layer.name,
+                source_layer=L.name,
+                method="expression_domain",
+                force=qc_png_path is not None,
+            )
+            if saved_qc_png:
+                try:
+                    layer.metadata["qc_png_path"] = saved_qc_png
+                except Exception:
+                    pass
+        except Exception as exc:  # noqa: BLE001
+            qc_png_error = f"{type(exc).__name__}: {exc}"
+
+    return {
+        "labels_layer": layer.name,
+        "n_components": n_components,
+        "domain_area_um2": domain_area_um2,
+        "noise_floor_threshold": float(threshold),
+        "counterstain_used": counterstain_used,
+        "counterstain_warnings": counterstain_warnings,
+        "qc_png_path": saved_qc_png,
+        "qc_png_error": qc_png_error,
+        "qc_png_skipped_reason": qc_png_skipped_reason,
+        "empty_mask": False,
     }

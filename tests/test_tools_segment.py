@@ -267,3 +267,53 @@ def test_intersect_labels_with_mask_renumbers_when_requested() -> None:
 
     unique = sorted(np.unique(out).tolist())
     assert unique == [0, 1, 2]
+
+
+def test_segment_expression_domain_captures_dim_and_bright_regions(viewer) -> None:
+    rng = np.random.default_rng(0)
+    img = np.zeros((200, 200), dtype=np.float32)
+    img[:, :] = rng.normal(5.0, 1.0, img.shape)
+    img[40:80, 40:80] += 30.0
+    img[100:160, 100:160] += 8.0
+
+    viewer.add_image(img, name="reporter")
+
+    res = segment.segment_expression_domain(
+        "reporter",
+        k_mad=5.0,
+        dark_percentile=10.0,
+        min_area_um2=1.0,
+    )
+
+    assert res["empty_mask"] is False
+    assert res["n_components"] >= 2
+    labels = np.asarray(viewer.layers[res["labels_layer"]].data)
+    assert labels[60, 60] > 0, "bright region must be inside domain"
+    assert labels[130, 130] > 0, "dim region must also be inside domain"
+    assert labels[10, 190] == 0, "background must be excluded"
+
+
+def test_segment_expression_domain_empty_mask_for_pure_noise(viewer) -> None:
+    rng = np.random.default_rng(1)
+    img = rng.normal(5.0, 1.0, (100, 100)).astype(np.float32)
+    viewer.add_image(img, name="noise_only")
+
+    res = segment.segment_expression_domain(
+        "noise_only",
+        k_mad=20.0,
+        dark_percentile=10.0,
+    )
+
+    assert res["empty_mask"] is True
+    assert res["n_components"] == 0
+
+
+def test_segment_expression_domain_labels_layer_naming(viewer) -> None:
+    img = np.zeros((50, 50), dtype=np.float32)
+    img[10:40, 10:40] = 100.0
+    viewer.add_image(img, name="my_reporter")
+
+    res = segment.segment_expression_domain("my_reporter", k_mad=3.0)
+
+    assert res["labels_layer"] == "my_reporter_domain"
+    assert "my_reporter_domain" in [L.name for L in viewer.layers]
