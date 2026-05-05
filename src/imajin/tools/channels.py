@@ -157,7 +157,6 @@ def detect_counterstain_channel(
 ) -> dict[str, Any]:
     from imajin.agent.state import (
         get_sample,
-        list_channel_annotations,
         viewer_or_none,
     )
 

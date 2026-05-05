@@ -114,18 +114,14 @@ def test_resolve_channel_preserves_fiji_style_channel_numbers(viewer) -> None:
 
 
 def test_detect_counterstain_returns_annotated_topro(viewer) -> None:
-    import numpy as np
-    from imajin.tools import channels as channels_tools
-    from imajin.agent.state import put_channel_annotation
-
     viewer.add_image(np.zeros((8, 8), dtype=np.uint16), name="ch3_633")
-    put_channel_annotation(
+    state.put_channel_annotation(
         layer_name="ch3_633",
         role="counterstain",
         marker="topro",
     )
 
-    result = channels_tools.detect_counterstain_channel()
+    result = channels.detect_counterstain_channel()
 
     assert result["counterstain_layer"] == "ch3_633"
     assert result["counterstain_marker"] == "topro"
@@ -135,30 +131,23 @@ def test_detect_counterstain_returns_annotated_topro(viewer) -> None:
 
 
 def test_detect_counterstain_marks_non_nuclear_phalloidin(viewer) -> None:
-    import numpy as np
-    from imajin.tools import channels as channels_tools
-    from imajin.agent.state import put_channel_annotation
-
     viewer.add_image(np.zeros((8, 8), dtype=np.uint16), name="ch_actin")
-    put_channel_annotation(
+    state.put_channel_annotation(
         layer_name="ch_actin",
         role="counterstain",
         marker="phalloidin",
     )
 
-    result = channels_tools.detect_counterstain_channel()
+    result = channels.detect_counterstain_channel()
     assert result["counterstain_marker"] == "phalloidin"
     assert result["is_nuclear"] is False
 
 
 def test_detect_counterstain_infers_from_633_layer_name(viewer) -> None:
-    import numpy as np
-    from imajin.tools import channels as channels_tools
-
     viewer.add_image(np.zeros((8, 8), dtype=np.uint16), name="Ch3-633")
     viewer.add_image(np.zeros((8, 8), dtype=np.uint16), name="Ch1-488")
 
-    result = channels_tools.detect_counterstain_channel()
+    result = channels.detect_counterstain_channel()
 
     assert result["counterstain_layer"] == "Ch3-633"
     assert result["confidence"] == "inferred"
@@ -168,12 +157,9 @@ def test_detect_counterstain_infers_from_633_layer_name(viewer) -> None:
 
 
 def test_detect_counterstain_returns_none_when_absent(viewer) -> None:
-    import numpy as np
-    from imajin.tools import channels as channels_tools
-
     viewer.add_image(np.zeros((8, 8), dtype=np.uint16), name="Ch1-488")
 
-    result = channels_tools.detect_counterstain_channel()
+    result = channels.detect_counterstain_channel()
     assert result["counterstain_layer"] is None
     assert result["confidence"] == "none"
     assert result["needs_user_confirmation"] is False
@@ -181,16 +167,11 @@ def test_detect_counterstain_returns_none_when_absent(viewer) -> None:
 
 
 def test_detect_counterstain_filters_by_sample_layers(viewer) -> None:
-    import numpy as np
-    from imajin.tools import channels as channels_tools
-    from imajin.agent.state import put_channel_annotation, put_sample
-
     viewer.add_image(np.zeros((8, 8), dtype=np.uint16), name="A_topro")
     viewer.add_image(np.zeros((8, 8), dtype=np.uint16), name="B_topro")
-    put_channel_annotation(layer_name="A_topro", role="counterstain", marker="topro")
-    put_channel_annotation(layer_name="B_topro", role="counterstain", marker="topro")
+    state.put_channel_annotation(layer_name="A_topro", role="counterstain", marker="topro")
+    state.put_channel_annotation(layer_name="B_topro", role="counterstain", marker="topro")
+    state.put_sample(sample_name="sampleA", layers=["A_topro"])
 
-    put_sample(sample_name="sampleA", layers=["A_topro"])
-
-    result = channels_tools.detect_counterstain_channel(sample_name="sampleA")
+    result = channels.detect_counterstain_channel(sample_name="sampleA")
     assert result["counterstain_layer"] == "A_topro"
