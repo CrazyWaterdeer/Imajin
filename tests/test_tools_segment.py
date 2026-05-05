@@ -317,3 +317,56 @@ def test_segment_expression_domain_labels_layer_naming(viewer) -> None:
 
     assert res["labels_layer"] == "my_reporter_domain"
     assert "my_reporter_domain" in [L.name for L in viewer.layers]
+
+
+def test_segment_expression_domain_intersects_with_nuclear_counterstain(viewer) -> None:
+    rng = np.random.default_rng(2)
+    reporter = np.zeros((200, 200), dtype=np.float32)
+    reporter[:, :] = rng.normal(5.0, 1.0, reporter.shape)
+    reporter[20:180, 20:180] += 30.0
+
+    counterstain = np.zeros_like(reporter)
+    counterstain[40:80, 40:80] = 200.0
+    counterstain[100:140, 100:140] = 200.0
+
+    viewer.add_image(reporter, name="reporter")
+    viewer.add_image(counterstain, name="topro")
+
+    res = segment.segment_expression_domain(
+        "reporter",
+        k_mad=5.0,
+        counterstain_layer="topro",
+        is_nuclear=True,
+        counterstain_dilation_um=0.0,
+        min_area_um2=0.0,
+    )
+
+    labels = np.asarray(viewer.layers[res["labels_layer"]].data)
+    assert res["counterstain_used"] is True
+    assert res["counterstain_warnings"] == []
+    assert labels[60, 60] > 0
+    assert labels[120, 120] > 0
+    assert labels[90, 90] == 0, "between nuclei must be excluded by counterstain"
+
+
+def test_segment_expression_domain_skips_non_nuclear_counterstain(viewer) -> None:
+    reporter = np.zeros((100, 100), dtype=np.float32)
+    reporter[20:80, 20:80] = 50.0
+    counterstain = np.zeros_like(reporter)
+    counterstain[10:90, 10:90] = 200.0
+
+    viewer.add_image(reporter, name="rep2")
+    viewer.add_image(counterstain, name="actin")
+
+    res = segment.segment_expression_domain(
+        "rep2",
+        k_mad=3.0,
+        counterstain_layer="actin",
+        is_nuclear=False,
+        min_area_um2=0.0,
+    )
+
+    assert res["counterstain_used"] is False
+    assert any(
+        "non-nuclear" in w for w in res["counterstain_warnings"]
+    )
