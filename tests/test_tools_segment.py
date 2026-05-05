@@ -214,3 +214,29 @@ def test_segment_target_objects_keeps_cluster_without_split(viewer) -> None:
     assert res["object_unit"] == "object_or_roi"
     assert res["n_objects"] == 1
     assert labels[40, 35] == labels[45, 60] != 0
+
+
+def test_threshold_noise_floor_returns_value_above_dark_region() -> None:
+    rng = np.random.default_rng(42)
+    img = np.zeros((200, 200), dtype=np.float32)
+    img[:, :100] = rng.normal(10.0, 1.0, (200, 100))
+    img[:, 100:] = 100.0
+
+    t = segment._threshold_noise_floor(img, k_mad=5.0, dark_percentile=10.0)
+
+    assert 10.0 < t < 25.0, f"threshold {t} should sit above dark median + a few sigma"
+    assert t < 100.0, "threshold must stay below the bright region"
+
+
+def test_threshold_noise_floor_handles_constant_image() -> None:
+    img = np.full((50, 50), 7.0, dtype=np.float32)
+    t = segment._threshold_noise_floor(img, k_mad=5.0, dark_percentile=10.0)
+    assert t == pytest.approx(7.0)
+
+
+def test_threshold_noise_floor_ignores_non_finite() -> None:
+    img = np.full((50, 50), np.nan, dtype=np.float32)
+    img[:25, :25] = 5.0
+    t = segment._threshold_noise_floor(img, k_mad=3.0, dark_percentile=20.0)
+    assert np.isfinite(t)
+    assert t >= 5.0

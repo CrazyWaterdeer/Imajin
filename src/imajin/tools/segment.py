@@ -382,6 +382,29 @@ def _robust_background_sigma(corrected: np.ndarray) -> float:
     return 0.0
 
 
+def _threshold_noise_floor(
+    image: np.ndarray,
+    *,
+    k_mad: float,
+    dark_percentile: float,
+) -> float:
+    finite = np.asarray(image[np.isfinite(image)], dtype=np.float32)
+    if finite.size == 0:
+        return 0.0
+    if float(finite.max()) <= float(finite.min()):
+        return float(finite.min())
+    cutoff = float(np.percentile(finite, dark_percentile))
+    dark = finite[finite <= cutoff]
+    if dark.size == 0:
+        dark = finite
+    med = float(np.median(dark))
+    mad = float(np.median(np.abs(dark - med)))
+    sigma = 1.4826 * mad
+    if not np.isfinite(sigma) or sigma <= 0.0:
+        return med
+    return med + float(k_mad) * sigma
+
+
 def _target_object_threshold(
     corrected: np.ndarray,
     *,
