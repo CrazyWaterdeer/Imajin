@@ -370,3 +370,36 @@ def test_segment_expression_domain_skips_non_nuclear_counterstain(viewer) -> Non
     assert any(
         "non-nuclear" in w for w in res["counterstain_warnings"]
     )
+
+
+def test_segment_target_objects_boundary_mask_keeps_only_inside(viewer) -> None:
+    img = np.zeros((100, 100), dtype=np.float32)
+    img[10:30, 10:30] = 200.0
+    img[60:80, 60:80] = 200.0
+    viewer.add_image(img, name="img")
+
+    boundary = np.zeros((100, 100), dtype=np.int32)
+    boundary[0:50, 0:50] = 1
+    viewer.add_labels(boundary, name="boundary")
+
+    res = segment.segment_target_objects(
+        "img",
+        boundary_mask="boundary",
+        save_qc_png=False,
+    )
+
+    labels = np.asarray(viewer.layers[res["labels_layer"]].data)
+    assert (labels[10:30, 10:30] > 0).any(), "object inside boundary kept"
+    assert (labels[60:80, 60:80] == 0).all(), "object outside boundary dropped"
+
+
+def test_segment_target_objects_default_unchanged(viewer) -> None:
+    img = np.zeros((100, 100), dtype=np.float32)
+    img[40:60, 40:60] = 200.0
+    viewer.add_image(img, name="reg")
+
+    res = segment.segment_target_objects("reg", save_qc_png=False)
+
+    assert res["n_objects"] >= 1
+    labels = np.asarray(viewer.layers[res["labels_layer"]].data)
+    assert (labels[40:60, 40:60] > 0).any()

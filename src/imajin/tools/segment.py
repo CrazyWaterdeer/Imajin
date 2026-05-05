@@ -988,6 +988,7 @@ def segment_target_objects(
     min_distance_um: float | None = None,
     save_qc_png: bool = True,
     qc_png_path: str | None = None,
+    boundary_mask: str | None = None,
 ) -> dict[str, Any]:
     from skimage import filters
 
@@ -1078,6 +1079,28 @@ def segment_target_objects(
         noise_sigma=noise_sigma,
     )
 
+    if boundary_mask is not None:
+        boundary_layer_snapshot = call_on_main(snapshot_layer, boundary_mask)
+        boundary_data = boundary_layer_snapshot.data
+        boundary_data = np.asarray(
+            boundary_data.compute() if hasattr(boundary_data, "compute") else boundary_data
+        )
+        if boundary_data.shape != masks.shape:
+            raise ValueError(
+                f"boundary_mask shape {boundary_data.shape} does not match "
+                f"target image shape {masks.shape}"
+            )
+        masks = _intersect_labels_with_mask(
+            masks, boundary_data > 0, renumber=True
+        )
+        qc = _label_qc(masks)
+        signal_qc, qc_warnings = _target_object_qc(
+            raw,
+            corrected_for_threshold,
+            masks,
+            noise_sigma=noise_sigma,
+        )
+
     out_name = f"{L.name}_objects"
     layer = call_on_main(
         add_labels_from_worker,
@@ -1107,6 +1130,7 @@ def segment_target_objects(
             "split_touching": split_touching,
             "min_distance": min_distance,
             "min_distance_um": min_distance_um,
+            "boundary_mask": boundary_mask,
             "voxel_spacing": spacing,
             "axes": "ZYX" if data.ndim == 3 else "YX",
             "qc_warnings": qc_warnings,
@@ -1168,6 +1192,7 @@ def segment_target_objects(
         "split_touching": split_touching,
         "min_distance": min_distance,
         "min_distance_um": min_distance_um,
+        "boundary_mask": boundary_mask,
         "voxel_spacing": list(spacing) if spacing is not None else None,
         "axes": axes,
         "empty_mask": qc["empty_mask"],
