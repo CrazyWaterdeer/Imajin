@@ -240,3 +240,30 @@ def test_threshold_noise_floor_ignores_non_finite() -> None:
     t = segment._threshold_noise_floor(img, k_mad=3.0, dark_percentile=20.0)
     assert np.isfinite(t)
     assert t >= 5.0
+
+
+def test_intersect_labels_with_mask_zeros_outside() -> None:
+    labels = np.zeros((10, 10), dtype=np.int32)
+    labels[1:4, 1:4] = 1
+    labels[6:9, 6:9] = 2
+
+    mask = np.zeros_like(labels, dtype=bool)
+    mask[0:5, 0:5] = True
+
+    out = segment._intersect_labels_with_mask(labels, mask)
+
+    assert (out == 1).sum() == (labels == 1).sum()
+    assert (out == 2).sum() == 0
+
+
+def test_intersect_labels_with_mask_renumbers_when_requested() -> None:
+    labels = np.zeros((10, 10), dtype=np.int32)
+    labels[1:3, 1:3] = 5
+    labels[1:3, 4:6] = 9
+
+    mask = np.ones_like(labels, dtype=bool)
+
+    out = segment._intersect_labels_with_mask(labels, mask, renumber=True)
+
+    unique = sorted(np.unique(out).tolist())
+    assert unique == [0, 1, 2]

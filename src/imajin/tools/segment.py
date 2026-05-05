@@ -322,6 +322,30 @@ def _remove_small_labeled_objects(labels: np.ndarray, min_size: int) -> np.ndarr
     return np.where(keep[arr], arr, 0).astype(np.int32)
 
 
+def _intersect_labels_with_mask(
+    labels: np.ndarray,
+    mask: np.ndarray,
+    *,
+    renumber: bool = False,
+) -> np.ndarray:
+    arr = np.asarray(labels, dtype=np.int32)
+    binary = np.asarray(mask, dtype=bool)
+    if arr.shape != binary.shape:
+        raise ValueError(
+            f"labels shape {arr.shape} does not match mask shape {binary.shape}"
+        )
+    out = np.where(binary, arr, 0).astype(np.int32, copy=False)
+    if not renumber:
+        return out
+    unique = np.unique(out)
+    unique = unique[unique > 0]
+    if unique.size == 0:
+        return out
+    remap = np.zeros(int(unique.max()) + 1, dtype=np.int32)
+    remap[unique] = np.arange(1, unique.size + 1, dtype=np.int32)
+    return remap[out]
+
+
 def _xy_filter_size(ndim: int, radius: int) -> tuple[int, ...]:
     width = max(1, int(radius) * 2 + 1)
     if ndim == 3:
