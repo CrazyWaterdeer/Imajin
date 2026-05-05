@@ -11,6 +11,26 @@ def test_load_file_adds_layers(viewer, tiny_ome_tiff: Path) -> None:
     assert res["shape"] == (3, 5, 64, 64)
     assert len(res["layer_names"]) == 3
     assert len(viewer.layers) == 3
+    assert res["already_loaded"] is False
+    assert all(L.metadata["source_path"] == str(tiny_ome_tiff.resolve()) for L in viewer.layers)
+
+
+def test_load_file_reuses_existing_source_layers(viewer, tiny_ome_tiff: Path) -> None:
+    first = files.load_file(str(tiny_ome_tiff))
+    second = files.load_file(str(tiny_ome_tiff))
+
+    assert second["already_loaded"] is True
+    assert second["layer_names"] == first["layer_names"]
+    assert len(viewer.layers) == 3
+
+
+def test_unload_file_layers_removes_by_source_path(viewer, tiny_ome_tiff: Path) -> None:
+    files.load_file(str(tiny_ome_tiff))
+
+    res = files.unload_file_layers(str(tiny_ome_tiff))
+
+    assert res["n_removed"] == 3
+    assert len(viewer.layers) == 0
 
 
 def test_list_layers_after_load(viewer, tiny_ome_tiff: Path) -> None:

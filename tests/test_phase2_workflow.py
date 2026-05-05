@@ -256,6 +256,23 @@ def test_analyze_target_cells_keeps_z_stack_measurement_3d(viewer) -> None:
     assert df["volume_um3"].iloc[0] > 0
 
 
+def test_analyze_target_cells_accepts_segment_intensity_regions_alias(viewer) -> None:
+    img = np.zeros((20, 20), dtype=np.float32)
+    img[2:8, 2:8] = 100.0
+    img[12:18, 12:18] = 50.0
+    viewer.add_image(img, name="calexa")
+
+    res = workflows.analyze_target_cells(
+        target="calexa",
+        segmentation_method="segment_intensity_regions",
+        segmentation_options={"min_size": 4, "smoothing_sigma": 0},
+    )
+
+    assert res["ok"] is True
+    assert res["segmentation_method"] == "intensity_regions"
+    assert res["n_objects"] == 2
+
+
 def test_analyze_target_cells_saves_result_bundle(viewer, tmp_path) -> None:
     from imajin.project import create_project
 

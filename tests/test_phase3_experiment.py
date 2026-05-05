@@ -573,6 +573,216 @@ def test_run_recipe_on_samples_auto_loads_sample_local_target_and_cleans_layers(
     assert all(run["cleanup_removed_layers"] for run in res["runs"])
 
 
+def test_run_recipe_on_samples_cleans_already_loaded_file_layers(
+    viewer, monkeypatch, tmp_path: Path
+) -> None:
+    from imajin.tools import workflows
+
+    p = tmp_path / "sample_1.tif"
+    p.write_bytes(b"fake")
+    experiment.register_files([str(p)])
+    experiment.annotate_samples(
+        [{"sample_name": "sample_1", "group": "g", "file_ids": ["sample_1"]}]
+    )
+    experiment.create_analysis_recipe(
+        name="green_batch",
+        target_channel="green",
+        segmentation={"tool": "target_objects"},
+    )
+    viewer.add_image(
+        np.ones((8, 8), dtype=np.float32),
+        name="sample_1_green",
+        metadata={"source_path": str(p.resolve()), "color": "green"},
+    )
+
+    def fake_analyze_target_cells(target: str | None = None, **kwargs) -> dict[str, object]:
+        labels_layer = f"{target}_labels"
+        table_name = f"{target}_measurements"
+        viewer.add_labels(np.ones((8, 8), dtype=np.uint16), name=labels_layer)
+        state.put_table(table_name, pd.DataFrame({"label": [1]}))
+        return {
+            "ok": True,
+            "target_channel": target,
+            "labels_layer": labels_layer,
+            "preprocessed_layer": None,
+            "table_name": table_name,
+            "n_objects": 1,
+            "object_unit": "object_or_roi",
+            "segmentation_method": "target_objects",
+            "analysis_dim": "2d",
+            "warnings": [],
+        }
+
+    monkeypatch.setattr(workflows, "analyze_target_cells", fake_analyze_target_cells)
+
+    res = workflows.run_recipe_on_samples(recipe_name="green_batch")
+
+    assert res["n_complete"] == 1
+    assert [layer.name for layer in viewer.layers] == []
+    assert "sample_1_green" in res["runs"][0]["cleanup_removed_layers"]
+
+
+def test_run_recipe_on_samples_projection_recipe_uses_projected_target(
+    viewer, monkeypatch, tmp_path: Path
+) -> None:
+    from imajin.tools import files, workflows
+
+    p = tmp_path / "sample_1.tif"
+    p.write_bytes(b"fake")
+    experiment.register_files([str(p)])
+    experiment.annotate_samples(
+        [{"sample_name": "sample_1", "group": "g", "file_ids": ["sample_1"]}]
+    )
+    experiment.create_analysis_recipe(
+        name="projected_green",
+        target_channel="green",
+        segmentation={"tool": "target_objects", "do_3D": True},
+        measurement={"projection": "mean", "axis": "z"},
+    )
+
+    def fake_load_file(path: str) -> dict[str, object]:
+        viewer.add_image(
+            np.ones((3, 8, 8), dtype=np.float32),
+            name="sample_1_green",
+            metadata={
+                "source_path": str(Path(path).resolve()),
+                "color": "green",
+                "axes": "ZYX",
+            },
+        )
+        return {"layer_names": ["sample_1_green"], "already_loaded": False}
+
+    targets: list[str] = []
+
+    def fake_analyze_target_cells(target: str | None = None, **kwargs) -> dict[str, object]:
+        assert target is not None
+        targets.append(target)
+        assert kwargs["do_3D"] is False
+        assert viewer.layers[target].data.shape == (8, 8)
+        labels_layer = f"{target}_labels"
+        table_name = f"{target}_measurements"
+        viewer.add_labels(np.ones((8, 8), dtype=np.uint16), name=labels_layer)
+        state.put_table(table_name, pd.DataFrame({"label": [1]}))
+        return {
+            "ok": True,
+            "target_channel": target,
+            "labels_layer": labels_layer,
+            "preprocessed_layer": None,
+            "table_name": table_name,
+            "n_objects": 1,
+            "object_unit": "object_or_roi",
+            "segmentation_method": "target_objects",
+            "analysis_dim": "2d",
+            "warnings": [],
+        }
+
+    monkeypatch.setattr(files, "load_file", fake_load_file)
+    monkeypatch.setattr(workflows, "analyze_target_cells", fake_analyze_target_cells)
+
+    res = workflows.run_recipe_on_samples(recipe_name="projected_green")
+
+    assert res["n_complete"] == 1
+    assert targets == ["sample_1_green_avg_z"]
+    assert [layer.name for layer in viewer.layers] == []
+    removed = res["runs"][0]["cleanup_removed_layers"]
+    assert "sample_1_green" in removed
+    assert "sample_1_green_avg_z" in removed
+
+
+def test_run_recipe_on_samples_accepts_tool_name_method_and_projection_preprocess(
+    viewer, monkeypatch, tmp_path: Path
+) -> None:
+    from imajin.tools import files, workflows
+
+    p = tmp_path / "sample_1.tif"
+    p.write_bytes(b"fake")
+    experiment.register_files([str(p)])
+    experiment.annotate_samples(
+        [{"sample_name": "sample_1", "group": "g", "file_ids": ["sample_1"]}]
+    )
+    experiment.create_analysis_recipe(
+        name="calexa_like_recipe",
+        target_channel="Ch2-T1",
+        preprocessing=[{"step": "average_projection", "axis": "z"}],
+        segmentation={"method": "segment_intensity_regions", "threshold_method": "otsu"},
+    )
+
+    def fake_load_file(path: str) -> dict[str, object]:
+        viewer.add_image(
+            np.ones((3, 8, 8), dtype=np.float32),
+            name="Ch2-T1",
+            metadata={"source_path": str(Path(path).resolve()), "axes": "ZYX"},
+        )
+        return {"layer_names": ["Ch2-T1"], "already_loaded": False}
+
+    calls: list[dict[str, object]] = []
+
+    def fake_analyze_target_cells(target: str | None = None, **kwargs) -> dict[str, object]:
+        calls.append({"target": target, **kwargs})
+        assert target == "Ch2-T1_avg_z"
+        assert kwargs["preprocess"] is None
+        assert kwargs["segmentation_method"] == "segment_intensity_regions"
+        assert kwargs["do_3D"] is False
+        labels_layer = f"{target}_labels"
+        table_name = f"{target}_measurements"
+        viewer.add_labels(np.ones((8, 8), dtype=np.uint16), name=labels_layer)
+        state.put_table(table_name, pd.DataFrame({"label": [1]}))
+        return {
+            "ok": True,
+            "target_channel": target,
+            "labels_layer": labels_layer,
+            "preprocessed_layer": None,
+            "table_name": table_name,
+            "n_objects": 1,
+            "object_unit": "object_or_roi",
+            "segmentation_method": "intensity_regions",
+            "analysis_dim": "2d",
+            "warnings": [],
+        }
+
+    monkeypatch.setattr(files, "load_file", fake_load_file)
+    monkeypatch.setattr(workflows, "analyze_target_cells", fake_analyze_target_cells)
+
+    res = workflows.run_recipe_on_samples(recipe_name="calexa_like_recipe")
+
+    assert res["n_complete"] == 1
+    assert calls
+
+
+def test_run_recipe_on_samples_propagates_cancellation(
+    viewer, monkeypatch, tmp_path: Path
+) -> None:
+    from imajin.tools import workflows
+    from imajin.workers.qt_worker import CancelledError
+
+    p = tmp_path / "sample_1.tif"
+    p.write_bytes(b"fake")
+    experiment.register_files([str(p)])
+    experiment.annotate_samples(
+        [{"sample_name": "sample_1", "group": "g", "file_ids": ["sample_1"]}]
+    )
+    experiment.create_analysis_recipe(
+        name="cancel_recipe",
+        target_channel="green",
+        segmentation={"method": "intensity_regions"},
+    )
+    viewer.add_image(
+        np.ones((8, 8), dtype=np.float32),
+        name="sample_1_green",
+        metadata={"source_path": str(p.resolve()), "color": "green"},
+    )
+
+    def fake_analyze_target_cells(*args, **kwargs) -> dict[str, object]:
+        raise CancelledError("Tool execution cancelled by user.")
+
+    monkeypatch.setattr(workflows, "analyze_target_cells", fake_analyze_target_cells)
+
+    with pytest.raises(CancelledError):
+        workflows.run_recipe_on_samples(recipe_name="cancel_recipe")
+
+    assert state.list_runs() == []
+
+
 def test_run_recipe_on_samples_no_samples_returns_empty() -> None:
     from imajin.tools import workflows
 

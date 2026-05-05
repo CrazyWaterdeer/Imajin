@@ -5,6 +5,8 @@ import inspect
 import os
 from typing import Any
 
+import numpy as np
+
 from imajin.agent.execution import raise_if_cancelled, report_progress
 from imajin.agent.qt_dispatch import call_on_main
 from imajin.agent.state import (
@@ -16,6 +18,7 @@ from imajin.tools import preprocess as _preprocess
 from imajin.tools import segment as _segment
 from imajin.tools.napari_ops import snapshot_layer
 from imajin.tools.registry import tool
+from imajin.workers.qt_worker import CancelledError
 
 
 _VALID_PREPROCESS = {
@@ -91,6 +94,61 @@ def _release_worker_memory() -> None:
         pass
 
 
+def _array_nbytes(data: Any) -> int | None:
+    nbytes = getattr(data, "nbytes", None)
+    if isinstance(nbytes, (int, np.integer)):
+        return int(nbytes)
+    shape = getattr(data, "shape", None)
+    dtype = getattr(data, "dtype", None)
+    if shape is None or dtype is None:
+        return None
+    try:
+        return int(np.prod(tuple(int(s) for s in shape), dtype=np.int64)) * int(
+            np.dtype(dtype).itemsize
+        )
+    except Exception:
+        return None
+
+
+def _check_analysis_memory_budget(
+    layer_name: str,
+    *,
+    data: Any,
+    method: str,
+) -> None:
+    """Fail before known high-peak 3D paths can push the process into OOM kill."""
+    nbytes = _array_nbytes(data)
+    if nbytes is None:
+        return
+    try:
+        from imajin.io.memory import available_memory_bytes
+
+        available = available_memory_bytes()
+    except Exception:
+        available = None
+    if available is None:
+        return
+
+    # This is only a hard guard for obviously impossible cases. It must not block
+    # a single z-stack that the user could previously process; the batch cleanup
+    # path handles the accumulation problem separately.
+    minimal_multiplier = {
+        "target_objects": 4.0,
+        "intensity_regions": 2.5,
+        "cellpose_sam": 4.0,
+    }.get(method, 4.0)
+    minimal_required = int(nbytes * minimal_multiplier) + 256 * 1024**2
+    if minimal_required <= available:
+        return
+    raise MemoryError(
+        f"analysis of layer {layer_name!r} is likely to exceed available RAM "
+        f"(input ~{nbytes / 1024**2:.0f} MiB, minimum working set "
+        f"~{minimal_required / 1024**2:.0f} MiB, available "
+        f"~{available / 1024**2:.0f} MiB). Use a mean/max projection recipe, "
+        "crop/downsample first, or increase WSL memory before running 3D analysis."
+    )
+
+
 def _viewer_layer_names() -> list[str]:
     from imajin.agent.state import get_viewer
 
@@ -121,9 +179,19 @@ def _remove_layers_by_name(layer_names: list[str]) -> list[str]:
 
 
 def _cleanup_new_layers(base_layer_names: set[str]) -> list[str]:
+    return _cleanup_sample_layers(base_layer_names, [])
+
+
+def _cleanup_sample_layers(
+    base_layer_names: set[str],
+    managed_layer_names: list[str],
+) -> list[str]:
     current = _viewer_layer_names()
+    current_set = set(current)
     created = [name for name in current if name not in base_layer_names]
-    return call_on_main(_remove_layers_by_name, created)
+    managed = [name for name in managed_layer_names if name in current_set]
+    to_remove = list(dict.fromkeys([*created, *managed]))
+    return call_on_main(_remove_layers_by_name, to_remove)
 
 
 def _normalize_match_text(value: Any) -> str:
@@ -219,6 +287,68 @@ def _load_file_for_sample_if_needed(
     return call_on_main(_files.load_file, str(info["file_path"]))
 
 
+def _projection_from_step(step: dict[str, Any]) -> tuple[str | None, Any]:
+    raw = step.get("step") or step.get("op") or step.get("tool") or step.get("name")
+    if raw is None:
+        return None, None
+    mode = str(raw).strip().lower().replace("-", "_")
+    if mode in {"average_projection", "avg_projection", "mean_projection"}:
+        return "mean", step.get("axis", "z")
+    if mode in {"max_projection", "mip", "maximum_projection"}:
+        return "max", step.get("axis", "z")
+    return None, None
+
+
+def _projection_request(
+    measurement: dict[str, Any],
+    preprocessing: list[dict[str, Any]],
+) -> tuple[str | None, Any]:
+    raw = measurement.get("projection")
+    if raw is not None:
+        mode = str(raw).strip().lower().replace("-", "_")
+        if mode in {"", "none", "off", "false"}:
+            return None, None
+        if mode in {"mean", "avg", "average", "average_projection"}:
+            return "mean", measurement.get("axis", "z")
+        if mode in {"max", "mip", "maximum", "max_projection"}:
+            return "max", measurement.get("axis", "z")
+        raise ValueError("measurement.projection must be mean, max, or none")
+
+    for step in preprocessing:
+        projection, axis = _projection_from_step(step)
+        if projection is not None:
+            return projection, axis
+    return None, None
+
+
+def _first_analysis_preprocess(preprocessing: list[dict[str, Any]]) -> str | None:
+    for step in preprocessing:
+        projection, _axis = _projection_from_step(step)
+        if projection is not None:
+            continue
+        raw = step.get("step") or step.get("op") or step.get("tool") or step.get("name")
+        if raw:
+            return str(raw)
+    return None
+
+
+def _project_layer_for_recipe(
+    layer_name: str,
+    *,
+    projection: str | None,
+    axis: Any,
+) -> dict[str, Any] | None:
+    if projection is None:
+        return None
+    from imajin.tools import view as _view
+
+    if projection == "mean":
+        return _view.average_projection(layer_name, axis=axis)
+    if projection == "max":
+        return _view.max_projection(layer_name, axis=axis)
+    raise ValueError("projection must be mean or max")
+
+
 @tool(
     description="High-level target object analysis workflow. Resolves the target "
     "channel, optionally preprocesses it, segments target-positive objects/ROIs, "
@@ -282,17 +412,34 @@ def analyze_target_cells(
     use_3d = _decide_3d(do_3D, axes, getattr(snapshot.data, "ndim", 2))
 
     method = segmentation_method.strip().lower().replace("-", "_")
-    if method in {"target", "target_object", "target_objects", "objects", "rois"}:
+    if method in {
+        "target",
+        "target_object",
+        "target_objects",
+        "segment_target_object",
+        "segment_target_objects",
+        "objects",
+        "rois",
+    }:
         method = "target_objects"
     elif method in {"cellpose", "cpsam", "cellpose_sam"}:
         method = "cellpose_sam"
-    elif method in {"intensity", "intensity_region", "intensity_regions", "roi"}:
+    elif method in {
+        "intensity",
+        "intensity_region",
+        "intensity_regions",
+        "segment_intensity_region",
+        "segment_intensity_regions",
+        "roi",
+    }:
         method = "intensity_regions"
     else:
         raise ValueError(
             "segmentation_method must be 'target_objects', 'cellpose_sam', "
             "or 'intensity_regions'"
         )
+
+    _check_analysis_memory_budget(seg_input_layer, data=snapshot.data, method=method)
 
     report_progress(stage="segmentation", message=f"Segmenting {seg_input_layer}.")
     raise_if_cancelled()
@@ -488,20 +635,24 @@ def run_recipe_on_samples(
     cleanup_enabled = mode in {"serial_cleanup", "cleanup"} and not keep_layers
 
     seg = recipe.segmentation or {}
+    measurement = recipe.measurement or {}
     pre_steps = recipe.preprocessing or []
-    pre_choice = pre_steps[0]["step"] if pre_steps else None
+    pre_choice = _first_analysis_preprocess(pre_steps)
+    projection, projection_axis = _projection_request(measurement, pre_steps)
 
     runs: list[dict[str, Any]] = []
     n_complete = 0
     n_failed = 0
     total = len(sample_names)
     for index, name in enumerate(sample_names):
+        raise_if_cancelled()
         info = _resolve_sample_inputs(name)
         s = info["sample"]
         current_file = info["file_path"] or info["layer_name"] or s.sample_name
         base_layer_names = set(call_on_main(_viewer_layer_names))
         mem_before = _rss_mb()
         failed_sample = False
+        managed_layer_names: list[str] = []
         report_progress(
             progress=index / total,
             stage="sample",
@@ -524,8 +675,10 @@ def run_recipe_on_samples(
                 info,
                 auto_load_files=auto_load_files,
             )
+            raise_if_cancelled()
             target = recipe.target_channel or info["layer_name"]
             loaded_layers = list((load_result or {}).get("layer_names") or [])
+            managed_layer_names.extend(str(name) for name in loaded_layers)
             target = call_on_main(
                 _resolve_target_within_loaded_layers,
                 target,
@@ -533,14 +686,34 @@ def run_recipe_on_samples(
             )
             if target is None and len(loaded_layers) == 1:
                 target = loaded_layers[0]
+            if projection is not None and target is None:
+                raise ValueError(
+                    "measurement.projection requires a resolved target layer. "
+                    "Set recipe.target_channel to a layer name/color that resolves "
+                    "within each loaded sample."
+                )
+            projection_record = _project_layer_for_recipe(
+                target,
+                projection=projection,
+                axis=projection_axis,
+            )
+            raise_if_cancelled()
+            analysis_target = (
+                projection_record["new_layer"] if projection_record else target
+            )
+            if projection_record:
+                managed_layer_names.append(str(projection_record["new_layer"]))
             result = analyze_target_cells(
-                target=target,
-                do_3D=seg.get("do_3D"),
+                target=analysis_target,
+                do_3D=False if projection_record else seg.get("do_3D"),
                 diameter=seg.get("diameter"),
                 preprocess=pre_choice,
-                segmentation_method=seg.get("tool", "target_objects"),
+                segmentation_method=seg.get("tool")
+                or seg.get("method", "target_objects"),
                 segmentation_options=seg,
             )
+        except CancelledError:
+            raise
         except Exception as exc:  # noqa: BLE001
             failed_sample = True
             run_id = put_run(
@@ -628,6 +801,9 @@ def run_recipe_on_samples(
                         "segmentation_method": result.get("segmentation_method"),
                         "analysis_dim": result.get("analysis_dim"),
                         "target_channel": result.get("target_channel"),
+                        "source_target_channel": target,
+                        "projection": projection,
+                        "projection_axis": projection_axis,
                         "warnings": result.get("warnings", []),
                         "qc_png_skipped_reason": result.get("qc_png_skipped_reason"),
                     },
@@ -657,7 +833,10 @@ def run_recipe_on_samples(
             removed_layers: list[str] = []
             if cleanup_enabled and not (failed_sample and keep_failed_layers):
                 try:
-                    removed_layers = _cleanup_new_layers(base_layer_names)
+                    removed_layers = _cleanup_sample_layers(
+                        base_layer_names,
+                        managed_layer_names,
+                    )
                 except Exception:
                     removed_layers = []
             _release_worker_memory()
