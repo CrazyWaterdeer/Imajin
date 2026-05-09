@@ -375,3 +375,50 @@ def test_derive_size_params_handles_missing_voxel() -> None:
     out = _derive_size_params(cell_diameter_um=10.0, voxel_spacing=None)
     assert out["min_distance_um"] == pytest.approx(7.0)
     assert "cellpose_diameter_px" not in out
+
+
+def test_analyze_target_cells_two_tier_produces_long_format(viewer) -> None:
+    from imajin.tools.workflows import analyze_target_cells
+
+    rng = np.random.default_rng(0)
+    img = np.zeros((200, 200), dtype=np.float32)
+    img[:, :] = rng.normal(5.0, 1.0, img.shape)
+    img[40:80, 40:80] += 60.0
+    img[120:160, 120:160] += 12.0
+
+    viewer.add_image(img, name="reporter", scale=(0.5, 0.5))
+
+    res = analyze_target_cells(
+        target="reporter",
+        domain_strategy="noise_floor",
+        domain_options={"k_mad": 5.0, "dark_percentile": 10.0, "min_area_um2": 1.0},
+        cell_diameter_um=10.0,
+    )
+
+    assert res["ok"] is True
+    assert res["domain_layer"].endswith("_domain")
+    assert res["n_domain_components"] >= 2
+    assert "tier_table_name" in res
+
+    from imajin.agent.state import get_table
+    table = get_table(res["tier_table_name"])
+    assert "tier" in table.columns
+    assert set(table["tier"].unique()) == {"domain", "cells"}
+    domain_rows = table[table["tier"] == "domain"]
+    cell_rows = table[table["tier"] == "cells"]
+    assert len(domain_rows) >= 2
+    assert len(cell_rows) >= 1
+
+
+def test_analyze_target_cells_single_tier_unchanged(viewer) -> None:
+    from imajin.tools.workflows import analyze_target_cells
+
+    img = np.zeros((100, 100), dtype=np.float32)
+    img[40:60, 40:60] = 200.0
+    viewer.add_image(img, name="single_tier", scale=(0.5, 0.5))
+
+    res = analyze_target_cells(target="single_tier")
+
+    assert res["ok"] is True
+    assert "domain_layer" not in res or res.get("domain_layer") is None
+    assert "tier_table_name" not in res or res.get("tier_table_name") is None

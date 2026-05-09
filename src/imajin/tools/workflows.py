@@ -385,6 +385,10 @@ def analyze_target_cells(
     preprocess: str | None = None,
     segmentation_method: str = "target_objects",
     segmentation_options: dict[str, Any] | None = None,
+    domain_strategy: str | None = None,
+    domain_options: dict[str, Any] | None = None,
+    counterstain_layer: str | None = None,
+    cell_diameter_um: float | None = None,
 ) -> dict[str, Any]:
     warnings: list[str] = []
     report_progress(stage="resolve_target", message="Resolving target channel.")
@@ -428,6 +432,34 @@ def analyze_target_cells(
     axes = _layer_axes(snapshot)
     use_3d = _decide_3d(do_3D, axes, getattr(snapshot.data, "ndim", 2))
 
+    # Tier-1: pre-compute expression domain before Tier-2 segmentation.
+    pre_computed_domain_layer: str | None = None
+    if domain_strategy is not None:
+        from imajin.tools import channels as _channels_pre
+        from imajin.tools.segment import segment_expression_domain as _seg_dom
+        cs_layer_pre = counterstain_layer
+        cs_is_nuclear_pre: bool | None = None
+        if cs_layer_pre is None:
+            cs_info_pre = _channels_pre.detect_counterstain_channel()
+            if cs_info_pre["confidence"] == "annotated":
+                cs_layer_pre = cs_info_pre["counterstain_layer"]
+                cs_is_nuclear_pre = cs_info_pre["is_nuclear"]
+        d_opts = dict(domain_options or {})
+        if cs_layer_pre:
+            d_opts.setdefault("counterstain_layer", cs_layer_pre)
+            d_opts.setdefault("is_nuclear", cs_is_nuclear_pre)
+        derived_pre = _derive_size_params(
+            cell_diameter_um,
+            _segment._voxel_spacing(tuple(snapshot.scale), getattr(snapshot.data, "ndim", 2)),
+        )
+        if "min_area_um2" not in d_opts and "min_area_um2" in derived_pre:
+            d_opts["min_area_um2"] = derived_pre["min_area_um2"]
+        domain_pre = _seg_dom(
+            image_layer=target_layer,
+            **_filtered_kwargs(_seg_dom, d_opts),
+        )
+        pre_computed_domain_layer = domain_pre["labels_layer"]
+
     method = segmentation_method.strip().lower().replace("-", "_")
     if method in {
         "target",
@@ -464,6 +496,8 @@ def analyze_target_cells(
     seg_options.pop("tool", None)
     seg_options.pop("do_3D", None)
     seg_options.pop("diameter", None)
+    if pre_computed_domain_layer is not None:
+        seg_options.setdefault("boundary_mask", pre_computed_domain_layer)
     if method == "target_objects":
         seg_result = _segment.segment_target_objects(
             image_layer=seg_input_layer,
@@ -547,6 +581,74 @@ def analyze_target_cells(
         )
     except Exception as exc:  # noqa: BLE001
         warnings.append(f"result bundle could not be saved: {type(exc).__name__}: {exc}")
+
+    if domain_strategy is not None:
+        if domain_strategy != "noise_floor":
+            raise ValueError(
+                f"domain_strategy must be 'noise_floor' (got {domain_strategy!r})"
+            )
+
+        import pandas as _pd
+        from imajin.agent.state import get_layer as _get_layer
+        domain_layer = pre_computed_domain_layer
+        domain_layer_md = dict(getattr(_get_layer(domain_layer), "metadata", {}) or {})
+        domain_result = {
+            "labels_layer": domain_layer,
+            "n_components": int(domain_layer_md.get("n_components", 0)),
+            "domain_area_um2": float(domain_layer_md.get("domain_area_um2", 0.0)),
+            "counterstain_warnings": list(domain_layer_md.get("counterstain_warnings", [])),
+        }
+
+        domain_measure = _measure.measure_intensity(
+            labels_layer=domain_layer,
+            image_layers=[seg_input_layer],
+        )
+        domain_table_name = domain_measure["table_name"]
+        cells_table_name = measure_result["table_name"]
+
+        from imajin.agent.state import get_table, put_table
+
+        domain_df = get_table(domain_table_name).copy()
+        cells_df = get_table(cells_table_name).copy()
+        domain_df["tier"] = "domain"
+        cells_df["tier"] = "cells"
+        combined = _pd.concat([domain_df, cells_df], ignore_index=True, sort=False)
+
+        tier_table_name = put_table(
+            f"{target_layer}_two_tier",
+            combined,
+            spec={
+                "tool": "analyze_target_cells",
+                "mode": "two_tier",
+                "target_channel": target_layer,
+                "domain_layer": domain_layer,
+                "cells_layer": seg_result["labels_layer"],
+            },
+        )
+
+        return {
+            "ok": True,
+            "target_channel": target_layer,
+            "target_source": resolution.source,
+            "preprocess": pre_step,
+            "preprocessed_layer": pre_record["new_layer"] if pre_record else None,
+            "segmentation_method": method,
+            "analysis_dim": "3d" if use_3d else "2d",
+            "labels_layer": seg_result["labels_layer"],
+            "cells_layer": seg_result["labels_layer"],
+            "domain_layer": domain_layer,
+            "n_domain_components": domain_result["n_components"],
+            "domain_area_um2": domain_result["domain_area_um2"],
+            "n_cells": int(seg_result.get("n_objects", 0)),
+            "tier_table_name": tier_table_name,
+            "table_name": measure_result["table_name"],
+            "table_columns": measure_result["columns"],
+            "qc_png_path": seg_result.get("qc_png_path"),
+            "qc_png_error": seg_result.get("qc_png_error"),
+            "qc_png_skipped_reason": seg_result.get("qc_png_skipped_reason"),
+            "voxel_scale": voxel,
+            "warnings": warnings + list(domain_result.get("counterstain_warnings", [])),
+        }
 
     return {
         "ok": True,
