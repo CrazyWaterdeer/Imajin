@@ -558,3 +558,30 @@ def test_analyze_target_cells_writes_into_active_parent_bundle(
     meta = json.loads((parent / "metadata.json").read_text())
     assert meta["status"] == "in_progress"
     assert "samples" not in meta
+
+
+def test_analyze_target_cells_returns_primary_table_name_single_tier(viewer) -> None:
+    from imajin.tools.workflows import analyze_target_cells
+
+    img = np.zeros((40, 40), dtype=np.float32)
+    img[10:30, 10:30] = 200.0
+    viewer.add_image(img, name="reporter", scale=(0.5, 0.5))
+    res = analyze_target_cells(target="reporter")
+    assert res["primary_table_name"] == res["table_name"]
+
+
+def test_analyze_target_cells_returns_primary_table_name_two_tier(viewer) -> None:
+    from imajin.tools.workflows import analyze_target_cells
+
+    rng = np.random.default_rng(0)
+    img = np.zeros((200, 200), dtype=np.float32)
+    img[:, :] = rng.normal(5.0, 1.0, img.shape)
+    img[40:80, 40:80] += 60.0
+    viewer.add_image(img, name="reporter", scale=(0.5, 0.5))
+    res = analyze_target_cells(
+        target="reporter",
+        domain_strategy="noise_floor",
+        domain_options={"k_mad": 5.0, "min_area_um2": 1.0},
+        cell_diameter_um=10.0,
+    )
+    assert res["primary_table_name"] == res["tier_table_name"]
