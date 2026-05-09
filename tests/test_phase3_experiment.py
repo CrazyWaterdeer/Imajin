@@ -1095,3 +1095,41 @@ def test_run_recipe_on_samples_no_domain_stays_single_tier(
 
     assert captured.get("domain_strategy") is None
     assert captured.get("domain_options") is None
+
+
+def test_run_recipe_on_samples_creates_parent_bundle(
+    viewer, monkeypatch, tmp_path: Path
+) -> None:
+    import re
+    from imajin.tools import workflows
+
+    monkeypatch.setenv("IMAJIN_RESULTS_DIR", str(tmp_path))
+
+    img = np.zeros((40, 40), dtype=np.float32)
+    img[10:30, 10:30] = 200.0
+    viewer.add_image(img, name="ctrl_1_ch0", scale=(0.5, 0.5))
+    state.put_channel_annotation("ctrl_1_ch0", role="target", color="green")
+
+    p = tmp_path / "ctrl_1.lsm"
+    p.write_bytes(b"")
+    experiment.register_files([str(p)])
+    experiment.annotate_samples(
+        [{"sample_name": "ctrl_1", "group": "control",
+          "files": [str(p)], "layers": ["ctrl_1_ch0"]}]
+    )
+    experiment.create_analysis_recipe(
+        name="r1",
+        target_channel="green",
+        segmentation={"tool": "intensity_regions"},
+        measurement={"properties": ["area", "mean_intensity"]},
+    )
+
+    res = workflows.run_recipe_on_samples(recipe_name="r1")
+
+    assert res.get("bundle_path"), "run_recipe_on_samples must return bundle_path"
+    bundle = Path(res["bundle_path"])
+    assert bundle.is_dir()
+    assert re.match(r"^\d{8}_\d{6}_r1$", bundle.name), bundle.name
+    # Sample output landed in the parent bundle, not a sibling per-call bundle
+    siblings = sorted(bundle.parent.iterdir())
+    assert len(siblings) == 1, [s.name for s in siblings]

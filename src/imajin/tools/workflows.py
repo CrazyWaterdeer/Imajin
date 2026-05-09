@@ -967,92 +967,40 @@ def run_recipe_on_samples(
     n_complete = 0
     n_failed = 0
     total = len(sample_names)
-    for index, name in enumerate(sample_names):
-        raise_if_cancelled()
-        info = _resolve_sample_inputs(name)
-        s = info["sample"]
-        current_file = info["file_path"] or info["layer_name"] or s.sample_name
-        base_layer_names = set(call_on_main(_viewer_layer_names))
-        mem_before = _rss_mb()
-        failed_sample = False
-        managed_layer_names: list[str] = []
-        report_progress(
-            progress=index / total,
-            stage="sample",
-            current_file=current_file,
-            file_index=index + 1,
-            total_files=total,
-            completed=n_complete,
-            failed=n_failed,
-            skipped=0,
-            show_in_chat=True,
-            message=f"Processing {s.sample_name} ({index + 1}/{total}).",
-            detail={
-                "rss_mb": mem_before,
-                "layer_count": len(base_layer_names),
-                "execution_mode": mode,
+
+    from imajin.results import create_result_bundle
+    from imajin.tools.results import with_active_bundle
+
+    parent_bundle = create_result_bundle(
+        name=recipe.name,
+        kind="batch",
+        tier="two_tier" if domain_strategy is not None else "single_tier",
+        metadata={
+            "recipe": {
+                "name": recipe.name,
+                "target_channel": recipe.target_channel,
+                "preprocessing": list(recipe.preprocessing or []),
+                "segmentation": dict(recipe.segmentation or {}),
+                "measurement": dict(recipe.measurement or {}),
+                "domain": dict(recipe.domain) if recipe.domain else None,
+                "cell_diameter_um": recipe.cell_diameter_um,
             },
-        )
-        try:
-            load_result = _load_file_for_sample_if_needed(
-                info,
-                auto_load_files=auto_load_files,
-            )
+        },
+    )
+
+    with with_active_bundle(parent_bundle):
+        for index, name in enumerate(sample_names):
             raise_if_cancelled()
-            target = recipe.target_channel or info["layer_name"]
-            loaded_layers = list((load_result or {}).get("layer_names") or [])
-            managed_layer_names.extend(str(name) for name in loaded_layers)
-            target = call_on_main(
-                _resolve_target_within_loaded_layers,
-                target,
-                loaded_layers,
-            )
-            if target is None and len(loaded_layers) == 1:
-                target = loaded_layers[0]
-            if projection is not None and target is None:
-                raise ValueError(
-                    "measurement.projection requires a resolved target layer. "
-                    "Set recipe.target_channel to a layer name/color that resolves "
-                    "within each loaded sample."
-                )
-            projection_record = _project_layer_for_recipe(
-                target,
-                projection=projection,
-                axis=projection_axis,
-            )
-            raise_if_cancelled()
-            analysis_target = (
-                projection_record["new_layer"] if projection_record else target
-            )
-            if projection_record:
-                managed_layer_names.append(str(projection_record["new_layer"]))
-            result = analyze_target_cells(
-                target=analysis_target,
-                do_3D=False if projection_record else seg.get("do_3D"),
-                diameter=seg.get("diameter"),
-                preprocess=pre_choice,
-                segmentation_method=seg.get("tool")
-                or seg.get("method", "target_objects"),
-                segmentation_options=seg,
-                domain_strategy=domain_strategy,
-                domain_options=domain_options,
-            )
-        except CancelledError:
-            raise
-        except Exception as exc:  # noqa: BLE001
-            failed_sample = True
-            run_id = put_run(
-                sample_id=s.sample_id,
-                file_id=info["file_id"] or "",
-                recipe_id=recipe.recipe_id,
-                status="failed",
-                error=str(exc),
-            )
-            runs.append({"run_id": run_id, "status": "failed", "error": str(exc)})
-            n_failed += 1
+            info = _resolve_sample_inputs(name)
+            s = info["sample"]
+            current_file = info["file_path"] or info["layer_name"] or s.sample_name
+            base_layer_names = set(call_on_main(_viewer_layer_names))
+            mem_before = _rss_mb()
+            failed_sample = False
+            managed_layer_names: list[str] = []
             report_progress(
-                progress=(index + 1) / total,
-                stage="failed",
+                progress=index / total,
+                stage="sample",
                 current_file=current_file,
                 file_index=index + 1,
                 total_files=total,
@@ -1060,26 +1008,69 @@ def run_recipe_on_samples(
                 failed=n_failed,
                 skipped=0,
                 show_in_chat=True,
-                message=f"Failed {s.sample_name}; continuing.",
+                message=f"Processing {s.sample_name} ({index + 1}/{total}).",
+                detail={
+                    "rss_mb": mem_before,
+                    "layer_count": len(base_layer_names),
+                    "execution_mode": mode,
+                },
             )
-        else:
-            if not result.get("ok"):
+            try:
+                load_result = _load_file_for_sample_if_needed(
+                    info,
+                    auto_load_files=auto_load_files,
+                )
+                raise_if_cancelled()
+                target = recipe.target_channel or info["layer_name"]
+                loaded_layers = list((load_result or {}).get("layer_names") or [])
+                managed_layer_names.extend(str(name) for name in loaded_layers)
+                target = call_on_main(
+                    _resolve_target_within_loaded_layers,
+                    target,
+                    loaded_layers,
+                )
+                if target is None and len(loaded_layers) == 1:
+                    target = loaded_layers[0]
+                if projection is not None and target is None:
+                    raise ValueError(
+                        "measurement.projection requires a resolved target layer. "
+                        "Set recipe.target_channel to a layer name/color that resolves "
+                        "within each loaded sample."
+                    )
+                projection_record = _project_layer_for_recipe(
+                    target,
+                    projection=projection,
+                    axis=projection_axis,
+                )
+                raise_if_cancelled()
+                analysis_target = (
+                    projection_record["new_layer"] if projection_record else target
+                )
+                if projection_record:
+                    managed_layer_names.append(str(projection_record["new_layer"]))
+                result = analyze_target_cells(
+                    target=analysis_target,
+                    do_3D=False if projection_record else seg.get("do_3D"),
+                    diameter=seg.get("diameter"),
+                    preprocess=pre_choice,
+                    segmentation_method=seg.get("tool")
+                    or seg.get("method", "target_objects"),
+                    segmentation_options=seg,
+                    domain_strategy=domain_strategy,
+                    domain_options=domain_options,
+                )
+            except CancelledError:
+                raise
+            except Exception as exc:  # noqa: BLE001
                 failed_sample = True
                 run_id = put_run(
                     sample_id=s.sample_id,
                     file_id=info["file_id"] or "",
                     recipe_id=recipe.recipe_id,
                     status="failed",
-                    error=result.get("error", "analysis returned ok=false"),
-                    summary=result,
+                    error=str(exc),
                 )
-                runs.append(
-                    {
-                        "run_id": run_id,
-                        "status": "failed",
-                        "error": result.get("error"),
-                    }
-                )
+                runs.append({"run_id": run_id, "status": "failed", "error": str(exc)})
                 n_failed += 1
                 report_progress(
                     progress=(index + 1) / total,
@@ -1094,57 +1085,116 @@ def run_recipe_on_samples(
                     message=f"Failed {s.sample_name}; continuing.",
                 )
             else:
-                table_name = result.get("table_name")
-                if table_name:
-                    attach_sample_columns_to_table(
-                        table_name=table_name,
+                if not result.get("ok"):
+                    failed_sample = True
+                    run_id = put_run(
                         sample_id=s.sample_id,
-                        sample_name=s.sample_name,
-                        group=s.group,
-                        file_id=info["file_id"],
-                        source_file=info["file_path"],
-                        source_layer=result.get("target_channel"),
+                        file_id=info["file_id"] or "",
+                        recipe_id=recipe.recipe_id,
+                        status="failed",
+                        error=result.get("error", "analysis returned ok=false"),
+                        summary=result,
                     )
-
-                run_id = put_run(
-                    sample_id=s.sample_id,
-                    file_id=info["file_id"] or "",
-                    recipe_id=recipe.recipe_id,
-                    status="complete",
-                    table_names=[table_name] if table_name else [],
-                    layer_names=[
-                        ln
-                        for ln in (
-                            result.get("labels_layer"),
-                            result.get("preprocessed_layer"),
+                    runs.append(
+                        {
+                            "run_id": run_id,
+                            "status": "failed",
+                            "error": result.get("error"),
+                        }
+                    )
+                    n_failed += 1
+                    report_progress(
+                        progress=(index + 1) / total,
+                        stage="failed",
+                        current_file=current_file,
+                        file_index=index + 1,
+                        total_files=total,
+                        completed=n_complete,
+                        failed=n_failed,
+                        skipped=0,
+                        show_in_chat=True,
+                        message=f"Failed {s.sample_name}; continuing.",
+                    )
+                else:
+                    table_name = result.get("table_name")
+                    if table_name:
+                        attach_sample_columns_to_table(
+                            table_name=table_name,
+                            sample_id=s.sample_id,
+                            sample_name=s.sample_name,
+                            group=s.group,
+                            file_id=info["file_id"],
+                            source_file=info["file_path"],
+                            source_layer=result.get("target_channel"),
                         )
-                        if ln
-                    ],
-                    summary={
-                        "n_objects": result.get("n_objects"),
-                        "object_unit": result.get("object_unit"),
-                        "segmentation_method": result.get("segmentation_method"),
-                        "analysis_dim": result.get("analysis_dim"),
-                        "target_channel": result.get("target_channel"),
-                        "source_target_channel": target,
-                        "projection": projection,
-                        "projection_axis": projection_axis,
-                        "warnings": result.get("warnings", []),
-                        "qc_png_skipped_reason": result.get("qc_png_skipped_reason"),
-                    },
-                )
-                runs.append(
-                    {
-                        "run_id": run_id,
-                        "status": "complete",
-                        "sample_name": s.sample_name,
-                        "table_names": [table_name] if table_name else [],
-                    }
-                )
-                n_complete += 1
+
+                    run_id = put_run(
+                        sample_id=s.sample_id,
+                        file_id=info["file_id"] or "",
+                        recipe_id=recipe.recipe_id,
+                        status="complete",
+                        table_names=[table_name] if table_name else [],
+                        layer_names=[
+                            ln
+                            for ln in (
+                                result.get("labels_layer"),
+                                result.get("preprocessed_layer"),
+                            )
+                            if ln
+                        ],
+                        summary={
+                            "n_objects": result.get("n_objects"),
+                            "object_unit": result.get("object_unit"),
+                            "segmentation_method": result.get("segmentation_method"),
+                            "analysis_dim": result.get("analysis_dim"),
+                            "target_channel": result.get("target_channel"),
+                            "source_target_channel": target,
+                            "projection": projection,
+                            "projection_axis": projection_axis,
+                            "warnings": result.get("warnings", []),
+                            "qc_png_skipped_reason": result.get("qc_png_skipped_reason"),
+                        },
+                    )
+                    runs.append(
+                        {
+                            "run_id": run_id,
+                            "status": "complete",
+                            "sample_name": s.sample_name,
+                            "table_names": [table_name] if table_name else [],
+                        }
+                    )
+                    n_complete += 1
+                    report_progress(
+                        progress=(index + 1) / total,
+                        stage="complete_sample",
+                        current_file=current_file,
+                        file_index=index + 1,
+                        total_files=total,
+                        completed=n_complete,
+                        failed=n_failed,
+                        skipped=0,
+                        show_in_chat=True,
+                        message=f"Completed {s.sample_name} ({index + 1}/{total}).",
+                    )
+            finally:
+                removed_layers: list[str] = []
+                if cleanup_enabled and not (failed_sample and keep_failed_layers):
+                    try:
+                        removed_layers = _cleanup_sample_layers(
+                            base_layer_names,
+                            managed_layer_names,
+                        )
+                    except Exception:
+                        removed_layers = []
+                _release_worker_memory()
+                mem_after = _rss_mb()
+                if runs:
+                    runs[-1]["cleanup_removed_layers"] = removed_layers
+                    runs[-1]["rss_mb_before"] = mem_before
+                    runs[-1]["rss_mb_after"] = mem_after
                 report_progress(
                     progress=(index + 1) / total,
-                    stage="complete_sample",
+                    stage="cleanup",
                     current_file=current_file,
                     file_index=index + 1,
                     total_files=total,
@@ -1152,41 +1202,13 @@ def run_recipe_on_samples(
                     failed=n_failed,
                     skipped=0,
                     show_in_chat=True,
-                    message=f"Completed {s.sample_name} ({index + 1}/{total}).",
+                    message=f"Cleaned up {len(removed_layers)} layers for {s.sample_name}.",
+                    detail={
+                        "rss_mb": mem_after,
+                        "cleanup_removed_layers": len(removed_layers),
+                        "layer_count": len(call_on_main(_viewer_layer_names)),
+                    },
                 )
-        finally:
-            removed_layers: list[str] = []
-            if cleanup_enabled and not (failed_sample and keep_failed_layers):
-                try:
-                    removed_layers = _cleanup_sample_layers(
-                        base_layer_names,
-                        managed_layer_names,
-                    )
-                except Exception:
-                    removed_layers = []
-            _release_worker_memory()
-            mem_after = _rss_mb()
-            if runs:
-                runs[-1]["cleanup_removed_layers"] = removed_layers
-                runs[-1]["rss_mb_before"] = mem_before
-                runs[-1]["rss_mb_after"] = mem_after
-            report_progress(
-                progress=(index + 1) / total,
-                stage="cleanup",
-                current_file=current_file,
-                file_index=index + 1,
-                total_files=total,
-                completed=n_complete,
-                failed=n_failed,
-                skipped=0,
-                show_in_chat=True,
-                message=f"Cleaned up {len(removed_layers)} layers for {s.sample_name}.",
-                detail={
-                    "rss_mb": mem_after,
-                    "cleanup_removed_layers": len(removed_layers),
-                    "layer_count": len(call_on_main(_viewer_layer_names)),
-                },
-            )
 
     return {
         "recipe": recipe_name,
@@ -1196,4 +1218,5 @@ def run_recipe_on_samples(
         "execution_mode": mode,
         "cleanup_enabled": cleanup_enabled,
         "runs": runs,
+        "bundle_path": str(parent_bundle),
     }
