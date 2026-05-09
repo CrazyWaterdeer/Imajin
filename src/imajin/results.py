@@ -10,12 +10,12 @@ from typing import Any
 from imajin.paths import is_wsl, normalize_user_path, windows_drive_roots
 
 
-KST = timezone(timedelta(hours=9), name="KST")
+_KST = timezone(timedelta(hours=9), name="KST")
 
 
 def _kst_now() -> datetime:
     """Return current time in KST (UTC+9), used for bundle folder timestamps."""
-    return datetime.now(KST)
+    return datetime.now(_KST)
 
 
 def _windows_documents_dir() -> Path | None:
