@@ -18,6 +18,54 @@ def _kst_now() -> datetime:
     return datetime.now(_KST)
 
 
+def _git_commit_short() -> str | None:
+    import subprocess
+
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            cwd=str(Path(__file__).resolve().parent),
+            capture_output=True,
+            text=True,
+            timeout=2,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return None
+    if result.returncode != 0:
+        return None
+    return result.stdout.strip() or None
+
+
+def _collect_env_info() -> dict[str, Any]:
+    """Collect package and platform versions for embedding in bundle metadata."""
+    import platform
+    from importlib import metadata as _metadata
+
+    def _ver(pkg: str) -> str | None:
+        try:
+            return _metadata.version(pkg)
+        except _metadata.PackageNotFoundError:
+            return None
+
+    deps_to_record = (
+        "cellpose",
+        "scikit-image",
+        "tifffile",
+        "numpy",
+        "pandas",
+        "napari",
+    )
+    deps = {pkg: _ver(pkg) for pkg in deps_to_record}
+    deps = {k: v for k, v in deps.items() if v is not None}
+
+    return {
+        "python_version": platform.python_version(),
+        "imajin_version": _ver("imajin"),
+        "deps": deps,
+        "git_commit": _git_commit_short(),
+    }
+
+
 def _windows_documents_dir() -> Path | None:
     if not is_wsl():
         return None
