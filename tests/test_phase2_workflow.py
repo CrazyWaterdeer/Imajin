@@ -422,3 +422,48 @@ def test_analyze_target_cells_single_tier_unchanged(viewer) -> None:
     assert res["ok"] is True
     assert "domain_layer" not in res or res.get("domain_layer") is None
     assert "tier_table_name" not in res or res.get("tier_table_name") is None
+
+
+def test_two_tier_recovers_cluster_periphery_vs_single_tier(viewer) -> None:
+    from imajin.tools.workflows import analyze_target_cells
+
+    rng = np.random.default_rng(7)
+    h, w = 256, 256
+    img = rng.normal(5.0, 1.0, (h, w)).astype(np.float32)
+
+    yy, xx = np.mgrid[0:h, 0:w]
+    cluster_mask = ((yy - 60) ** 2 + (xx - 60) ** 2) < 40 ** 2
+    halo_intensity = np.maximum(
+        0,
+        40.0 - 0.6 * np.sqrt((yy - 60) ** 2 + (xx - 60) ** 2),
+    )
+    img += halo_intensity
+    img[cluster_mask] = 250.0  # saturated core
+
+    viewer.add_image(img, name="reporter_long", scale=(0.5, 0.5))
+
+    single = analyze_target_cells(target="reporter_long")
+    assert single["ok"] is True
+    single_labels = np.asarray(viewer.layers[single["labels_layer"]].data)
+    single_area = int((single_labels > 0).sum())
+
+    # Add the same image again so the workflow operates on an independent copy
+    viewer.add_image(img, name="reporter_long_two", scale=(0.5, 0.5))
+    two_tier = analyze_target_cells(
+        target="reporter_long_two",
+        domain_strategy="noise_floor",
+        domain_options={"k_mad": 5.0, "min_area_um2": 1.0},
+        cell_diameter_um=10.0,
+    )
+    assert two_tier["ok"] is True
+    cell_labels = np.asarray(viewer.layers[two_tier["cells_layer"]].data)
+    cell_area = int((cell_labels > 0).sum())
+
+    assert cell_area > single_area, (
+        f"two-tier active-cell area ({cell_area}) should exceed single-tier "
+        f"area ({single_area}) when the cluster has a soft halo"
+    )
+    domain_labels = np.asarray(viewer.layers[two_tier["domain_layer"]].data)
+    assert (domain_labels > 0).sum() > cell_area, (
+        "domain mask must be at least as large as active-cell mask"
+    )
