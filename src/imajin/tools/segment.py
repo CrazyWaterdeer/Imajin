@@ -247,12 +247,13 @@ def _save_qc_png(
     source_layer: str,
     method: str,
     force: bool = False,
+    secondary_outline_mask: np.ndarray | None = None,
 ) -> tuple[str | None, str | None]:
     if not force:
         reason = _small_default_qc_skip_reason(image, masks)
         if reason:
             return None, reason
-    _write_segmentation_qc_png(image, masks, path)
+    _write_segmentation_qc_png(image, masks, path, secondary_outline_mask=secondary_outline_mask)
     try:
         record_result(
             "segmentation_qc_png",
@@ -1147,6 +1148,15 @@ def segment_target_objects(
         },
     )
 
+    secondary_mask_array: np.ndarray | None = None
+    if boundary_mask is not None:
+        bm_snapshot = call_on_main(snapshot_layer, boundary_mask)
+        bm_data = bm_snapshot.data
+        bm_data = np.asarray(
+            bm_data.compute() if hasattr(bm_data, "compute") else bm_data
+        )
+        secondary_mask_array = (bm_data > 0).astype(np.int32)
+
     saved_qc_png: str | None = None
     qc_png_error: str | None = None
     qc_png_skipped_reason: str | None = None
@@ -1165,6 +1175,7 @@ def segment_target_objects(
                 source_layer=L.name,
                 method="target_objects",
                 force=qc_png_path is not None,
+                secondary_outline_mask=secondary_mask_array,
             )
             if saved_qc_png:
                 try:

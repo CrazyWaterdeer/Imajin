@@ -429,3 +429,26 @@ def test_qc_png_renders_secondary_outline(tmp_path) -> None:
         & (rgb[..., 0] < 100)
     )
     assert cyan_pixels.any(), "secondary outline should render in cyan"
+
+
+def test_segment_target_objects_qc_includes_boundary_outline(viewer, tmp_path) -> None:
+    img = np.zeros((100, 100), dtype=np.float32)
+    img[30:50, 30:50] = 200.0
+    viewer.add_image(img, name="rep_q")
+
+    boundary = np.zeros((100, 100), dtype=np.int32)
+    boundary[20:60, 20:60] = 1
+    viewer.add_labels(boundary, name="b_q")
+
+    out_path = tmp_path / "two_tier_qc.png"
+    res = segment.segment_target_objects(
+        "rep_q",
+        boundary_mask="b_q",
+        save_qc_png=True,
+        qc_png_path=str(out_path),
+    )
+
+    assert res["qc_png_path"] is not None
+    rgb = np.asarray(Image.open(out_path))
+    cyan_pixels = (rgb[..., 1] > 150) & (rgb[..., 2] > 150) & (rgb[..., 0] < 100)
+    assert cyan_pixels.any(), "domain outline must appear in cyan in Tier-2 QC PNG"
