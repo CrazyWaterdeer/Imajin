@@ -180,16 +180,15 @@ def create_result_bundle(
     for sub in ("labels/cells", "labels/domain", "tables", "qc", "stats", "figures"):
         (bundle / sub).mkdir(parents=True, exist_ok=True)
     env = _collect_env_info()
-    payload: dict[str, Any] = {
+    payload: dict[str, Any] = dict(metadata or {})
+    payload.update({
         "kind": kind,
         "tier": tier,
         "name": name,
         "status": "in_progress",
         "created_at": now.isoformat(),
         **env,
-    }
-    extras = dict(metadata or {})
-    payload.update(extras)
+    })
     write_bundle_metadata(bundle, payload)
     return bundle
 

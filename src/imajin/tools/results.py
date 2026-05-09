@@ -105,7 +105,7 @@ def save_result_bundle(
 ) -> dict[str, Any]:
     import tifffile
 
-    bundle = create_result_bundle(name, kind="analysis", metadata=metadata)
+    bundle = create_result_bundle(name, kind="single", metadata=metadata)
     outputs: dict[str, list[str]] = {
         "labels": [],
         "tables": [],

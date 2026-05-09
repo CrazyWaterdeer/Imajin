@@ -75,3 +75,25 @@ def test_create_result_bundle_metadata_has_kst_offset_and_env(tmp_path, monkeypa
     assert "python_version" in meta
     assert "deps" in meta
     assert meta["recipe"] == {"name": "demo"}
+
+
+def test_create_result_bundle_framework_fields_win_over_caller_metadata(
+    tmp_path, monkeypatch
+) -> None:
+    monkeypatch.setenv("IMAJIN_RESULTS_DIR", str(tmp_path))
+    bundle = create_result_bundle(
+        "demo",
+        kind="single",
+        tier="single_tier",
+        metadata={
+            "status": "complete",       # should NOT override
+            "kind": "batch",            # should NOT override
+            "imajin_version": "FAKE",   # should NOT override
+            "recipe": {"name": "demo"}, # should pass through
+        },
+    )
+    meta = read_bundle_metadata(bundle)
+    assert meta["status"] == "in_progress"
+    assert meta["kind"] == "single"
+    assert meta["imajin_version"] != "FAKE"
+    assert meta["recipe"] == {"name": "demo"}
