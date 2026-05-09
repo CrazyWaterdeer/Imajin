@@ -781,7 +781,7 @@ def analyze_target_cells(
         else:
             bundle_path = parent
 
-        bundle_outputs: dict[str, str | None] = {
+        bundle_outputs = {
             "labels_cells": None,
             "labels_domain": None,
             "qc_png": None,
@@ -803,10 +803,13 @@ def analyze_target_cells(
             sample_summary = _build_sample_summary(
                 sample_name=target_layer,
                 status="complete",
-                n_cells=int(seg_result.get("n_objects", 0)),
+                n_cells=int(seg_result.get("n_objects", seg_result.get("n_cells", 0))),
                 n_domain_components=domain_result["n_components"],
                 domain_area_um2=domain_result["domain_area_um2"],
-                qc_warnings=list(domain_result.get("counterstain_warnings", [])),
+                qc_warnings=(
+                    list(seg_result.get("qc_warnings", []))
+                    + list(domain_result.get("counterstain_warnings", []))
+                ),
                 outputs=bundle_outputs,
                 source_layer=target_layer,
             )
