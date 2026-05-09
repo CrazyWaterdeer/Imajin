@@ -3,11 +3,19 @@ from __future__ import annotations
 import json
 import os
 import re
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
 from imajin.paths import is_wsl, normalize_user_path, windows_drive_roots
+
+
+KST = timezone(timedelta(hours=9), name="KST")
+
+
+def _kst_now() -> datetime:
+    """Return current time in KST (UTC+9), used for bundle folder timestamps."""
+    return datetime.now(KST)
 
 
 def _windows_documents_dir() -> Path | None:
