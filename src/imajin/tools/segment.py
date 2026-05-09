@@ -1061,8 +1061,38 @@ def segment_target_objects(
         noise_sigma=noise_sigma,
     )
 
+    # Load the boundary mask early so it can be used as the hysteresis grow region.
+    boundary_data_bool: np.ndarray | None = None
+    if boundary_mask is not None:
+        boundary_layer_snapshot = call_on_main(snapshot_layer, boundary_mask)
+        _boundary_raw = boundary_layer_snapshot.data
+        _boundary_raw = np.asarray(
+            _boundary_raw.compute() if hasattr(_boundary_raw, "compute") else _boundary_raw
+        )
+        if _boundary_raw.shape != raw.shape:
+            raise ValueError(
+                f"boundary_mask shape {_boundary_raw.shape} does not match "
+                f"target image shape {raw.shape}"
+            )
+        boundary_data_bool = _boundary_raw > 0
+
     high_threshold = max(float(threshold), float(high_snr) * float(noise_sigma))
-    if high_threshold > threshold and np.any(corrected_for_threshold >= high_threshold):
+    if boundary_data_bool is not None:
+        # Marker-grow: grow high-SNR seeds throughout the domain boundary.
+        # Seeds = pixels above the high_snr threshold and inside the domain.
+        # Grow region = all domain pixels.
+        # Result = domain pixels connected to at least one seed.
+        high_seeds = (corrected_for_threshold >= high_threshold) & boundary_data_bool
+        if np.any(high_seeds):
+            # Build a synthetic indicator: seeds get value 2.0, other domain pixels
+            # get 1.0, outside-domain pixels get 0.0.  Hysteresis with low=0.5,
+            # high=1.5 grows seeds (>= 1.5) into all domain pixels (>= 0.5).
+            _hyst_img = np.where(high_seeds, 2.0, np.where(boundary_data_bool, 1.0, 0.0)).astype(np.float32)
+            binary = filters.apply_hysteresis_threshold(_hyst_img, low=0.5, high=1.5)
+        else:
+            # No high-SNR seeds inside domain — fall back to standard threshold.
+            binary = (corrected_for_threshold >= float(threshold)) & boundary_data_bool
+    elif high_threshold > threshold and np.any(corrected_for_threshold >= high_threshold):
         binary = filters.apply_hysteresis_threshold(
             corrected_for_threshold,
             low=float(threshold),
@@ -1088,19 +1118,9 @@ def segment_target_objects(
         noise_sigma=noise_sigma,
     )
 
-    if boundary_mask is not None:
-        boundary_layer_snapshot = call_on_main(snapshot_layer, boundary_mask)
-        boundary_data = boundary_layer_snapshot.data
-        boundary_data = np.asarray(
-            boundary_data.compute() if hasattr(boundary_data, "compute") else boundary_data
-        )
-        if boundary_data.shape != masks.shape:
-            raise ValueError(
-                f"boundary_mask shape {boundary_data.shape} does not match "
-                f"target image shape {masks.shape}"
-            )
+    if boundary_data_bool is not None:
         masks = _intersect_labels_with_mask(
-            masks, boundary_data > 0, renumber=True
+            masks, boundary_data_bool, renumber=True
         )
         qc = _label_qc(masks)
         signal_qc, qc_warnings = _target_object_qc(
