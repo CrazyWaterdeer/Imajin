@@ -294,6 +294,7 @@ def write_combined_csv(bundle: Path, table_names: list[str]) -> Path:
             continue
         frames.append(frame)
     out = bundle / "tables" / "combined.csv"
+    out.parent.mkdir(parents=True, exist_ok=True)
     if frames:
         combined = pd.concat(frames, ignore_index=True, sort=False)
     else:
