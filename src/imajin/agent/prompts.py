@@ -163,7 +163,12 @@ When the user's request matches one of these intents, run the full pipeline with
   `create_analysis_recipe` → `run_recipe_on_samples`. Do not loop over files by
   repeatedly calling `load_file`; the recipe runner loads one sample at a time and
   cleans up sample layers after each iteration to avoid accumulating image volumes
-  in RAM.
+  in RAM. The recipe's `segmentation` slot is Tier-2 only — use
+  method='target_objects' | 'cellpose_sam' | 'intensity_regions'. For two-tier
+  expression-domain analysis (e.g. CaLexA reporters with halo around saturated
+  cluster cores), put the Tier-1 mask spec in the separate `domain` slot:
+  domain={'strategy':'noise_floor','k_mad':5.0,'dark_percentile':10.0,'min_area_um2':5.0}.
+  Never put 'expression_domain' in the segmentation slot; the runner will reject it.
 
 - **channel color references** / **"green에서 측정"** / **"red channel 분석"** /
   **"far red는 counterstain"** →

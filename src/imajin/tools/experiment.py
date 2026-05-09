@@ -479,8 +479,12 @@ def list_experiment() -> dict[str, Any]:
     description="Create or replace a reusable analysis recipe. Captures target "
     "channel, segmentation/measurement/preprocessing settings, and optional "
     "time-course or colocalization parameters so the same pipeline can be applied "
-    "across many samples in a batch. Optional cell_diameter_um drives Tier-2 size "
-    "derivation; optional domain block enables two-tier expression-domain analysis.",
+    "across many samples in a batch. `segmentation` is the Tier-2 step and must "
+    "use one of method='target_objects' | 'cellpose_sam' | 'intensity_regions'. "
+    "For two-tier expression-domain analysis, put the Tier-1 mask spec into the "
+    "separate `domain` slot, e.g. domain={'strategy':'noise_floor','k_mad':5.0,"
+    "'dark_percentile':10.0,'min_area_um2':5.0}; do NOT put 'expression_domain' in "
+    "the segmentation slot. Optional cell_diameter_um drives Tier-2 size derivation.",
     phase="3",
 )
 def create_analysis_recipe(
@@ -496,6 +500,16 @@ def create_analysis_recipe(
     domain: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     from imajin.agent.state import put_recipe
+    from imajin.tools.workflows import (
+        _normalize_domain_spec,
+        _normalize_segmentation_method,
+    )
+
+    if segmentation:
+        raw_method = segmentation.get("tool") or segmentation.get("method")
+        if raw_method:
+            _normalize_segmentation_method(raw_method)
+    _normalize_domain_spec(domain)
 
     recipe_id = put_recipe(
         name=name,

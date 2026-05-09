@@ -928,3 +928,170 @@ def test_create_analysis_recipe_passes_through_domain(viewer) -> None:
     rec = get_recipe("calexa_recipe")
     assert rec.cell_diameter_um == 15.0
     assert rec.domain == {"strategy": "noise_floor", "k_mad": 5.0}
+
+
+# --- Validation: segmentation method ----------------------------------------
+
+def test_create_analysis_recipe_rejects_expression_domain_in_segmentation_slot() -> None:
+    """`expression_domain` belongs in `domain`, not `segmentation`."""
+    with pytest.raises(ValueError, match="segmentation"):
+        experiment.create_analysis_recipe(
+            name="bad",
+            target_channel="green",
+            segmentation={"method": "expression_domain", "k_mad": 5.0},
+        )
+
+
+def test_create_analysis_recipe_rejects_invalid_method_in_tool_key() -> None:
+    with pytest.raises(ValueError, match="segmentation"):
+        experiment.create_analysis_recipe(
+            name="bad",
+            target_channel="green",
+            segmentation={"tool": "noise_floor"},
+        )
+
+
+@pytest.mark.parametrize(
+    "method",
+    [
+        "cellpose_sam",
+        "cellpose",
+        "target_objects",
+        "intensity_regions",
+        "segment_intensity_regions",
+    ],
+)
+def test_create_analysis_recipe_accepts_known_methods_and_aliases(method: str) -> None:
+    state.reset_recipes()
+    experiment.create_analysis_recipe(
+        name="r",
+        target_channel="green",
+        segmentation={"method": method},
+    )
+
+
+def test_create_analysis_recipe_rejects_unknown_domain_strategy() -> None:
+    with pytest.raises(ValueError, match="domain"):
+        experiment.create_analysis_recipe(
+            name="bad_domain",
+            target_channel="green",
+            segmentation={"method": "intensity_regions"},
+            domain={"strategy": "kmeans"},
+        )
+
+
+# --- Runner forwards recipe.domain to analyze_target_cells ------------------
+
+def _setup_single_sample_with_layer(viewer, tmp_path: Path, sample_name: str) -> Path:
+    layer = f"{sample_name}_ch0"
+    viewer.add_image(
+        np.zeros((20, 20), dtype=np.float32), name=layer, scale=(0.5, 0.5)
+    )
+    state.put_channel_annotation(layer, role="target", color="green")
+    p = tmp_path / f"{sample_name}.lsm"
+    p.write_bytes(b"")
+    experiment.register_files([str(p)])
+    experiment.annotate_samples(
+        [
+            {
+                "sample_name": sample_name,
+                "group": "control",
+                "files": [str(p)],
+                "layers": [layer],
+            }
+        ]
+    )
+    return p
+
+
+def _stub_analyze_target_cells(monkeypatch, captured: dict[str, object]) -> None:
+    from imajin.tools import workflows
+
+    def fake_analyze(target=None, **kwargs):
+        captured["target"] = target
+        captured.update(kwargs)
+        return {
+            "ok": True,
+            "target_channel": target,
+            "labels_layer": None,
+            "preprocessed_layer": None,
+            "table_name": None,
+            "n_objects": 0,
+            "object_unit": "cells",
+            "segmentation_method": kwargs.get("segmentation_method"),
+            "analysis_dim": "2d",
+            "warnings": [],
+        }
+
+    monkeypatch.setattr(workflows, "analyze_target_cells", fake_analyze)
+
+
+def test_run_recipe_on_samples_forwards_recipe_domain_to_two_tier(
+    viewer, monkeypatch, tmp_path: Path
+) -> None:
+    from imajin.tools import workflows
+
+    _setup_single_sample_with_layer(viewer, tmp_path, "ctrl_1")
+    experiment.create_analysis_recipe(
+        name="two_tier",
+        target_channel="green",
+        segmentation={"tool": "intensity_regions"},
+        measurement={"properties": ["area", "mean_intensity"]},
+        domain={"strategy": "noise_floor", "k_mad": 5.0, "min_area_um2": 1.0},
+    )
+
+    captured: dict[str, object] = {}
+    _stub_analyze_target_cells(monkeypatch, captured)
+
+    res = workflows.run_recipe_on_samples(recipe_name="two_tier")
+
+    assert res["n_complete"] == 1
+    assert captured.get("domain_strategy") == "noise_floor"
+    assert captured.get("domain_options") == {"k_mad": 5.0, "min_area_um2": 1.0}
+    assert captured.get("segmentation_method") == "intensity_regions"
+
+
+def test_run_recipe_on_samples_accepts_expression_domain_alias_in_recipe_domain(
+    viewer, monkeypatch, tmp_path: Path
+) -> None:
+    """`recipe.domain.method = 'expression_domain'` translates to the noise_floor strategy."""
+    from imajin.tools import workflows
+
+    _setup_single_sample_with_layer(viewer, tmp_path, "ctrl_1")
+    experiment.create_analysis_recipe(
+        name="two_tier_alias",
+        target_channel="green",
+        segmentation={"tool": "intensity_regions"},
+        measurement={"properties": ["area"]},
+        domain={"method": "expression_domain", "k_mad": 5.0},
+    )
+
+    captured: dict[str, object] = {}
+    _stub_analyze_target_cells(monkeypatch, captured)
+
+    workflows.run_recipe_on_samples(recipe_name="two_tier_alias")
+
+    assert captured.get("domain_strategy") == "noise_floor"
+    assert captured.get("domain_options") == {"k_mad": 5.0}
+
+
+def test_run_recipe_on_samples_no_domain_stays_single_tier(
+    viewer, monkeypatch, tmp_path: Path
+) -> None:
+    from imajin.tools import workflows
+
+    _setup_single_sample_with_layer(viewer, tmp_path, "ctrl_1")
+    experiment.create_analysis_recipe(
+        name="single_tier",
+        target_channel="green",
+        segmentation={"tool": "intensity_regions"},
+        measurement={"properties": ["area"]},
+    )
+
+    captured: dict[str, object] = {}
+    _stub_analyze_target_cells(monkeypatch, captured)
+
+    workflows.run_recipe_on_samples(recipe_name="single_tier")
+
+    assert captured.get("domain_strategy") is None
+    assert captured.get("domain_options") is None

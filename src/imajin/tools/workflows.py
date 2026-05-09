@@ -48,6 +48,81 @@ def _normalize_preprocess(name: str | None) -> str | None:
     return _VALID_PREPROCESS[key]
 
 
+_TARGET_OBJECT_ALIASES = {
+    "target",
+    "target_object",
+    "target_objects",
+    "segment_target_object",
+    "segment_target_objects",
+    "objects",
+    "rois",
+}
+_CELLPOSE_SAM_ALIASES = {"cellpose", "cpsam", "cellpose_sam"}
+_INTENSITY_REGION_ALIASES = {
+    "intensity",
+    "intensity_region",
+    "intensity_regions",
+    "segment_intensity_region",
+    "segment_intensity_regions",
+    "roi",
+}
+_NOISE_FLOOR_ALIASES = {
+    "noise_floor",
+    "noisefloor",
+    "expression_domain",
+    "expression",
+    "expression_region",
+}
+
+
+def _normalize_segmentation_method(method: str) -> str:
+    """Map user-facing segmentation method names to the canonical Tier-2 name.
+
+    Raises ValueError if the name is not a Tier-2 segmentation method (e.g.
+    'expression_domain', which is a Tier-1 domain step).
+    """
+    key = str(method).strip().lower().replace("-", "_")
+    if key in _TARGET_OBJECT_ALIASES:
+        return "target_objects"
+    if key in _CELLPOSE_SAM_ALIASES:
+        return "cellpose_sam"
+    if key in _INTENSITY_REGION_ALIASES:
+        return "intensity_regions"
+    raise ValueError(
+        "segmentation_method must be 'target_objects', 'cellpose_sam', "
+        f"or 'intensity_regions' (got {method!r}). "
+        "Tier-1 domain steps like 'expression_domain' belong in the "
+        "`domain` slot, not `segmentation`."
+    )
+
+
+def _normalize_domain_spec(
+    domain: dict[str, Any] | None,
+) -> tuple[str | None, dict[str, Any] | None]:
+    """Translate a recipe `domain` dict to (domain_strategy, domain_options).
+
+    Accepts either {"strategy": "noise_floor", ...} or
+    {"method": "expression_domain", ...}; both map to the canonical
+    domain_strategy='noise_floor'. Remaining keys flow through as
+    domain_options.
+    """
+    if not domain:
+        return None, None
+    raw = domain.get("strategy") or domain.get("method")
+    if raw is None:
+        raise ValueError(
+            "recipe.domain must include 'strategy' (e.g. 'noise_floor') "
+            "or 'method' (e.g. 'expression_domain')."
+        )
+    key = str(raw).strip().lower().replace("-", "_")
+    if key not in _NOISE_FLOOR_ALIASES:
+        raise ValueError(
+            f"recipe.domain strategy must be 'noise_floor' (got {raw!r})."
+        )
+    options = {k: v for k, v in domain.items() if k not in {"strategy", "method"}}
+    return "noise_floor", options
+
+
 def _decide_3d(do_3D: bool | None, layer_axes: str | None, ndim: int) -> bool:
     if do_3D is True:
         return True
@@ -460,33 +535,7 @@ def analyze_target_cells(
         )
         pre_computed_domain_layer = domain_pre["labels_layer"]
 
-    method = segmentation_method.strip().lower().replace("-", "_")
-    if method in {
-        "target",
-        "target_object",
-        "target_objects",
-        "segment_target_object",
-        "segment_target_objects",
-        "objects",
-        "rois",
-    }:
-        method = "target_objects"
-    elif method in {"cellpose", "cpsam", "cellpose_sam"}:
-        method = "cellpose_sam"
-    elif method in {
-        "intensity",
-        "intensity_region",
-        "intensity_regions",
-        "segment_intensity_region",
-        "segment_intensity_regions",
-        "roi",
-    }:
-        method = "intensity_regions"
-    else:
-        raise ValueError(
-            "segmentation_method must be 'target_objects', 'cellpose_sam', "
-            "or 'intensity_regions'"
-        )
+    method = _normalize_segmentation_method(segmentation_method)
 
     _check_analysis_memory_budget(seg_input_layer, data=snapshot.data, method=method)
 
@@ -759,6 +808,7 @@ def run_recipe_on_samples(
     pre_steps = recipe.preprocessing or []
     pre_choice = _first_analysis_preprocess(pre_steps)
     projection, projection_axis = _projection_request(measurement, pre_steps)
+    domain_strategy, domain_options = _normalize_domain_spec(recipe.domain)
 
     runs: list[dict[str, Any]] = []
     n_complete = 0
@@ -831,6 +881,8 @@ def run_recipe_on_samples(
                 segmentation_method=seg.get("tool")
                 or seg.get("method", "target_objects"),
                 segmentation_options=seg,
+                domain_strategy=domain_strategy,
+                domain_options=domain_options,
             )
         except CancelledError:
             raise
