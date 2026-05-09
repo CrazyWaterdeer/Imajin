@@ -301,3 +301,62 @@ def test_autosave_is_suspended_during_load(tmp_path: Path) -> None:
 
     assert loaded["n_samples"] == 1
     assert (root / "project.json").read_text() == original_project_json
+
+
+def test_recipe_round_trip_with_cell_diameter_and_domain(tmp_path) -> None:
+    from imajin.agent.state import (
+        get_recipe,
+        put_recipe,
+        reset_recipes,
+    )
+    from imajin.project import create_project, load_project, save_project
+
+    root = tmp_path / "proj"
+    create_project(root)
+    reset_recipes()
+    put_recipe(
+        name="r1",
+        target_channel="green",
+        cell_diameter_um=15.0,
+        domain={
+            "strategy": "noise_floor",
+            "k_mad": 5.0,
+            "dark_percentile": 10.0,
+            "counterstain_layer": None,
+            "counterstain_dilation_um": 0.0,
+            "min_area_um2": None,
+            "dilation_um": 0.0,
+        },
+    )
+
+    save_project()
+    reset_recipes()
+    load_project(root)
+
+    rec = get_recipe("r1")
+    assert rec.cell_diameter_um == pytest.approx(15.0)
+    assert rec.domain is not None
+    assert rec.domain["strategy"] == "noise_floor"
+    assert rec.domain["k_mad"] == pytest.approx(5.0)
+
+
+def test_recipe_round_trip_without_domain_defaults_none(tmp_path) -> None:
+    from imajin.agent.state import (
+        get_recipe,
+        put_recipe,
+        reset_recipes,
+    )
+    from imajin.project import create_project, load_project, save_project
+
+    root = tmp_path / "proj2"
+    create_project(root)
+    reset_recipes()
+    put_recipe(name="rNo", target_channel="green")
+
+    save_project()
+    reset_recipes()
+    load_project(root)
+
+    rec = get_recipe("rNo")
+    assert rec.cell_diameter_um is None
+    assert rec.domain is None

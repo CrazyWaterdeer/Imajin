@@ -123,6 +123,8 @@ class AnalysisRecipe:
     timecourse: dict[str, Any] | None = None
     colocalization: list[tuple[str, str]] = field(default_factory=list)
     notes: str | None = None
+    cell_diameter_um: float | None = None
+    domain: dict[str, Any] | None = None
 
 
 _RECIPES: dict[str, AnalysisRecipe] = {}
@@ -137,6 +139,8 @@ def put_recipe(
     timecourse: dict[str, Any] | None = None,
     colocalization: list[tuple[str, str]] | None = None,
     notes: str | None = None,
+    cell_diameter_um: float | None = None,
+    domain: dict[str, Any] | None = None,
 ) -> str:
     name = name.strip()
     if not name:
@@ -151,6 +155,8 @@ def put_recipe(
         timecourse=dict(timecourse) if timecourse else None,
         colocalization=list(colocalization or []),
         notes=notes,
+        cell_diameter_um=cell_diameter_um,
+        domain=dict(domain) if domain else None,
     )
     _autosave_project("recipe_saved")
     return name
@@ -789,6 +795,8 @@ def restore_session_state(
             timecourse=rec.get("timecourse"),
             colocalization=list(rec.get("colocalization") or []),
             notes=rec.get("notes"),
+            cell_diameter_um=rec.get("cell_diameter_um"),
+            domain=dict(rec["domain"]) if rec.get("domain") else None,
         )
 
     max_run = 0
