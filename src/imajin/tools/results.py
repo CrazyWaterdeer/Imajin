@@ -231,6 +231,7 @@ def _write_label_layer(
     labels = data.astype(_label_output_dtype(data), copy=False)
     rel = Path("labels") / tier / f"{sample_slug}.tif"
     out = bundle / rel
+    out.parent.mkdir(parents=True, exist_ok=True)
     if out.exists():
         raise ValueError(
             f"{rel} already exists in bundle {bundle.name}; "
