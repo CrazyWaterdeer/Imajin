@@ -1119,10 +1119,13 @@ def run_recipe_on_samples(
                         message=f"Failed {s.sample_name}; continuing.",
                     )
                 else:
-                    table_name = result.get("table_name")
-                    if table_name:
+                    attached_tables: list[str] = []
+                    for tname_key in ("table_name", "tier_table_name"):
+                        tname = result.get(tname_key)
+                        if not tname or tname in attached_tables:
+                            continue
                         attach_sample_columns_to_table(
-                            table_name=table_name,
+                            table_name=tname,
                             sample_id=s.sample_id,
                             sample_name=s.sample_name,
                             group=s.group,
@@ -1130,13 +1133,15 @@ def run_recipe_on_samples(
                             source_file=info["file_path"],
                             source_layer=result.get("target_channel"),
                         )
+                        attached_tables.append(tname)
+                    table_name = attached_tables[0] if attached_tables else None
 
                     run_id = put_run(
                         sample_id=s.sample_id,
                         file_id=info["file_id"] or "",
                         recipe_id=recipe.recipe_id,
                         status="complete",
-                        table_names=[table_name] if table_name else [],
+                        table_names=list(attached_tables),
                         layer_names=[
                             ln
                             for ln in (
@@ -1163,7 +1168,7 @@ def run_recipe_on_samples(
                             "run_id": run_id,
                             "status": "complete",
                             "sample_name": s.sample_name,
-                            "table_names": [table_name] if table_name else [],
+                            "table_names": list(attached_tables),
                         }
                     )
                     n_complete += 1

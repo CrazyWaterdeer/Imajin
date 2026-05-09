@@ -1134,3 +1134,47 @@ def test_run_recipe_on_samples_creates_parent_bundle(
     # Sample output landed in the parent bundle, not a sibling per-call bundle
     siblings = sorted(bundle.parent.iterdir())
     assert len(siblings) == 1, [s.name for s in siblings]
+
+
+def test_run_recipe_on_samples_two_tier_attaches_sample_cols_to_tier_table(
+    viewer, monkeypatch, tmp_path: Path
+) -> None:
+    from imajin.tools import workflows
+
+    monkeypatch.setenv("IMAJIN_RESULTS_DIR", str(tmp_path))
+
+    rng = np.random.default_rng(0)
+    img = np.zeros((200, 200), dtype=np.float32)
+    img[:, :] = rng.normal(5.0, 1.0, img.shape)
+    img[40:80, 40:80] += 60.0
+    viewer.add_image(img, name="ctrl_1_ch0", scale=(0.5, 0.5))
+    state.put_channel_annotation("ctrl_1_ch0", role="target", color="green")
+
+    p = tmp_path / "ctrl_1.lsm"
+    p.write_bytes(b"")
+    experiment.register_files([str(p)])
+    experiment.annotate_samples(
+        [{"sample_name": "ctrl_1", "group": "control",
+          "files": [str(p)], "layers": ["ctrl_1_ch0"]}]
+    )
+    experiment.create_analysis_recipe(
+        name="two_tier_r",
+        target_channel="green",
+        segmentation={"tool": "intensity_regions"},
+        measurement={"properties": ["area"]},
+        domain={"strategy": "noise_floor", "k_mad": 5.0, "min_area_um2": 1.0},
+        cell_diameter_um=10.0,
+    )
+
+    res = workflows.run_recipe_on_samples(recipe_name="two_tier_r")
+    assert res["n_complete"] == 1
+    run = res["runs"][0]
+    table_names = run.get("table_names") or []
+    assert table_names
+    has_sample_attached = False
+    for tname in table_names:
+        df = state.get_table(tname)
+        if "tier" in df.columns and "sample_name" in df.columns:
+            has_sample_attached = True
+            assert (df["sample_name"] == "ctrl_1").all()
+    assert has_sample_attached, f"tier table missing sample columns; tables={table_names}"
