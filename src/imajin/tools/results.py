@@ -25,7 +25,7 @@ from imajin.tools.registry import tool
 
 
 _active_bundle: contextvars.ContextVar[Path | None] = contextvars.ContextVar(
-    "_active_bundle", default=None
+    "imajin_active_bundle", default=None
 )
 
 
@@ -40,7 +40,15 @@ def current_bundle() -> Path | None:
 
 @contextlib.contextmanager
 def with_active_bundle(path: Path | str) -> Iterator[Path]:
-    """Mark `path` as the current bundle for the duration of the with-block."""
+    """Mark `path` as the current bundle for the duration of the with-block.
+
+    Note: Python `contextvars` propagate to `threading.Thread` children but NOT
+    to Qt thread-pool workers (e.g. napari's `@thread_worker`). If a caller
+    inside this block dispatches work via such a pool, that work will see
+    `current_bundle() is None`. Callers in such situations must capture the
+    path explicitly or run the dispatched callable inside a copied context
+    (`contextvars.copy_context().run(...)`).
+    """
     p = Path(path)
     token = _active_bundle.set(p)
     try:
