@@ -532,3 +532,29 @@ def test_analyze_target_cells_two_tier_writes_bundle(
     assert meta["status"] == "complete"
     assert len(meta["samples"]) == 1
     assert meta["samples"][0]["outputs"]["labels_domain"] == "labels/domain/reporter.tif"
+
+
+def test_analyze_target_cells_writes_into_active_parent_bundle(
+    viewer, tmp_path, monkeypatch
+) -> None:
+    """When a parent bundle is active, no own-bundle is created."""
+    from imajin.results import create_result_bundle
+    from imajin.tools.results import with_active_bundle
+    from imajin.tools.workflows import analyze_target_cells
+
+    monkeypatch.setenv("IMAJIN_RESULTS_DIR", str(tmp_path))
+    parent = create_result_bundle(name="parent", kind="batch", tier="single_tier")
+
+    img = np.zeros((40, 40), dtype=np.float32)
+    img[10:30, 10:30] = 200.0
+    viewer.add_image(img, name="reporter", scale=(0.5, 0.5))
+
+    with with_active_bundle(parent):
+        res = analyze_target_cells(target="reporter")
+
+    assert res["ok"] is True
+    assert res["result_bundle_path"] is None
+    assert (parent / "labels" / "cells" / "reporter.tif").exists()
+    meta = json.loads((parent / "metadata.json").read_text())
+    assert meta["status"] == "in_progress"
+    assert "samples" not in meta

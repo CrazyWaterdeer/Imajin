@@ -874,7 +874,7 @@ def analyze_target_cells(
         "segmentation_warnings": seg_result.get("qc_warnings", []),
         "table_name": measure_result["table_name"],
         "table_columns": measure_result["columns"],
-        "result_bundle_path": str(bundle_path) if bundle_path is not None else None,
+        "result_bundle_path": str(bundle_path) if own_bundle else None,
         "result_files": dict(bundle_outputs),
         "voxel_scale": voxel,
         "has_physical_units": bool(measure_result.get("has_physical_units")),
