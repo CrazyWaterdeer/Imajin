@@ -498,3 +498,37 @@ def test_analyze_target_cells_single_tier_writes_new_layout_bundle(
     assert len(meta["samples"]) == 1
     assert meta["samples"][0]["status"] == "complete"
     assert meta["samples"][0]["outputs"]["labels_cells"] == "labels/cells/reporter.tif"
+
+
+def test_analyze_target_cells_two_tier_writes_bundle(
+    viewer, tmp_path, monkeypatch
+) -> None:
+    from imajin.tools.workflows import analyze_target_cells
+
+    monkeypatch.setenv("IMAJIN_RESULTS_DIR", str(tmp_path))
+
+    rng = np.random.default_rng(0)
+    img = np.zeros((200, 200), dtype=np.float32)
+    img[:, :] = rng.normal(5.0, 1.0, img.shape)
+    img[40:80, 40:80] += 60.0
+    img[120:160, 120:160] += 12.0
+    viewer.add_image(img, name="reporter", scale=(0.5, 0.5))
+
+    res = analyze_target_cells(
+        target="reporter",
+        domain_strategy="noise_floor",
+        domain_options={"k_mad": 5.0, "min_area_um2": 1.0},
+        cell_diameter_um=10.0,
+    )
+    assert res["ok"] is True
+    bundle = Path(res["result_bundle_path"])
+    assert bundle.exists()
+    assert (bundle / "labels" / "cells" / "reporter.tif").exists()
+    assert (bundle / "labels" / "domain" / "reporter.tif").exists()
+
+    meta = json.loads((bundle / "metadata.json").read_text())
+    assert meta["kind"] == "single"
+    assert meta["tier"] == "two_tier"
+    assert meta["status"] == "complete"
+    assert len(meta["samples"]) == 1
+    assert meta["samples"][0]["outputs"]["labels_domain"] == "labels/domain/reporter.tif"

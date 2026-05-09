@@ -754,6 +754,74 @@ def analyze_target_cells(
             },
         )
 
+        from imajin.results import create_result_bundle, slugify_result_name as _slug
+        from imajin.tools.results import (
+            current_bundle,
+            populate_sample_outputs,
+            write_combined_csv,
+            finalize_bundle_metadata,
+        )
+
+        sample_slug = _slug(target_layer)
+        parent = current_bundle()
+        own_bundle = parent is None
+        if own_bundle:
+            bundle_path = create_result_bundle(
+                name=target_layer,
+                kind="single",
+                tier="two_tier",
+                metadata={
+                    "recipe": None,
+                    "target_channel": target_layer,
+                    "target_source": resolution.source,
+                    "segmentation_method": method,
+                    "analysis_dim": "3d" if use_3d else "2d",
+                },
+            )
+        else:
+            bundle_path = parent
+
+        bundle_outputs: dict[str, str | None] = {
+            "labels_cells": None,
+            "labels_domain": None,
+            "qc_png": None,
+        }
+        try:
+            bundle_outputs = populate_sample_outputs(
+                bundle_path,
+                sample_slug=sample_slug,
+                labels_cells=seg_result["labels_layer"],
+                labels_domain=domain_layer,
+                qc_png=seg_result.get("qc_png_path"),
+            )
+        except Exception as exc:  # noqa: BLE001
+            warnings.append(
+                f"bundle outputs could not be written: {type(exc).__name__}: {exc}"
+            )
+
+        if own_bundle:
+            sample_summary = _build_sample_summary(
+                sample_name=target_layer,
+                status="complete",
+                n_cells=int(seg_result.get("n_objects", 0)),
+                n_domain_components=domain_result["n_components"],
+                domain_area_um2=domain_result["domain_area_um2"],
+                qc_warnings=list(domain_result.get("counterstain_warnings", [])),
+                outputs=bundle_outputs,
+                source_layer=target_layer,
+            )
+            try:
+                write_combined_csv(bundle_path, [tier_table_name])
+                finalize_bundle_metadata(
+                    bundle_path,
+                    samples=[sample_summary],
+                    status="complete",
+                )
+            except Exception as exc:  # noqa: BLE001
+                warnings.append(
+                    f"bundle could not be finalized: {type(exc).__name__}: {exc}"
+                )
+
         return {
             "ok": True,
             "target_channel": target_layer,
@@ -774,6 +842,8 @@ def analyze_target_cells(
             "qc_png_path": seg_result.get("qc_png_path"),
             "qc_png_error": seg_result.get("qc_png_error"),
             "qc_png_skipped_reason": seg_result.get("qc_png_skipped_reason"),
+            "result_bundle_path": str(bundle_path) if own_bundle else None,
+            "result_files": dict(bundle_outputs),
             "voxel_scale": voxel,
             "warnings": warnings + list(domain_result.get("counterstain_warnings", [])),
         }
