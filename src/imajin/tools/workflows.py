@@ -1218,6 +1218,17 @@ def run_recipe_on_samples(
                     },
                 )
 
+        from imajin.tools.results import write_combined_csv
+
+        primary_tables: list[str] = []
+        for run in runs:
+            # Last attached table per run is the primary: tier_table_name for two-tier
+            # (long format with `tier` column), or table_name for single-tier.
+            names = run.get("table_names") or []
+            if names:
+                primary_tables.append(names[-1])
+        write_combined_csv(parent_bundle, primary_tables)
+
     return {
         "recipe": recipe_name,
         "n_samples": len(sample_names),

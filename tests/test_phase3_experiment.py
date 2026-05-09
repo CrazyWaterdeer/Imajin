@@ -1178,3 +1178,46 @@ def test_run_recipe_on_samples_two_tier_attaches_sample_cols_to_tier_table(
             has_sample_attached = True
             assert (df["sample_name"] == "ctrl_1").all()
     assert has_sample_attached, f"tier table missing sample columns; tables={table_names}"
+
+
+def test_run_recipe_on_samples_writes_combined_csv(
+    viewer, monkeypatch, tmp_path: Path
+) -> None:
+    from imajin.tools import workflows
+
+    monkeypatch.setenv("IMAJIN_RESULTS_DIR", str(tmp_path))
+
+    img = np.zeros((40, 40), dtype=np.float32)
+    img[10:30, 10:30] = 200.0
+    viewer.add_image(img, name="ctrl_1_ch0", scale=(0.5, 0.5))
+    viewer.add_image(img.copy(), name="trt_1_ch0", scale=(0.5, 0.5))
+    state.put_channel_annotation("ctrl_1_ch0", role="target", color="green")
+
+    a = tmp_path / "ctrl_1.lsm"
+    b = tmp_path / "trt_1.lsm"
+    a.write_bytes(b"")
+    b.write_bytes(b"")
+    experiment.register_files([str(a), str(b)])
+    experiment.annotate_samples(
+        [
+            {"sample_name": "ctrl_1", "group": "control",
+             "files": [str(a)], "layers": ["ctrl_1_ch0"]},
+            {"sample_name": "trt_1", "group": "treatment",
+             "files": [str(b)], "layers": ["trt_1_ch0"]},
+        ]
+    )
+    experiment.create_analysis_recipe(
+        name="r_combined",
+        target_channel="ctrl_1_ch0",
+        segmentation={"tool": "intensity_regions"},
+        measurement={"properties": ["area", "mean_intensity"]},
+    )
+
+    res = workflows.run_recipe_on_samples(recipe_name="r_combined")
+    bundle = Path(res["bundle_path"])
+    combined = bundle / "tables" / "combined.csv"
+    assert combined.exists()
+
+    df = pd.read_csv(combined)
+    assert {"sample_name", "group", "file_id"}.issubset(df.columns)
+    assert set(df["sample_name"].unique()) == {"ctrl_1", "trt_1"}
