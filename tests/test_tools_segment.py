@@ -403,3 +403,29 @@ def test_segment_target_objects_default_unchanged(viewer) -> None:
     assert res["n_objects"] >= 1
     labels = np.asarray(viewer.layers[res["labels_layer"]].data)
     assert (labels[40:60, 40:60] > 0).any()
+
+
+def test_qc_png_renders_secondary_outline(tmp_path) -> None:
+    image = np.zeros((64, 64), dtype=np.float32)
+    image[20:30, 20:30] = 100.0
+    primary = np.zeros((64, 64), dtype=np.int32)
+    primary[22:28, 22:28] = 1
+    secondary = np.zeros((64, 64), dtype=np.int32)
+    secondary[15:35, 15:35] = 1
+
+    out_path = tmp_path / "two_tier_qc.png"
+    segment._write_segmentation_qc_png(
+        image,
+        primary,
+        out_path,
+        secondary_outline_mask=secondary,
+    )
+
+    assert out_path.exists()
+    rgb = np.asarray(Image.open(out_path))
+    cyan_pixels = (
+        (rgb[..., 1] > 150)
+        & (rgb[..., 2] > 150)
+        & (rgb[..., 0] < 100)
+    )
+    assert cyan_pixels.any(), "secondary outline should render in cyan"

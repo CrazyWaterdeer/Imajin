@@ -204,6 +204,8 @@ def _write_segmentation_qc_png(
     image: np.ndarray,
     masks: np.ndarray,
     path: Path,
+    *,
+    secondary_outline_mask: np.ndarray | None = None,
 ) -> None:
     from PIL import Image
     from skimage.segmentation import find_boundaries
@@ -226,6 +228,12 @@ def _write_segmentation_qc_png(
         rgb[mask] = (1.0 - alpha) * rgb[mask] + alpha * colors[labels[mask]]
     boundaries = find_boundaries(mask_plane, mode="outer")
     rgb[boundaries] = np.asarray([255, 64, 0], dtype=np.uint8)
+
+    if secondary_outline_mask is not None:
+        _, secondary_plane = _project_for_qc(image, secondary_outline_mask)
+        secondary_boundaries = find_boundaries(secondary_plane, mode="outer")
+        rgb[secondary_boundaries] = np.asarray([0, 200, 220], dtype=np.uint8)
+
     path.parent.mkdir(parents=True, exist_ok=True)
     Image.fromarray(np.clip(rgb, 0, 255).astype(np.uint8)).save(path)
 
