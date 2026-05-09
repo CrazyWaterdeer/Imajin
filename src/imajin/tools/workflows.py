@@ -942,6 +942,9 @@ def run_recipe_on_samples(
             "n_complete": 0,
             "n_failed": 0,
             "runs": [],
+            "bundle_path": None,
+            "execution_mode": execution_mode,
+            "cleanup_enabled": False,
         }
 
     mode = execution_mode.strip().lower().replace("-", "_")

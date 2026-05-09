@@ -790,6 +790,7 @@ def test_run_recipe_on_samples_no_samples_returns_empty() -> None:
     res = workflows.run_recipe_on_samples(recipe_name="r_empty", sample_names=[])
     assert res["n_samples"] == 0
     assert res["runs"] == []
+    assert res["bundle_path"] is None
 
 
 # --- Task 11: summarize_experiment -------------------------------------------
