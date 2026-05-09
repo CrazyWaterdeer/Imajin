@@ -561,26 +561,27 @@ def analyze_target_cells(
         )
 
     bundle_result: dict[str, Any] | None = None
-    try:
-        from imajin.tools import results as _results
+    if domain_strategy is None:
+        try:
+            from imajin.tools import results as _results
 
-        bundle_result = _results.save_result_bundle(
-            name=f"{target_layer}_{method}_analysis",
-            labels_layers=[seg_result["labels_layer"]],
-            table_names=[measure_result["table_name"]],
-            qc_png_paths=[seg_result.get("qc_png_path")] if seg_result.get("qc_png_path") else [],
-            metadata={
-                "target_channel": target_layer,
-                "target_source": resolution.source,
-                "segmentation_method": method,
-                "analysis_dim": "3d" if use_3d else "2d",
-                "labels_layer": seg_result["labels_layer"],
-                "table_name": measure_result["table_name"],
-                "n_objects": int(seg_result.get("n_objects", seg_result.get("n_cells", 0))),
-            },
-        )
-    except Exception as exc:  # noqa: BLE001
-        warnings.append(f"result bundle could not be saved: {type(exc).__name__}: {exc}")
+            bundle_result = _results.save_result_bundle(
+                name=f"{target_layer}_{method}_analysis",
+                labels_layers=[seg_result["labels_layer"]],
+                table_names=[measure_result["table_name"]],
+                qc_png_paths=[seg_result.get("qc_png_path")] if seg_result.get("qc_png_path") else [],
+                metadata={
+                    "target_channel": target_layer,
+                    "target_source": resolution.source,
+                    "segmentation_method": method,
+                    "analysis_dim": "3d" if use_3d else "2d",
+                    "labels_layer": seg_result["labels_layer"],
+                    "table_name": measure_result["table_name"],
+                    "n_objects": int(seg_result.get("n_objects", seg_result.get("n_cells", 0))),
+                },
+            )
+        except Exception as exc:  # noqa: BLE001
+            warnings.append(f"result bundle could not be saved: {type(exc).__name__}: {exc}")
 
     if domain_strategy is not None:
         if domain_strategy != "noise_floor":
