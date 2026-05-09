@@ -214,3 +214,66 @@ def save_result_bundle(
         "metadata_path": str(bundle / "metadata.json"),
         "outputs": outputs,
     }
+
+
+def _write_label_layer(
+    bundle: Path, tier: str, sample_slug: str, layer_name: str
+) -> str:
+    """Snapshot a label layer and write it to bundle/labels/<tier>/<slug>.tif.
+
+    Returns the path relative to `bundle`.
+    Raises ValueError on filename collision within the same bundle.
+    """
+    import tifffile
+
+    layer = call_on_main(snapshot_layer, layer_name)
+    data = _materialize(layer.data)
+    labels = data.astype(_label_output_dtype(data), copy=False)
+    rel = Path("labels") / tier / f"{sample_slug}.tif"
+    out = bundle / rel
+    if out.exists():
+        raise ValueError(
+            f"{rel} already exists in bundle {bundle.name}; "
+            "sample_slug collision suspected"
+        )
+    tifffile.imwrite(out, labels)
+    return rel.as_posix()
+
+
+def _copy_qc_png(bundle: Path, qc_png: str, sample_slug: str) -> str | None:
+    """Copy a QC PNG into bundle/qc/<slug>.png. Returns path relative to bundle."""
+    src = normalize_user_path(qc_png).resolve()
+    if not src.exists():
+        return None
+    rel = Path("qc") / f"{sample_slug}.png"
+    dst = bundle / rel
+    if src.resolve() != dst.resolve():
+        shutil.copy2(src, dst)
+    return rel.as_posix()
+
+
+def populate_sample_outputs(
+    bundle: Path,
+    sample_slug: str,
+    *,
+    labels_cells: str | None = None,
+    labels_domain: str | None = None,
+    qc_png: str | None = None,
+) -> dict[str, str | None]:
+    """Write per-sample outputs into a bundle, returning relative output paths."""
+    out: dict[str, str | None] = {
+        "labels_cells": None,
+        "labels_domain": None,
+        "qc_png": None,
+    }
+    if labels_cells:
+        out["labels_cells"] = _write_label_layer(
+            bundle, "cells", sample_slug, labels_cells
+        )
+    if labels_domain:
+        out["labels_domain"] = _write_label_layer(
+            bundle, "domain", sample_slug, labels_domain
+        )
+    if qc_png:
+        out["qc_png"] = _copy_qc_png(bundle, qc_png, sample_slug)
+    return out
