@@ -154,20 +154,42 @@ def unique_result_dir(category: str, dirname: str) -> Path:
 def create_result_bundle(
     name: str,
     *,
-    kind: str = "analysis",
+    kind: str = "single",
+    tier: str | None = None,
     metadata: dict[str, Any] | None = None,
 ) -> Path:
-    timestamp = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
+    """Create a fresh bundle directory with the standard layout and seed metadata.
+
+    Layout:
+        <ts>_<name>/
+        ├── metadata.json
+        ├── labels/cells/
+        ├── labels/domain/
+        ├── tables/
+        ├── qc/
+        ├── stats/
+        └── figures/
+
+    `kind` is "single" or "batch"; `tier` is "single_tier" or "two_tier" (or
+    None when not yet decided — the caller can update via write_bundle_metadata).
+    Extra metadata is merged at the top level of metadata.json.
+    """
+    now = _kst_now()
+    timestamp = now.strftime("%Y%m%d_%H%M%S")
     bundle = unique_result_dir("bundles", f"{timestamp}_{slugify_result_name(name)}")
-    for subdir in ("labels", "tables", "qc", "figures"):
-        (bundle / subdir).mkdir(parents=True, exist_ok=True)
-    payload = {
+    for sub in ("labels/cells", "labels/domain", "tables", "qc", "stats", "figures"):
+        (bundle / sub).mkdir(parents=True, exist_ok=True)
+    env = _collect_env_info()
+    payload: dict[str, Any] = {
         "kind": kind,
+        "tier": tier,
         "name": name,
-        "created_at": datetime.now(UTC).isoformat(),
-        "metadata": dict(metadata or {}),
-        "outputs": {},
+        "status": "in_progress",
+        "created_at": now.isoformat(),
+        **env,
     }
+    extras = dict(metadata or {})
+    payload.update(extras)
     write_bundle_metadata(bundle, payload)
     return bundle
 

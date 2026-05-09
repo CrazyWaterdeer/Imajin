@@ -117,7 +117,7 @@ def save_result_bundle(
         layer = call_on_main(snapshot_layer, labels_layer)
         data = _materialize(layer.data)
         labels = data.astype(_label_output_dtype(data), copy=False)
-        out = bundle / "labels" / f"{slugify_result_name(labels_layer)}.tif"
+        out = bundle / "labels" / "cells" / f"{slugify_result_name(labels_layer)}.tif"
         tifffile.imwrite(out, labels)
         outputs["labels"].append(str(out))
 
