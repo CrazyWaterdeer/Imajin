@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import contextlib
+import contextvars
 import shutil
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 import numpy as np
 
@@ -20,6 +22,31 @@ from imajin.results import (
 )
 from imajin.tools.napari_ops import snapshot_layer
 from imajin.tools.registry import tool
+
+
+_active_bundle: contextvars.ContextVar[Path | None] = contextvars.ContextVar(
+    "_active_bundle", default=None
+)
+
+
+def current_bundle() -> Path | None:
+    """Return the bundle directory currently being populated, or None.
+
+    Set by `with_active_bundle` (used by run_recipe_on_samples to forward
+    the parent bundle to per-sample analyze_target_cells calls).
+    """
+    return _active_bundle.get()
+
+
+@contextlib.contextmanager
+def with_active_bundle(path: Path | str) -> Iterator[Path]:
+    """Mark `path` as the current bundle for the duration of the with-block."""
+    p = Path(path)
+    token = _active_bundle.set(p)
+    try:
+        yield p
+    finally:
+        _active_bundle.reset(token)
 
 
 def _materialize(arr: Any) -> np.ndarray:

@@ -10,6 +10,7 @@ from imajin.results import (
     create_result_bundle,
     read_bundle_metadata,
 )
+from imajin.tools.results import current_bundle, with_active_bundle
 
 
 def test_kst_now_returns_aware_datetime_with_plus_nine_offset() -> None:
@@ -97,3 +98,25 @@ def test_create_result_bundle_framework_fields_win_over_caller_metadata(
     assert meta["kind"] == "single"
     assert meta["imajin_version"] != "FAKE"
     assert meta["recipe"] == {"name": "demo"}
+
+
+def test_current_bundle_is_none_by_default() -> None:
+    assert current_bundle() is None
+
+
+def test_with_active_bundle_sets_and_restores(tmp_path) -> None:
+    assert current_bundle() is None
+    with with_active_bundle(tmp_path) as b:
+        assert b == tmp_path
+        assert current_bundle() == tmp_path
+    assert current_bundle() is None
+
+
+def test_with_active_bundle_restores_on_exception(tmp_path) -> None:
+    try:
+        with with_active_bundle(tmp_path):
+            assert current_bundle() == tmp_path
+            raise RuntimeError("boom")
+    except RuntimeError:
+        pass
+    assert current_bundle() is None
