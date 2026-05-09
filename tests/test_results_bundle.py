@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import timedelta
 
-from imajin.results import _kst_now
+from imajin.results import _collect_env_info, _kst_now
 
 
 def test_kst_now_returns_aware_datetime_with_plus_nine_offset() -> None:
@@ -18,9 +18,6 @@ def test_kst_now_strftime_format_matches_bundle_pattern() -> None:
     assert len(stamp) == 15
     assert stamp[8] == "_"
     assert stamp[:4].isdigit()
-
-
-from imajin.results import _collect_env_info
 
 
 def test_collect_env_info_includes_python_and_imajin_version() -> None:

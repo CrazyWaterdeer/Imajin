@@ -24,7 +24,6 @@ def _git_commit_short() -> str | None:
     try:
         result = subprocess.run(
             ["git", "rev-parse", "--short", "HEAD"],
-            cwd=str(Path(__file__).resolve().parent),
             capture_output=True,
             text=True,
             timeout=2,
