@@ -6,6 +6,8 @@ the fast suite.
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -467,3 +469,32 @@ def test_two_tier_recovers_cluster_periphery_vs_single_tier(viewer) -> None:
     assert (domain_labels > 0).sum() > cell_area, (
         "domain mask must be at least as large as active-cell mask"
     )
+
+
+def test_analyze_target_cells_single_tier_writes_new_layout_bundle(
+    viewer, tmp_path, monkeypatch
+) -> None:
+    from imajin.tools.workflows import analyze_target_cells
+
+    monkeypatch.setenv("IMAJIN_RESULTS_DIR", str(tmp_path))
+
+    img = np.zeros((40, 40), dtype=np.float32)
+    img[10:30, 10:30] = 200.0
+    viewer.add_image(img, name="reporter", scale=(0.5, 0.5))
+
+    res = analyze_target_cells(target="reporter")
+    assert res["ok"] is True
+    bundle = Path(res["result_bundle_path"])
+    assert bundle.exists()
+    assert (bundle / "labels" / "cells" / "reporter.tif").exists()
+    assert (bundle / "labels" / "domain").is_dir()
+    assert not any((bundle / "labels" / "domain").iterdir())
+    assert (bundle / "qc").is_dir()
+
+    meta = json.loads((bundle / "metadata.json").read_text())
+    assert meta["kind"] == "single"
+    assert meta["tier"] == "single_tier"
+    assert meta["status"] == "complete"
+    assert len(meta["samples"]) == 1
+    assert meta["samples"][0]["status"] == "complete"
+    assert meta["samples"][0]["outputs"]["labels_cells"] == "labels/cells/reporter.tif"

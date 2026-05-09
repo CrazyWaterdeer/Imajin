@@ -3,6 +3,7 @@ from __future__ import annotations
 import gc
 import inspect
 import os
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -441,6 +442,39 @@ def _project_layer_for_recipe(
     raise ValueError("projection must be mean or max")
 
 
+def _build_sample_summary(
+    *,
+    sample_name: str,
+    status: str,
+    error: str | None = None,
+    n_cells: int | None = None,
+    n_domain_components: int | None = None,
+    domain_area_um2: float | None = None,
+    qc_warnings: list[str] | None = None,
+    outputs: dict[str, str | None] | None = None,
+    group: str | None = None,
+    file_id: str | None = None,
+    source_file: str | None = None,
+    source_layer: str | None = None,
+) -> dict[str, Any]:
+    return {
+        "sample_name": sample_name,
+        "group": group,
+        "file_id": file_id,
+        "source_file": source_file,
+        "source_layer": source_layer,
+        "status": status,
+        "error": error,
+        "outputs": outputs or {"labels_cells": None, "labels_domain": None, "qc_png": None},
+        "summary": {
+            "n_cells": n_cells,
+            "n_domain_components": n_domain_components,
+            "domain_area_um2": domain_area_um2,
+            "qc_warnings": list(qc_warnings or []),
+        },
+    }
+
+
 @tool(
     description="High-level target object analysis workflow. Resolves the target "
     "channel, optionally preprocesses it, segments target-positive objects/ROIs, "
@@ -609,28 +643,72 @@ def analyze_target_cells(
             f"x={voxel[2]:.3g}); 3D segmentation/measurement may be biased."
         )
 
-    bundle_result: dict[str, Any] | None = None
+    bundle_path: Path | None = None
+    bundle_outputs: dict[str, str | None] = {
+        "labels_cells": None,
+        "labels_domain": None,
+        "qc_png": None,
+    }
     if domain_strategy is None:
-        try:
-            from imajin.tools import results as _results
+        from imajin.results import create_result_bundle, slugify_result_name as _slug
+        from imajin.tools.results import (
+            current_bundle,
+            populate_sample_outputs,
+            write_combined_csv,
+            finalize_bundle_metadata,
+        )
 
-            bundle_result = _results.save_result_bundle(
-                name=f"{target_layer}_{method}_analysis",
-                labels_layers=[seg_result["labels_layer"]],
-                table_names=[measure_result["table_name"]],
-                qc_png_paths=[seg_result.get("qc_png_path")] if seg_result.get("qc_png_path") else [],
+        sample_slug = _slug(target_layer)
+        parent = current_bundle()
+        own_bundle = parent is None
+        if own_bundle:
+            bundle_path = create_result_bundle(
+                name=target_layer,
+                kind="single",
+                tier="single_tier",
                 metadata={
+                    "recipe": None,
                     "target_channel": target_layer,
                     "target_source": resolution.source,
                     "segmentation_method": method,
                     "analysis_dim": "3d" if use_3d else "2d",
-                    "labels_layer": seg_result["labels_layer"],
-                    "table_name": measure_result["table_name"],
-                    "n_objects": int(seg_result.get("n_objects", seg_result.get("n_cells", 0))),
                 },
             )
+        else:
+            bundle_path = parent
+
+        try:
+            bundle_outputs = populate_sample_outputs(
+                bundle_path,
+                sample_slug=sample_slug,
+                labels_cells=seg_result["labels_layer"],
+                qc_png=seg_result.get("qc_png_path"),
+            )
         except Exception as exc:  # noqa: BLE001
-            warnings.append(f"result bundle could not be saved: {type(exc).__name__}: {exc}")
+            warnings.append(
+                f"bundle outputs could not be written: {type(exc).__name__}: {exc}"
+            )
+
+        if own_bundle:
+            sample_summary = _build_sample_summary(
+                sample_name=target_layer,
+                status="complete",
+                n_cells=int(seg_result.get("n_objects", seg_result.get("n_cells", 0))),
+                qc_warnings=list(seg_result.get("qc_warnings", [])),
+                outputs=bundle_outputs,
+                source_layer=target_layer,
+            )
+            try:
+                write_combined_csv(bundle_path, [measure_result["table_name"]])
+                finalize_bundle_metadata(
+                    bundle_path,
+                    samples=[sample_summary],
+                    status="complete",
+                )
+            except Exception as exc:  # noqa: BLE001
+                warnings.append(
+                    f"bundle could not be finalized: {type(exc).__name__}: {exc}"
+                )
 
     if domain_strategy is not None:
         if domain_strategy != "noise_floor":
@@ -723,8 +801,8 @@ def analyze_target_cells(
         "segmentation_warnings": seg_result.get("qc_warnings", []),
         "table_name": measure_result["table_name"],
         "table_columns": measure_result["columns"],
-        "result_bundle_path": bundle_result.get("bundle_path") if bundle_result else None,
-        "result_files": bundle_result.get("outputs") if bundle_result else {},
+        "result_bundle_path": str(bundle_path) if bundle_path is not None else None,
+        "result_files": dict(bundle_outputs),
         "voxel_scale": voxel,
         "has_physical_units": bool(measure_result.get("has_physical_units")),
         "warnings": warnings,

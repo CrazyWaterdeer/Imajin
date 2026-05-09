@@ -278,3 +278,45 @@ def populate_sample_outputs(
     if qc_png:
         out["qc_png"] = _copy_qc_png(bundle, qc_png, sample_slug)
     return out
+
+
+def write_combined_csv(bundle: Path, table_names: list[str]) -> Path:
+    """Concat the given measurement tables and write to bundle/tables/combined.csv."""
+    import pandas as pd
+
+    frames: list[pd.DataFrame] = []
+    for name in table_names:
+        try:
+            frame = get_table(name)
+        except KeyError:
+            continue
+        if frame is None or frame.empty:
+            continue
+        frames.append(frame)
+    out = bundle / "tables" / "combined.csv"
+    if frames:
+        combined = pd.concat(frames, ignore_index=True, sort=False)
+    else:
+        combined = pd.DataFrame()
+    combined.to_csv(out, index=False)
+    return out
+
+
+def finalize_bundle_metadata(
+    bundle: Path,
+    *,
+    samples: list[dict[str, Any]],
+    status: str,
+    extra: dict[str, Any] | None = None,
+) -> None:
+    """Update bundle/metadata.json with the final samples index and status."""
+    meta = read_bundle_metadata(bundle)
+    meta["status"] = status
+    meta["samples"] = list(samples)
+    meta["n_samples"] = len(samples)
+    meta["n_complete"] = sum(1 for s in samples if s.get("status") == "complete")
+    meta["n_failed"] = sum(1 for s in samples if s.get("status") == "failed")
+    meta["tables"] = {"combined": "tables/combined.csv"}
+    if extra:
+        meta.update(extra)
+    write_bundle_metadata(bundle, meta)
