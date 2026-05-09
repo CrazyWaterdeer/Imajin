@@ -332,6 +332,23 @@ def _first_analysis_preprocess(preprocessing: list[dict[str, Any]]) -> str | Non
     return None
 
 
+def _derive_size_params(
+    cell_diameter_um: float | None,
+    voxel_spacing: tuple[float, ...] | None,
+) -> dict[str, float]:
+    if cell_diameter_um is None or cell_diameter_um <= 0:
+        return {}
+    out: dict[str, float] = {
+        "min_distance_um": float(cell_diameter_um) * 0.7,
+        "min_area_um2": float(np.pi * (cell_diameter_um / 4.0) ** 2),
+    }
+    if voxel_spacing is not None:
+        xy = voxel_spacing[-1]
+        if xy and xy > 0:
+            out["cellpose_diameter_px"] = float(cell_diameter_um) / float(xy)
+    return out
+
+
 def _project_layer_for_recipe(
     layer_name: str,
     *,

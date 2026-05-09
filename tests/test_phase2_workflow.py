@@ -350,3 +350,28 @@ def test_analyze_target_cells_skips_counterstain_unless_explicit(
     res = workflows.analyze_target_cells()
     assert res["ok"] is True
     assert res["target_channel"] == "gfp"
+
+
+def test_derive_size_params_with_diameter() -> None:
+    from imajin.tools.workflows import _derive_size_params
+
+    out = _derive_size_params(cell_diameter_um=15.0, voxel_spacing=(0.5, 0.5))
+
+    assert out["min_distance_um"] == pytest.approx(15.0 * 0.7)
+    assert out["min_area_um2"] == pytest.approx(np.pi * (15.0 / 4) ** 2)
+    assert out["cellpose_diameter_px"] == pytest.approx(15.0 / 0.5)
+
+
+def test_derive_size_params_returns_empty_when_diameter_none() -> None:
+    from imajin.tools.workflows import _derive_size_params
+
+    out = _derive_size_params(cell_diameter_um=None, voxel_spacing=(0.5, 0.5))
+    assert out == {}
+
+
+def test_derive_size_params_handles_missing_voxel() -> None:
+    from imajin.tools.workflows import _derive_size_params
+
+    out = _derive_size_params(cell_diameter_um=10.0, voxel_spacing=None)
+    assert out["min_distance_um"] == pytest.approx(7.0)
+    assert "cellpose_diameter_px" not in out
