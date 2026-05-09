@@ -479,7 +479,8 @@ def list_experiment() -> dict[str, Any]:
     description="Create or replace a reusable analysis recipe. Captures target "
     "channel, segmentation/measurement/preprocessing settings, and optional "
     "time-course or colocalization parameters so the same pipeline can be applied "
-    "across many samples in a batch.",
+    "across many samples in a batch. Optional cell_diameter_um drives Tier-2 size "
+    "derivation; optional domain block enables two-tier expression-domain analysis.",
     phase="3",
 )
 def create_analysis_recipe(
@@ -491,6 +492,8 @@ def create_analysis_recipe(
     timecourse: dict[str, Any] | None = None,
     colocalization: list[tuple[str, str]] | None = None,
     notes: str | None = None,
+    cell_diameter_um: float | None = None,
+    domain: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     from imajin.agent.state import put_recipe
 
@@ -503,6 +506,8 @@ def create_analysis_recipe(
         timecourse=timecourse,
         colocalization=colocalization,
         notes=notes,
+        cell_diameter_um=cell_diameter_um,
+        domain=domain,
     )
     return {
         "recipe_id": recipe_id,

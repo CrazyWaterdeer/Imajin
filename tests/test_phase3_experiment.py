@@ -911,3 +911,20 @@ def test_generate_experiment_report_html_writes_file(tmp_path, monkeypatch) -> N
     body = out.read_text(encoding="utf-8")
     assert "<html>" in body
     assert res["format"] == "html"
+
+
+def test_create_analysis_recipe_passes_through_domain(viewer) -> None:
+    from imajin.agent.state import get_recipe, reset_recipes
+    from imajin.tools.experiment import create_analysis_recipe
+
+    reset_recipes()
+    create_analysis_recipe(
+        name="calexa_recipe",
+        target_channel="green",
+        cell_diameter_um=15.0,
+        domain={"strategy": "noise_floor", "k_mad": 5.0},
+    )
+
+    rec = get_recipe("calexa_recipe")
+    assert rec.cell_diameter_um == 15.0
+    assert rec.domain == {"strategy": "noise_floor", "k_mad": 5.0}
