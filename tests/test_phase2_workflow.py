@@ -275,10 +275,12 @@ def test_analyze_target_cells_accepts_segment_intensity_regions_alias(viewer) ->
     assert res["n_objects"] == 2
 
 
-def test_analyze_target_cells_saves_result_bundle(viewer, tmp_path) -> None:
-    from imajin.project import create_project
-
-    create_project(tmp_path / "project")
+def test_analyze_target_cells_saves_result_bundle(
+    viewer,
+    tmp_path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("IMAJIN_RESULTS_DIR", str(tmp_path / "results"))
     img = np.zeros((256, 256), dtype=np.float32)
     img[80:95, 90:105] = 100.0
     img[150:168, 140:158] = 80.0
@@ -288,7 +290,7 @@ def test_analyze_target_cells_saves_result_bundle(viewer, tmp_path) -> None:
 
     assert res["ok"] is True
     assert res["result_bundle_path"].startswith(
-        str(tmp_path / "project" / "reports" / "bundles")
+        str(tmp_path / "results" / "bundles")
     )
     assert res["result_files"]["labels_cells"] == "labels/cells/green_target.tif"
     assert res["result_files"]["labels_domain"] is None

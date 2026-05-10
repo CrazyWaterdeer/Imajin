@@ -805,54 +805,6 @@ def test_run_recipe_on_samples_no_samples_returns_empty() -> None:
     assert res["bundle_path"] is None
 
 
-def test_run_recipe_on_samples_does_not_autosave_project(
-    viewer,
-    monkeypatch,
-    tmp_path: Path,
-) -> None:
-    from imajin import project as project_module
-    from imajin.tools import workflows
-
-    project_module.create_project(tmp_path / "batch-autosave.imajin")
-    _setup_single_sample_with_layer(viewer, tmp_path, "ctrl_1")
-    experiment.create_analysis_recipe(
-        name="autosave_batch",
-        target_channel="green",
-        segmentation={"tool": "intensity_regions"},
-    )
-
-    def fake_analyze(target=None, **kwargs):
-        table_name = f"{target}_measurements"
-        state.put_table(table_name, pd.DataFrame({"label": [1]}))
-        return {
-            "ok": True,
-            "target_channel": target,
-            "labels_layer": None,
-            "preprocessed_layer": None,
-            "table_name": table_name,
-            "n_objects": 1,
-            "object_unit": "object_or_roi",
-            "segmentation_method": kwargs.get("segmentation_method"),
-            "analysis_dim": "2d",
-            "warnings": [],
-        }
-
-    real_save = project_module.save_project
-    calls: list[str | None] = []
-
-    def spy_save_project(path=None):
-        calls.append(str(path) if path is not None else None)
-        return real_save(path)
-
-    monkeypatch.setattr(workflows, "analyze_target_cells", fake_analyze)
-    monkeypatch.setattr(project_module, "save_project", spy_save_project)
-
-    res = workflows.run_recipe_on_samples(recipe_name="autosave_batch")
-
-    assert res["n_complete"] == 1
-    assert calls == []
-
-
 # --- Task 11: summarize_experiment -------------------------------------------
 
 def test_summarize_experiment_sample_and_group_levels() -> None:

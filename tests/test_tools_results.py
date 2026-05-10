@@ -8,28 +8,29 @@ import pandas as pd
 import tifffile
 
 from imajin.agent import state
-from imajin.project import create_project
 from imajin.tools import results
 
 
-def test_save_labels_writes_tiff_to_project_reports(viewer, tmp_path) -> None:
-    create_project(tmp_path / "project")
+def test_save_labels_writes_tiff_to_results_root(viewer, tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("IMAJIN_RESULTS_DIR", str(tmp_path / "results"))
     labels = np.zeros((12, 12), dtype=np.int32)
     labels[2:8, 3:9] = 1
     viewer.add_labels(labels, name="target_objects")
 
     res = results.save_labels("target_objects")
 
-    out = tmp_path / "project" / "reports" / "labels" / "target_objects.tif"
+    out = tmp_path / "results" / "labels" / "target_objects.tif"
     assert res["path"] == str(out)
     assert out.exists()
     saved = tifffile.imread(out)
     np.testing.assert_array_equal(saved, labels.astype(np.uint16))
-    assert (tmp_path / "project" / "reports" / "manifest.jsonl").exists()
+    assert (tmp_path / "results" / "manifest.jsonl").exists()
 
 
-def test_save_result_bundle_collects_labels_tables_and_qc(viewer, tmp_path) -> None:
-    create_project(tmp_path / "project")
+def test_save_result_bundle_collects_labels_tables_and_qc(
+    viewer, tmp_path, monkeypatch
+) -> None:
+    monkeypatch.setenv("IMAJIN_RESULTS_DIR", str(tmp_path / "results"))
     labels = np.zeros((10, 10), dtype=np.int32)
     labels[2:5, 2:5] = 1
     viewer.add_labels(labels, name="objects")
@@ -49,7 +50,7 @@ def test_save_result_bundle_collects_labels_tables_and_qc(viewer, tmp_path) -> N
         metadata={"sample": "sample_1"},
     )
 
-    bundle = tmp_path / "project" / "reports" / "bundles"
+    bundle = tmp_path / "results" / "bundles"
     assert res["bundle_path"].startswith(str(bundle))
     metadata = json.loads((Path(res["bundle_path"]) / "metadata.json").read_text())
     assert metadata["sample"] == "sample_1"
@@ -68,7 +69,6 @@ def test_results_root_uses_session_anchor_when_no_project(tmp_path, monkeypatch)
     fake_file = folder / "img.lsm"
     fake_file.write_bytes(b"")
 
-    monkeypatch.setattr("imajin.project.current_project", lambda: None)
     monkeypatch.setattr(
         "imajin.agent.state.list_files",
         lambda: [{"path": str(fake_file)}],
@@ -79,7 +79,6 @@ def test_results_root_uses_session_anchor_when_no_project(tmp_path, monkeypatch)
 def test_results_root_falls_back_to_user_root_when_no_anchor(tmp_path, monkeypatch):
     from imajin import results as _results
 
-    monkeypatch.setattr("imajin.project.current_project", lambda: None)
     monkeypatch.setattr("imajin.agent.state.list_files", lambda: [])
     monkeypatch.setattr(_results, "user_results_root", lambda: tmp_path / "user_root")
     assert _results.results_root() == tmp_path / "user_root"
@@ -107,7 +106,6 @@ def test_record_result_keeps_manifest_out_of_anchor_folder(tmp_path, monkeypatch
     fake_file.write_bytes(b"")
     user_root = tmp_path / "user_root"
 
-    monkeypatch.setattr("imajin.project.current_project", lambda: None)
     monkeypatch.setattr(
         "imajin.agent.state.list_files",
         lambda: [{"path": str(fake_file)}],

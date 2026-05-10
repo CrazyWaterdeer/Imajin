@@ -4,7 +4,6 @@ import numpy as np
 import pytest
 from PIL import Image
 
-from imajin.project import create_project
 from imajin.tools import segment
 
 
@@ -71,8 +70,12 @@ def test_cellpose_sam_writes_qc_png(viewer, monkeypatch, tmp_path) -> None:
     assert rgb[12, 12, 0] != rgb[12, 12, 1], "ROI interior should be mask-filled"
 
 
-def test_segmentation_qc_png_defaults_to_project_reports(viewer, tmp_path) -> None:
-    create_project(tmp_path / "project")
+def test_segmentation_qc_png_defaults_to_results_root(
+    viewer,
+    tmp_path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("IMAJIN_RESULTS_DIR", str(tmp_path / "results"))
     image = np.zeros((256, 256), dtype=np.float32)
     image[90:105, 100:115] = 100
     viewer.add_image(image, name="target")
@@ -84,14 +87,18 @@ def test_segmentation_qc_png_defaults_to_project_reports(viewer, tmp_path) -> No
         smoothing_sigma=0,
     )
 
-    out = tmp_path / "project" / "reports" / "segmentation_qc"
+    out = tmp_path / "results" / "segmentation_qc"
     assert res["qc_png_path"].startswith(str(out))
-    assert (tmp_path / "project" / "reports" / "manifest.jsonl").exists()
+    assert (tmp_path / "results" / "manifest.jsonl").exists()
     assert Image.open(res["qc_png_path"]).mode == "RGB"
 
 
-def test_segmentation_qc_png_skips_tiny_default_outputs(viewer, tmp_path) -> None:
-    create_project(tmp_path / "project")
+def test_segmentation_qc_png_skips_tiny_default_outputs(
+    viewer,
+    tmp_path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("IMAJIN_RESULTS_DIR", str(tmp_path / "results"))
     image = np.zeros((32, 32), dtype=np.float32)
     image[8:18, 8:18] = 100
     viewer.add_image(image, name="tiny_target")
@@ -106,7 +113,7 @@ def test_segmentation_qc_png_skips_tiny_default_outputs(viewer, tmp_path) -> Non
     assert res["qc_png_path"] is None
     assert res["qc_png_error"] is None
     assert "small image plane" in res["qc_png_skipped_reason"]
-    out = tmp_path / "project" / "reports" / "segmentation_qc"
+    out = tmp_path / "results" / "segmentation_qc"
     if out.exists():
         assert not list(out.glob("*.png"))
 
