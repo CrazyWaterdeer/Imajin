@@ -52,24 +52,6 @@ def _add_imajin_menu(viewer: Any, settings: Any, chat_dock: Any) -> None:
 
     menu.addSeparator()
 
-    new_project_action = QAction("New Project…", qmain)
-    new_project_action.triggered.connect(lambda: _new_project(qmain))
-    menu.addAction(new_project_action)
-
-    open_project_action = QAction("Open Project…", qmain)
-    open_project_action.triggered.connect(lambda: _open_project(qmain))
-    menu.addAction(open_project_action)
-
-    save_project_action = QAction("Save Project", qmain)
-    save_project_action.triggered.connect(lambda: _save_project(qmain))
-    menu.addAction(save_project_action)
-
-    project_status_action = QAction("Project Status", qmain)
-    project_status_action.triggered.connect(lambda: _show_project_status(qmain))
-    menu.addAction(project_status_action)
-
-    menu.addSeparator()
-
     panels_menu = menu.addMenu("Panels")
     jobs_action = QAction("Show Jobs", qmain)
     jobs_action.triggered.connect(lambda: _show_jobs_panel(viewer))
@@ -163,100 +145,6 @@ def _open_image_file(parent: Any) -> None:
         parent,
         "Imajin Open Image",
         f"Loaded:<br><b>{result.get('path')}</b><br>Layers: {layers}",
-    )
-
-
-def _new_project(parent: Any) -> None:
-    from qtpy.QtWidgets import QFileDialog, QMessageBox
-
-    from imajin.project import create_project
-
-    path = QFileDialog.getExistingDirectory(parent, "New Imajin Project Folder")
-    if not path:
-        return
-    try:
-        result = create_project(path)
-    except Exception as exc:  # noqa: BLE001
-        QMessageBox.critical(parent, "Imajin Project", str(exc))
-        return
-    QMessageBox.information(
-        parent,
-        "Imajin Project",
-        f"Project created:<br><b>{result['name']}</b>",
-    )
-
-
-def _open_project(parent: Any) -> None:
-    from qtpy.QtWidgets import QFileDialog, QMessageBox
-
-    from imajin.project import load_project
-
-    path = QFileDialog.getExistingDirectory(parent, "Open Imajin Project Folder")
-    if not path:
-        return
-    try:
-        result = load_project(path)
-    except Exception as exc:  # noqa: BLE001
-        QMessageBox.critical(parent, "Imajin Project", str(exc))
-        return
-    warnings = result.get("warnings") or []
-    suffix = f"<br>{len(warnings)} warning(s)." if warnings else ""
-    QMessageBox.information(
-        parent,
-        "Imajin Project",
-        f"Project loaded:<br><b>{result['name']}</b>{suffix}",
-    )
-
-
-def _save_project(parent: Any) -> None:
-    from qtpy.QtWidgets import QFileDialog, QMessageBox
-
-    from imajin.project import current_project, save_project
-
-    project = current_project()
-    if project is None:
-        path = QFileDialog.getExistingDirectory(parent, "Save Imajin Project Folder")
-        if not path:
-            return
-    else:
-        path = None
-    try:
-        result = save_project(path)
-    except Exception as exc:  # noqa: BLE001
-        QMessageBox.critical(parent, "Imajin Project", str(exc))
-        return
-    QMessageBox.information(
-        parent,
-        "Imajin Project",
-        f"Project saved:<br><b>{result['name']}</b>",
-    )
-
-
-def _show_project_status(parent: Any) -> None:
-    from qtpy.QtWidgets import QMessageBox
-
-    from imajin.project import project_status
-
-    status = project_status()
-    if not status.get("open"):
-        QMessageBox.information(parent, "Imajin Project", "No project is open.")
-        return
-    missing = int(status.get("n_missing_files") or 0)
-    autosave_error = status.get("last_autosave_error")
-    details = [
-        f"Path: {status.get('path')}",
-        f"Files: {status.get('n_files')} ({missing} missing)",
-        f"Samples: {status.get('n_samples')}",
-        f"Recipes: {status.get('n_recipes')}",
-        f"Runs: {status.get('n_runs')}",
-        f"Tables: {status.get('n_tables')}",
-    ]
-    if autosave_error:
-        details.append(f"Autosave error: {autosave_error}")
-    QMessageBox.information(
-        parent,
-        "Imajin Project",
-        f"<b>{status.get('name')}</b><br>" + "<br>".join(details),
     )
 
 
