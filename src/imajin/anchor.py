@@ -22,3 +22,22 @@ def resolve_anchor_folder(file_paths: Iterable[str | Path]) -> Path | None:
     if not parents:
         return None
     return sorted(parents, key=lambda p: str(p).lower())[0]
+
+
+def resolve_session_anchor(extra_paths: Iterable[str | Path] | None = None) -> Path | None:
+    """Resolve the anchor folder from session-registered files plus optional extras.
+
+    Pulls file paths from :func:`imajin.agent.state.list_files` (each record's
+    ``path`` field) and any ``extra_paths``, then defers to
+    :func:`resolve_anchor_folder`. Returns ``None`` if no usable paths exist.
+    """
+    from imajin.agent.state import list_files
+
+    paths: list[str | Path] = []
+    for rec in list_files():
+        path = rec.get("path") if isinstance(rec, dict) else getattr(rec, "path", None)
+        if path:
+            paths.append(path)
+    if extra_paths:
+        paths.extend(p for p in extra_paths if p)
+    return resolve_anchor_folder(paths)
