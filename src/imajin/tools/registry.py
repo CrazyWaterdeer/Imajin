@@ -5,7 +5,7 @@ import inspect
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, get_type_hints
 
 from pydantic import BaseModel, create_model
 
@@ -33,12 +33,17 @@ _REGISTRY: dict[str, ToolEntry] = {}
 
 def _build_input_model(name: str, func: Callable[..., Any]) -> type[BaseModel]:
     sig = inspect.signature(func)
+    try:
+        type_hints = get_type_hints(func)
+    except Exception:
+        type_hints = {}
     fields: dict[str, Any] = {}
     for pname, param in sig.parameters.items():
         if pname in {"self", "cls"}:
             continue
-        annotation = (
-            param.annotation if param.annotation is not inspect.Parameter.empty else Any
+        annotation = type_hints.get(
+            pname,
+            param.annotation if param.annotation is not inspect.Parameter.empty else Any,
         )
         default = param.default if param.default is not inspect.Parameter.empty else ...
         fields[pname] = (annotation, default)

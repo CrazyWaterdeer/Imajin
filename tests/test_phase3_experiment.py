@@ -784,7 +784,11 @@ def test_run_recipe_on_samples_propagates_cancellation(
         workflows.run_recipe_on_samples(recipe_name="cancel_recipe")
 
     assert state.list_runs() == []
-    bundles = list((tmp_path / "bundles").iterdir())
+    bundles = [
+        path
+        for path in tmp_path.iterdir()
+        if path.is_dir() and path.name.endswith("_cancel_recipe")
+    ]
     assert len(bundles) == 1
     meta = json.loads((bundles[0] / "metadata.json").read_text())
     assert meta["status"] == "cancelled"
@@ -1187,8 +1191,54 @@ def test_run_recipe_on_samples_creates_parent_bundle(
     assert bundle.is_dir()
     assert re.match(r"^\d{8}_\d{6}_r1$", bundle.name), bundle.name
     # Sample output landed in the parent bundle, not a sibling per-call bundle
-    siblings = sorted(bundle.parent.iterdir())
-    assert len(siblings) == 1, [s.name for s in siblings]
+    sibling_bundles = [
+        p
+        for p in sorted(bundle.parent.iterdir())
+        if p.is_dir() and re.match(r"^\d{8}_\d{6}_", p.name)
+    ]
+    assert sibling_bundles == [bundle], [s.name for s in sibling_bundles]
+
+
+def test_batch_parent_bundle_lands_directly_in_anchor_folder(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    from imajin.tools.batch_runner import BatchRecipeRunner
+
+    monkeypatch.setenv("IMAJIN_RESULTS_DIR", str(tmp_path / "fallback"))
+
+    folder_a = tmp_path / "2026-05-09"
+    folder_b = tmp_path / "2026-05-10"
+    folder_a.mkdir()
+    folder_b.mkdir()
+    file_a = folder_a / "a.lsm"
+    file_b = folder_b / "b.lsm"
+    file_a.write_bytes(b"")
+    file_b.write_bytes(b"")
+
+    experiment.register_files([str(file_b), str(file_a)])
+    experiment.annotate_samples(
+        [
+            {"sample_name": "b", "group": "treated", "files": [str(file_b)]},
+            {"sample_name": "a", "group": "control", "files": [str(file_a)]},
+        ]
+    )
+    experiment.create_analysis_recipe(
+        name="anchor_recipe",
+        target_channel="green",
+        segmentation={"tool": "intensity_regions"},
+        measurement={"properties": ["area"]},
+    )
+
+    runner = BatchRecipeRunner("anchor_recipe", sample_names=["b", "a"])
+    runner.recipe = state.get_recipe("anchor_recipe")
+    runner.names = ["b", "a"]
+    runner.domain_strategy = None
+
+    bundle = runner._create_parent_bundle()
+
+    assert bundle.parent == folder_a.resolve()
+    assert bundle.name.endswith("_anchor_recipe")
 
 
 def test_run_recipe_on_samples_two_tier_attaches_sample_cols_to_tier_table(
@@ -1436,8 +1486,11 @@ def test_run_recipe_on_samples_cancellation_finalizes_metadata(
             recipe_name="r_cancel", sample_names=["ctrl_1", "trt_1"]
         )
 
-    bundles_dir = tmp_path / "bundles"
-    bundles = list(bundles_dir.iterdir())
+    bundles = [
+        path
+        for path in tmp_path.iterdir()
+        if path.is_dir() and path.name.endswith("_r_cancel")
+    ]
     assert len(bundles) == 1
     bundle = bundles[0]
     meta = json.loads((bundle / "metadata.json").read_text())

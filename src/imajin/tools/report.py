@@ -76,6 +76,25 @@ _TOOL_PHRASES: dict[str, str] = {
     "compute_sholl_analysis": "Sholl-style intersections were computed from the skeleton",
     "export_neural_trace": "neural trace data were exported as {format}",
     "track_cells": "cells were tracked across the time series with btrack",
+    "describe_table": (
+        "descriptive statistics were computed for {value_col}, including mean, "
+        "median, dispersion, percentiles, and IQR outlier counts"
+    ),
+    "compare_groups": (
+        "group-level statistical comparison was performed for {value_col} using "
+        "{test}"
+    ),
+    "normalize_timecourse": (
+        "time-course traces for {value_col} were normalized using {method}"
+    ),
+    "extract_timecourse_features": (
+        "per-trace response features were extracted from {value_col}"
+    ),
+    "plot_group_distribution": (
+        "a publication-style group distribution figure was exported for {value_col}"
+    ),
+    "plot_timecourse": "a publication-style time-course figure was exported for {value_col}",
+    "plot_scatter": "a publication-style scatter figure was exported for {x_col} versus {y_col}",
     "analyze_target_cells": (
         "target-positive objects/ROIs were segmented from the user-confirmed "
         "target channel ({channel}) "
@@ -126,6 +145,10 @@ def _format_phrase(tool_name: str, inputs: dict[str, Any]) -> str | None:
     args["background_radius"] = inputs.get("background_radius", "?")
     args["format"] = inputs.get("format", "?")
     args["min_branch_length_um"] = inputs.get("min_branch_length_um", "?")
+    args["value_col"] = inputs.get("value_col", "?")
+    args["x_col"] = inputs.get("x_col", "?")
+    args["y_col"] = inputs.get("y_col", "?")
+    args["test"] = inputs.get("test", "auto")
     args["timepoint"] = inputs.get("t", inputs.get("timepoint", "?"))
     pct = inputs.get("percentiles")
     if pct is None:

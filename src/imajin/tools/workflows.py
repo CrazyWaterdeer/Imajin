@@ -76,6 +76,17 @@ def _write_analysis_bundle_outputs(
     parent = current_bundle()
     own_bundle = parent is None
     if own_bundle:
+        from imajin.anchor import resolve_session_anchor
+
+        file_path = None
+        try:
+            snap = snapshot_layer(target_layer)
+            md = snap.metadata if isinstance(snap.metadata, dict) else {}
+            file_path = md.get("path") or md.get("source_path")
+        except Exception:
+            file_path = None
+        anchor = resolve_session_anchor(extra_paths=[file_path] if file_path else None)
+
         bundle_path = create_result_bundle(
             name=f"{target_layer}__{bundle_suffix}",
             kind="single",
@@ -87,6 +98,7 @@ def _write_analysis_bundle_outputs(
                 "segmentation_method": segmentation_method,
                 "analysis_dim": analysis_dim,
             },
+            root=anchor,
         )
     else:
         bundle_path = parent

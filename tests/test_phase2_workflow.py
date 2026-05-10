@@ -298,6 +298,36 @@ def test_analyze_target_cells_saves_result_bundle(viewer, tmp_path) -> None:
     assert (bundle / "tables" / "combined.csv").exists()
 
 
+def test_analyze_target_cells_bundle_lands_in_layer_anchor_folder(
+    viewer,
+    tmp_path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("IMAJIN_RESULTS_DIR", str(tmp_path / "fallback"))
+
+    anchor = tmp_path / "raw_data"
+    anchor.mkdir()
+    source = anchor / "reporter.lsm"
+    source.write_bytes(b"")
+
+    img = np.zeros((40, 40), dtype=np.float32)
+    img[10:30, 10:30] = 200.0
+    viewer.add_image(
+        img,
+        name="reporter",
+        scale=(0.5, 0.5),
+        metadata={"path": str(source)},
+    )
+
+    res = workflows.analyze_target_cells(target="reporter")
+
+    assert res["ok"] is True
+    bundle = Path(res["result_bundle_path"])
+    assert bundle.parent == anchor.resolve()
+    assert bundle.name.endswith("__single")
+    assert (bundle / "labels" / "cells" / "reporter.tif").exists()
+
+
 def test_analyze_target_cells_with_explicit_target(viewer, monkeypatch) -> None:
     labels, img = _two_label_image()
     viewer.add_image(img, name="ch1")

@@ -268,7 +268,15 @@ class BatchRecipeRunner:
         return mode
 
     def _create_parent_bundle(self) -> Any:
+        from imajin.anchor import resolve_anchor_folder
         from imajin.results import create_result_bundle
+
+        sample_paths: list[str] = []
+        for name in self.names:
+            info = resolve_sample_inputs(name)
+            if info.get("file_path"):
+                sample_paths.append(str(info["file_path"]))
+        anchor = resolve_anchor_folder(sample_paths)
 
         return create_result_bundle(
             name=self.recipe.name,
@@ -285,6 +293,7 @@ class BatchRecipeRunner:
                     "cell_diameter_um": self.recipe.cell_diameter_um,
                 },
             },
+            root=anchor,
         )
 
     def _process_sample(self, index: int, name: str) -> None:
