@@ -8,6 +8,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from imajin.analysis.arrays import materialize_array
 from imajin.agent import state
 from imajin.agent.qt_dispatch import call_on_main
 from imajin.agent.state import get_layer, get_viewer, put_table
@@ -21,7 +22,7 @@ from imajin.tools.registry import tool
 
 
 def _materialize(arr) -> np.ndarray:
-    return np.asarray(arr.compute() if hasattr(arr, "compute") else arr)
+    return materialize_array(arr)
 
 
 _BRANCH_TYPES = {

@@ -4,13 +4,14 @@ from typing import Any
 
 import numpy as np
 
+from imajin.analysis.arrays import materialize_array
 from imajin.agent.qt_dispatch import call_on_main
 from imajin.tools.napari_ops import snapshot_layer
 from imajin.tools.registry import tool
 
 
 def _materialize(arr) -> np.ndarray:
-    return np.asarray(arr.compute() if hasattr(arr, "compute") else arr)
+    return materialize_array(arr)
 
 
 def _resolve_threshold(arr: np.ndarray, threshold: float | str) -> float:

@@ -40,6 +40,8 @@ class ProjectContext:
 
 _CURRENT_PROJECT: ProjectContext | None = None
 _AUTOSAVE_DEPTH = 0
+_DEFERRED_AUTOSAVE_DEPTH = 0
+_DEFERRED_AUTOSAVE_REASONS: list[str] = []
 _LAST_AUTOSAVE: dict[str, Any] | None = None
 _LAST_AUTOSAVE_ERROR: str | None = None
 
@@ -50,9 +52,11 @@ def current_project() -> ProjectContext | None:
 
 def close_project() -> None:
     global _CURRENT_PROJECT, _LAST_AUTOSAVE, _LAST_AUTOSAVE_ERROR
+    global _DEFERRED_AUTOSAVE_REASONS
     _CURRENT_PROJECT = None
     _LAST_AUTOSAVE = None
     _LAST_AUTOSAVE_ERROR = None
+    _DEFERRED_AUTOSAVE_REASONS = []
 
 
 def create_project(path: str | Path, name: str | None = None, notes: str = "") -> dict[str, Any]:
@@ -140,9 +144,9 @@ def load_project(path: str | Path) -> dict[str, Any]:
     qc_records = _read_json(root / "qc.json", default=[])
 
     global _CURRENT_PROJECT
-    with suspend_autosave():
-        from imajin.agent import state
+    from imajin.agent import state
 
+    with suspend_autosave(), state.bulk_state_update("project_loaded"):
         _CURRENT_PROJECT = ProjectContext(path=root, metadata=metadata)
         state.restore_session_state(
             files=files,
@@ -174,9 +178,7 @@ def relink_file(file_id: str, new_path: str | Path) -> dict[str, Any]:
 
     project = _require_project()
     p = normalize_user_path(new_path).resolve()
-    if file_id not in state._FILES:
-        raise KeyError(f"File id {file_id!r} not found. Available: {list(state._FILES)}")
-    rec = state._FILES[file_id]
+    rec = state.get_file(file_id)
     rec.path = str(p)
     rec.original_name = p.name
     rec.load_status = "unloaded" if p.exists() else "missing"
@@ -232,10 +234,18 @@ def project_status() -> dict[str, Any]:
     }
 
 
-def autosave_current_project(reason: str | None = None) -> dict[str, Any] | None:
+def autosave_current_project(
+    reason: str | None = None,
+    *,
+    force: bool = False,
+) -> dict[str, Any] | None:
     global _LAST_AUTOSAVE, _LAST_AUTOSAVE_ERROR
     if _CURRENT_PROJECT is None or _AUTOSAVE_DEPTH > 0:
         return None
+    if _DEFERRED_AUTOSAVE_DEPTH > 0 and not force:
+        if reason:
+            _DEFERRED_AUTOSAVE_REASONS.append(reason)
+        return {"ok": True, "reason": reason, "deferred": True}
     try:
         result = save_project()
     except Exception as exc:  # noqa: BLE001
@@ -258,6 +268,21 @@ def suspend_autosave():
         yield SimpleNamespace(active=True)
     finally:
         _AUTOSAVE_DEPTH = max(0, _AUTOSAVE_DEPTH - 1)
+
+
+@contextmanager
+def defer_autosave(reason: str | None = None):
+    """Coalesce autosaves inside a bulk operation into one save at exit."""
+    global _DEFERRED_AUTOSAVE_DEPTH, _DEFERRED_AUTOSAVE_REASONS
+    _DEFERRED_AUTOSAVE_DEPTH += 1
+    try:
+        yield SimpleNamespace(active=True)
+    finally:
+        _DEFERRED_AUTOSAVE_DEPTH = max(0, _DEFERRED_AUTOSAVE_DEPTH - 1)
+        if _DEFERRED_AUTOSAVE_DEPTH == 0 and _DEFERRED_AUTOSAVE_REASONS:
+            reasons = list(dict.fromkeys(_DEFERRED_AUTOSAVE_REASONS))
+            _DEFERRED_AUTOSAVE_REASONS = []
+            autosave_current_project(reason or ", ".join(reasons), force=True)
 
 
 def export_project_summary(path: str | Path) -> dict[str, Any]:

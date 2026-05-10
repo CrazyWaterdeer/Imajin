@@ -7,6 +7,25 @@ from imajin.agent import state
 from imajin.tools import channels
 
 
+def test_annotate_channel_defaults_to_unknown(viewer) -> None:
+    viewer.add_image(np.zeros((8, 8), dtype=np.uint16), name="unassigned")
+
+    res = channels.annotate_channel(layer="unassigned")
+
+    assert res["role"] == "unknown"
+    [entry] = channels.list_channel_annotations_tool()
+    assert entry["role"] == "unknown"
+
+
+def test_unknown_annotation_is_not_confirmed_target(viewer) -> None:
+    viewer.add_image(np.zeros((8, 8), dtype=np.uint16), name="unknown_ch")
+    viewer.add_image(np.zeros((8, 8), dtype=np.uint16), name="other_ch")
+    state.put_channel_annotation("unknown_ch")
+
+    with pytest.raises(state.AmbiguousChannelError):
+        state.resolve_target_channel()
+
+
 def test_annotate_channel_canonicalizes_far_red(viewer) -> None:
     viewer.add_image(np.zeros((8, 8), dtype=np.uint16), name="sample_cy5")
 

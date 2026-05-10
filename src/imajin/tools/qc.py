@@ -5,6 +5,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from imajin.analysis.arrays import materialize_array
 from imajin.agent import state
 from imajin.agent.qt_dispatch import call_on_main
 from imajin.tools.napari_ops import add_image_from_worker, snapshot_layer
@@ -14,7 +15,7 @@ _QC_STATUSES = {"pass", "warning", "fail", "not_checked"}
 
 
 def _materialize(arr) -> np.ndarray:
-    return np.asarray(arr.compute() if hasattr(arr, "compute") else arr)
+    return materialize_array(arr)
 
 
 def _json_value(value: Any) -> Any:

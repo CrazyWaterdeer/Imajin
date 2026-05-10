@@ -7,6 +7,7 @@ from typing import Any
 
 import numpy as np
 
+from imajin.analysis.arrays import materialize_array, metadata_axes_without_channel
 from imajin.agent.qt_dispatch import call_on_main
 from imajin.agent.state import get_layer, get_viewer
 from imajin.paths import normalize_user_path
@@ -15,7 +16,7 @@ from imajin.tools.registry import tool
 
 
 def _materialize(arr) -> np.ndarray:
-    return np.asarray(arr.compute() if hasattr(arr, "compute") else arr)
+    return materialize_array(arr)
 
 
 def _projection_scale(layer, axis_idx: int) -> tuple[float, ...]:
@@ -176,13 +177,9 @@ def _resolve_axis(layer, axis: int | str) -> int:
 
     code = axis.upper()
     md = getattr(layer, "metadata", {}) or {}
-    axes = md.get("axes")
-    if isinstance(axes, str):
-        # axes string was the *original* dataset axes (e.g., TCZYX). In our reader,
-        # channel_axis splits C out, so the per-layer axes is axes minus 'C'.
-        layer_axes = axes.replace("C", "")
-        if code in layer_axes:
-            return layer_axes.index(code)
+    layer_axes = metadata_axes_without_channel(md if isinstance(md, dict) else None, layer.data.ndim)
+    if layer_axes and code in layer_axes:
+        return layer_axes.index(code)
 
     ndim = layer.data.ndim
     fallback = {"T": 0, "Z": 0 if ndim == 3 else (ndim - 3), "Y": ndim - 2, "X": ndim - 1}

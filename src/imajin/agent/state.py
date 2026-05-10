@@ -1,12 +1,38 @@
 from __future__ import annotations
 
 import re
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field
 from typing import Any, Literal
 
 import pandas as pd
 
-_VIEWER: Any | None = None
+
+@dataclass
+class AnalysisSession:
+    """Mutable analysis state for one napari/Imajin session.
+
+    The module-level variables below remain as compatibility aliases while the
+    codebase is migrated away from scattered globals.
+    """
+
+    viewer: Any | None = None
+    tables: dict[str, "TableEntry"] = field(default_factory=dict)
+    qc_records: dict[str, "QCRecord"] = field(default_factory=dict)
+    files: dict[str, "FileRecord"] = field(default_factory=dict)
+    recipes: dict[str, "AnalysisRecipe"] = field(default_factory=dict)
+    runs: dict[str, "AnalysisRun"] = field(default_factory=dict)
+    run_counter: list[int] = field(default_factory=lambda: [0])
+    samples: dict[str, "SampleAnnotation"] = field(default_factory=dict)
+    channels: dict[str, "ChannelEntry"] = field(default_factory=dict)
+    table_listeners: list[Any] = field(default_factory=list)
+
+
+_CURRENT_SESSION = AnalysisSession()
+_VIEWER: Any | None = _CURRENT_SESSION.viewer
+_STATE_CHANGE_DEPTH = 0
+_PENDING_STATE_REASONS: list[str] = []
+_PENDING_TABLES_CHANGED = False
 
 
 @dataclass
@@ -15,7 +41,7 @@ class TableEntry:
     spec: dict[str, Any] = field(default_factory=dict)
 
 
-_TABLES: dict[str, TableEntry] = {}
+_TABLES: dict[str, TableEntry] = _CURRENT_SESSION.tables
 QCStatus = Literal["pass", "warning", "fail", "not_checked"]
 
 
@@ -29,7 +55,7 @@ class QCRecord:
     notes: str | None = None
 
 
-_QC_RECORDS: dict[str, QCRecord] = {}
+_QC_RECORDS: dict[str, QCRecord] = _CURRENT_SESSION.qc_records
 
 
 def _autosave_project(reason: str) -> None:
@@ -39,6 +65,48 @@ def _autosave_project(reason: str) -> None:
         autosave_current_project(reason)
     except Exception:
         pass
+
+
+def _state_changed(reason: str, *, tables_changed: bool = False) -> None:
+    global _PENDING_TABLES_CHANGED
+
+    if _STATE_CHANGE_DEPTH > 0:
+        _PENDING_STATE_REASONS.append(reason)
+        _PENDING_TABLES_CHANGED = _PENDING_TABLES_CHANGED or tables_changed
+        return
+    if tables_changed:
+        _emit_tables_changed()
+    _autosave_project(reason)
+
+
+def _tables_changed() -> None:
+    global _PENDING_TABLES_CHANGED
+
+    if _STATE_CHANGE_DEPTH > 0:
+        _PENDING_TABLES_CHANGED = True
+        return
+    _emit_tables_changed()
+
+
+@contextmanager
+def bulk_state_update(reason: str | None = None):
+    """Coalesce state-change notifications produced inside a bulk mutation."""
+    global _STATE_CHANGE_DEPTH, _PENDING_STATE_REASONS, _PENDING_TABLES_CHANGED
+
+    _STATE_CHANGE_DEPTH += 1
+    try:
+        yield
+    finally:
+        _STATE_CHANGE_DEPTH = max(0, _STATE_CHANGE_DEPTH - 1)
+        if _STATE_CHANGE_DEPTH == 0:
+            pending_reasons = list(dict.fromkeys(_PENDING_STATE_REASONS))
+            tables_changed = _PENDING_TABLES_CHANGED
+            _PENDING_STATE_REASONS = []
+            _PENDING_TABLES_CHANGED = False
+            if tables_changed:
+                _emit_tables_changed()
+            if pending_reasons:
+                _autosave_project(reason or ", ".join(pending_reasons))
 
 
 def _slugify(name: str) -> str:
@@ -58,7 +126,7 @@ class FileRecord:
     notes: str | None = None
 
 
-_FILES: dict[str, FileRecord] = {}
+_FILES: dict[str, FileRecord] = _CURRENT_SESSION.files
 
 
 def put_file(
@@ -84,7 +152,7 @@ def put_file(
         notes=notes,
         load_status=load_status,
     )
-    _autosave_project("file_registered")
+    _state_changed("file_registered")
     return file_id
 
 
@@ -96,6 +164,10 @@ def get_file(file_id: str) -> FileRecord:
     return _FILES[file_id]
 
 
+def iter_file_records() -> list[FileRecord]:
+    return list(_FILES.values())
+
+
 def list_files() -> list[dict[str, Any]]:
     return [asdict(rec) for rec in _FILES.values()]
 
@@ -105,7 +177,7 @@ def update_file_status(file_id: str, status: str, notes: str | None = None) -> N
     rec.load_status = status
     if notes is not None:
         rec.notes = notes
-    _autosave_project("file_status_updated")
+    _state_changed("file_status_updated")
 
 
 def reset_files() -> None:
@@ -127,7 +199,7 @@ class AnalysisRecipe:
     domain: dict[str, Any] | None = None
 
 
-_RECIPES: dict[str, AnalysisRecipe] = {}
+_RECIPES: dict[str, AnalysisRecipe] = _CURRENT_SESSION.recipes
 
 
 def put_recipe(
@@ -158,7 +230,7 @@ def put_recipe(
         cell_diameter_um=cell_diameter_um,
         domain=dict(domain) if domain else None,
     )
-    _autosave_project("recipe_saved")
+    _state_changed("recipe_saved")
     return name
 
 
@@ -189,8 +261,8 @@ class AnalysisRun:
     error: str | None = None
 
 
-_RUNS: dict[str, AnalysisRun] = {}
-_RUN_COUNTER: list[int] = [0]
+_RUNS: dict[str, AnalysisRun] = _CURRENT_SESSION.runs
+_RUN_COUNTER: list[int] = _CURRENT_SESSION.run_counter
 
 
 def put_run(
@@ -218,7 +290,7 @@ def put_run(
         summary=dict(summary or {}),
         error=error,
     )
-    _autosave_project("analysis_run_saved")
+    _state_changed("analysis_run_saved")
     return run_id
 
 
@@ -255,7 +327,7 @@ def put_qc_record(
         reviewed_by_user=reviewed_by_user,
         notes=notes,
     )
-    _autosave_project("qc_record_saved")
+    _state_changed("qc_record_saved")
     return source
 
 
@@ -289,7 +361,7 @@ class SampleAnnotation:
 SampleEntry = SampleAnnotation
 
 
-_SAMPLES: dict[str, SampleAnnotation] = {}
+_SAMPLES: dict[str, SampleAnnotation] = _CURRENT_SESSION.samples
 
 
 _CHANNEL_COLOR_ALIASES: dict[str, str] = {
@@ -326,6 +398,9 @@ _CHANNEL_COLOR_ALIASES: dict[str, str] = {
 }
 
 _CHANNEL_ROLE_ALIASES: dict[str, str] = {
+    "unknown": "unknown",
+    "unassigned": "unknown",
+    "unspecified": "unknown",
     "target": "target",
     "primary": "target",
     "main": "target",
@@ -343,14 +418,43 @@ _CHANNEL_ROLE_ALIASES: dict[str, str] = {
 @dataclass
 class ChannelEntry:
     layer_name: str
-    role: str = "target"
+    role: str = "unknown"
     color: str | None = None
     marker: str | None = None
     biological_target: str | None = None
     notes: str | None = None
 
 
-_CHANNELS: dict[str, ChannelEntry] = {}
+_CHANNELS: dict[str, ChannelEntry] = _CURRENT_SESSION.channels
+
+
+def current_session() -> AnalysisSession:
+    return _CURRENT_SESSION
+
+
+def set_current_session(session: AnalysisSession) -> None:
+    """Replace the active session and refresh compatibility aliases."""
+
+    global _CURRENT_SESSION, _VIEWER, _TABLES, _QC_RECORDS, _FILES, _RECIPES
+    global _RUNS, _RUN_COUNTER, _SAMPLES, _CHANNELS, _TABLE_LISTENERS
+
+    _CURRENT_SESSION = session
+    _VIEWER = session.viewer
+    _TABLES = session.tables
+    _QC_RECORDS = session.qc_records
+    _FILES = session.files
+    _RECIPES = session.recipes
+    _RUNS = session.runs
+    _RUN_COUNTER = session.run_counter
+    _SAMPLES = session.samples
+    _CHANNELS = session.channels
+    _TABLE_LISTENERS = session.table_listeners
+
+
+def reset_session(viewer: Any | None = None) -> AnalysisSession:
+    session = AnalysisSession(viewer=viewer)
+    set_current_session(session)
+    return session
 
 
 def _normalize_text(value: str) -> str:
@@ -381,30 +485,32 @@ def canonical_channel_color(value: str | None) -> str | None:
 
 def canonical_channel_role(value: str | None) -> str:
     if not value:
-        return "target"
+        return "unknown"
     norm = _normalize_text(value)
     role = _CHANNEL_ROLE_ALIASES.get(norm, norm)
-    if role not in {"target", "counterstain", "ignore"}:
-        raise ValueError("role must be target, counterstain, or ignore")
+    if role not in {"target", "counterstain", "ignore", "unknown"}:
+        raise ValueError("role must be target, counterstain, ignore, or unknown")
     return role
 
 
 def set_viewer(v: Any) -> None:
     global _VIEWER
+    _CURRENT_SESSION.viewer = v
     _VIEWER = v
 
 
 def get_viewer() -> Any:
-    if _VIEWER is None:
+    viewer = _CURRENT_SESSION.viewer
+    if viewer is None:
         raise RuntimeError(
             "No napari viewer registered. Call set_viewer(viewer) at startup, "
             "or pass arrays directly when calling tools from a script."
         )
-    return _VIEWER
+    return viewer
 
 
 def viewer_or_none() -> Any | None:
-    return _VIEWER
+    return _CURRENT_SESSION.viewer
 
 
 def get_layer(name: str) -> Any:
@@ -463,6 +569,10 @@ def _layer_channel_metadata(layer: Any) -> dict[str, Any]:
         "emission_wavelength_nm",
     }
     return {k: md[k] for k in keys if k in md}
+
+
+def layer_channel_metadata(layer: Any) -> dict[str, Any]:
+    return _layer_channel_metadata(layer)
 
 
 def _layer_channel_color(layer: Any) -> str | None:
@@ -560,6 +670,10 @@ def get_table_entry(name: str) -> TableEntry:
     return _TABLES[name]
 
 
+def iter_table_entries() -> list[TableEntry]:
+    return list(_TABLES.values())
+
+
 def put_table(
     name: str, df: pd.DataFrame, spec: dict[str, Any] | None = None
 ) -> str:
@@ -569,8 +683,7 @@ def put_table(
         name = f"{base}_{i}"
         i += 1
     _TABLES[name] = TableEntry(df=df, spec=dict(spec or {}))
-    _emit_tables_changed()
-    _autosave_project("table_saved")
+    _state_changed("table_saved", tables_changed=True)
     return name
 
 
@@ -579,8 +692,7 @@ def set_table(
 ) -> str:
     """Set or replace a table by exact name for project restore paths."""
     _TABLES[name] = TableEntry(df=df, spec=dict(spec or {}))
-    _emit_tables_changed()
-    _autosave_project("table_restored")
+    _state_changed("table_restored", tables_changed=True)
     return name
 
 
@@ -588,8 +700,7 @@ def update_table(name: str, df: pd.DataFrame) -> None:
     if name not in _TABLES:
         raise KeyError(f"Table {name!r} not found")
     _TABLES[name].df = df
-    _emit_tables_changed()
-    _autosave_project("table_updated")
+    _state_changed("table_updated", tables_changed=True)
 
 
 def list_tables() -> list[str]:
@@ -598,7 +709,7 @@ def list_tables() -> list[str]:
 
 def reset_tables() -> None:
     _TABLES.clear()
-    _emit_tables_changed()
+    _tables_changed()
 
 
 def attach_sample_columns_to_table(
@@ -627,8 +738,7 @@ def attach_sample_columns_to_table(
         if col not in df.columns:
             df[col] = value
     _TABLES[table_name].df = df
-    _emit_tables_changed()
-    _autosave_project("table_sample_columns_attached")
+    _state_changed("table_sample_columns_attached", tables_changed=True)
 
 
 def put_sample(
@@ -657,7 +767,7 @@ def put_sample(
         notes=notes,
         extra=dict(extra or {}),
     )
-    _autosave_project("sample_annotation_saved")
+    _state_changed("sample_annotation_saved")
     return sample_name
 
 
@@ -677,7 +787,7 @@ def reset_samples() -> None:
 
 def put_channel_annotation(
     layer_name: str,
-    role: str = "target",
+    role: str = "unknown",
     color: str | None = None,
     marker: str | None = None,
     biological_target: str | None = None,
@@ -701,7 +811,7 @@ def put_channel_annotation(
         biological_target=biological_target,
         notes=notes,
     )
-    _autosave_project("channel_annotation_saved")
+    _state_changed("channel_annotation_saved")
     return resolved_layer
 
 
@@ -740,6 +850,28 @@ def restore_session_state(
     clear_existing: bool = True,
 ) -> None:
     """Restore persistent state without requiring napari layers to exist."""
+    with bulk_state_update("session_restored"):
+        _restore_session_state_impl(
+            files=files,
+            samples=samples,
+            channels=channels,
+            recipes=recipes,
+            runs=runs,
+            qc_records=qc_records,
+            clear_existing=clear_existing,
+        )
+
+
+def _restore_session_state_impl(
+    *,
+    files: list[dict[str, Any]] | None = None,
+    samples: list[dict[str, Any]] | None = None,
+    channels: list[dict[str, Any]] | None = None,
+    recipes: list[dict[str, Any]] | None = None,
+    runs: list[dict[str, Any]] | None = None,
+    qc_records: list[dict[str, Any]] | None = None,
+    clear_existing: bool = True,
+) -> None:
     if clear_existing:
         reset_files()
         reset_samples()
@@ -778,7 +910,7 @@ def restore_session_state(
             continue
         _CHANNELS[layer_name] = ChannelEntry(
             layer_name=layer_name,
-            role=str(rec.get("role") or "target"),
+            role=canonical_channel_role(rec.get("role")),
             color=rec.get("color"),
             marker=rec.get("marker"),
             biological_target=rec.get("biological_target"),
@@ -958,7 +1090,7 @@ def resolve_target_channel(query: str | None = None) -> ChannelResolution:
     )
 
 
-_TABLE_LISTENERS: list[Any] = []
+_TABLE_LISTENERS: list[Any] = _CURRENT_SESSION.table_listeners
 
 
 def on_tables_changed(callback: Any) -> None:

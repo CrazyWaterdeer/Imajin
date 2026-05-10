@@ -51,14 +51,14 @@ def _layer_name_suggests_far_red(layer_name: str) -> bool:
 
 @tool(
     description="Annotate an image layer's channel identity. Keep this simple: role is "
-    "target, counterstain, or ignore. Color understands green, red, UV, and IR/far red "
-    "aliases. The target channel is the default channel for segmentation, intensity, "
-    "cell size, and time-course measurement.",
+    "target, counterstain, ignore, or unknown. Color understands green, red, UV, "
+    "and IR/far red aliases. Only a confirmed target channel is the default for "
+    "segmentation, intensity, cell size, and time-course measurement.",
     phase="1.5",
 )
 def annotate_channel(
     layer: str,
-    role: str = "target",
+    role: str = "unknown",
     color: str | None = None,
     marker: str | None = None,
     biological_target: str | None = None,
@@ -94,8 +94,8 @@ def annotate_channel(
 
 @tool(
     name="list_channel_annotations",
-    description="List current channel annotations: target/counterstain/ignore role, "
-    "canonical color (green/red/uv/ir), marker, and biological target.",
+    description="List current channel annotations: target/counterstain/ignore/unknown "
+    "role, canonical color (green/red/uv/ir), marker, and biological target.",
     phase="1.5",
 )
 def list_channel_annotations_tool() -> list[dict[str, Any]]:

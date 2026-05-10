@@ -1,14 +1,11 @@
 from __future__ import annotations
 
-import contextlib
-import contextvars
 import shutil
 import json
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any
 
-import numpy as np
-
+from imajin import result_bundles as _bundle_io
 from imajin.agent.qt_dispatch import call_on_main
 from imajin.agent.state import get_table, get_table_entry
 from imajin.paths import normalize_user_path
@@ -23,74 +20,15 @@ from imajin.results import (
 from imajin.tools.napari_ops import snapshot_layer
 from imajin.tools.registry import tool
 
-
-_active_bundle: contextvars.ContextVar[Path | None] = contextvars.ContextVar(
-    "imajin_active_bundle", default=None
-)
-_active_sample_slug: contextvars.ContextVar[str | None] = contextvars.ContextVar(
-    "imajin_active_sample_slug", default=None
-)
-
-
-def current_bundle() -> Path | None:
-    """Return the bundle directory currently being populated, or None.
-
-    Set by `with_active_bundle` (used by run_recipe_on_samples to forward
-    the parent bundle to per-sample analyze_target_cells calls).
-    """
-    return _active_bundle.get()
-
-
-def current_sample_slug() -> str | None:
-    """Return the slug of the sample currently being processed, or None.
-
-    Set by `with_active_sample_slug` so per-call writers can name files by
-    sample name in a batch instead of by layer name.
-    """
-    return _active_sample_slug.get()
-
-
-@contextlib.contextmanager
-def with_active_bundle(path: Path | str) -> Iterator[Path]:
-    """Mark `path` as the current bundle for the duration of the with-block.
-
-    Note: Python `contextvars` propagate to `threading.Thread` children but NOT
-    to Qt thread-pool workers (e.g. napari's `@thread_worker`). If a caller
-    inside this block dispatches work via such a pool, that work will see
-    `current_bundle() is None`. Callers in such situations must capture the
-    path explicitly or run the dispatched callable inside a copied context
-    (`contextvars.copy_context().run(...)`).
-    """
-    p = Path(path)
-    token = _active_bundle.set(p)
-    try:
-        yield p
-    finally:
-        _active_bundle.reset(token)
-
-
-@contextlib.contextmanager
-def with_active_sample_slug(slug: str | None) -> Iterator[str | None]:
-    """Mark a per-sample slug used by per-call bundle writers.
-
-    Same propagation caveats as `with_active_bundle` apply.
-    """
-    token = _active_sample_slug.set(slug)
-    try:
-        yield slug
-    finally:
-        _active_sample_slug.reset(token)
-
-
-def _materialize(arr: Any) -> np.ndarray:
-    return np.asarray(arr.compute() if hasattr(arr, "compute") else arr)
-
-
-def _label_output_dtype(data: np.ndarray) -> np.dtype:
-    max_label = int(np.nanmax(data)) if data.size else 0
-    if max_label <= np.iinfo(np.uint16).max:
-        return np.dtype(np.uint16)
-    return np.dtype(np.uint32)
+current_bundle = _bundle_io.current_bundle
+current_sample_slug = _bundle_io.current_sample_slug
+finalize_bundle_metadata = _bundle_io.finalize_bundle_metadata
+populate_sample_outputs = _bundle_io.populate_sample_outputs
+with_active_bundle = _bundle_io.with_active_bundle
+with_active_sample_slug = _bundle_io.with_active_sample_slug
+write_combined_csv = _bundle_io.write_combined_csv
+_label_output_dtype = _bundle_io.label_output_dtype
+_materialize = _bundle_io.materialize_result_array
 
 
 def _resolve_output_path(
@@ -239,110 +177,3 @@ def save_result_bundle(
         "metadata_path": str(bundle / "metadata.json"),
         "outputs": outputs,
     }
-
-
-def _write_label_layer(
-    bundle: Path, tier: str, sample_slug: str, layer_name: str
-) -> str:
-    """Snapshot a label layer and write it to bundle/labels/<tier>/<slug>.tif.
-
-    Returns the path relative to `bundle`.
-    Raises ValueError on filename collision within the same bundle.
-    """
-    import tifffile
-
-    layer = call_on_main(snapshot_layer, layer_name)
-    data = _materialize(layer.data)
-    labels = data.astype(_label_output_dtype(data), copy=False)
-    rel = Path("labels") / tier / f"{sample_slug}.tif"
-    out = bundle / rel
-    out.parent.mkdir(parents=True, exist_ok=True)
-    if out.exists():
-        raise ValueError(
-            f"{rel} already exists in bundle {bundle.name}; "
-            "sample_slug collision suspected"
-        )
-    tifffile.imwrite(out, labels)
-    return rel.as_posix()
-
-
-def _copy_qc_png(bundle: Path, qc_png: str, sample_slug: str) -> str | None:
-    """Copy a QC PNG into bundle/qc/<slug>.png. Returns path relative to bundle."""
-    src = normalize_user_path(qc_png).resolve()
-    if not src.exists():
-        return None
-    rel = Path("qc") / f"{sample_slug}.png"
-    dst = bundle / rel
-    if src.resolve() != dst.resolve():
-        shutil.copy2(src, dst)
-    return rel.as_posix()
-
-
-def populate_sample_outputs(
-    bundle: Path,
-    sample_slug: str,
-    *,
-    labels_cells: str | None = None,
-    labels_domain: str | None = None,
-    qc_png: str | None = None,
-) -> dict[str, str | None]:
-    """Write per-sample outputs into a bundle, returning relative output paths."""
-    out: dict[str, str | None] = {
-        "labels_cells": None,
-        "labels_domain": None,
-        "qc_png": None,
-    }
-    if labels_cells:
-        out["labels_cells"] = _write_label_layer(
-            bundle, "cells", sample_slug, labels_cells
-        )
-    if labels_domain:
-        out["labels_domain"] = _write_label_layer(
-            bundle, "domain", sample_slug, labels_domain
-        )
-    if qc_png:
-        out["qc_png"] = _copy_qc_png(bundle, qc_png, sample_slug)
-    return out
-
-
-def write_combined_csv(bundle: Path, table_names: list[str]) -> Path:
-    """Concat the given measurement tables and write to bundle/tables/combined.csv."""
-    import pandas as pd
-
-    frames: list[pd.DataFrame] = []
-    for name in table_names:
-        try:
-            frame = get_table(name)
-        except KeyError:
-            continue
-        if frame is None or frame.empty:
-            continue
-        frames.append(frame)
-    out = bundle / "tables" / "combined.csv"
-    out.parent.mkdir(parents=True, exist_ok=True)
-    if frames:
-        combined = pd.concat(frames, ignore_index=True, sort=False)
-    else:
-        combined = pd.DataFrame()
-    combined.to_csv(out, index=False)
-    return out
-
-
-def finalize_bundle_metadata(
-    bundle: Path,
-    *,
-    samples: list[dict[str, Any]],
-    status: str,
-    extra: dict[str, Any] | None = None,
-) -> None:
-    """Update bundle/metadata.json with the final samples index and status."""
-    meta = read_bundle_metadata(bundle)
-    meta["status"] = status
-    meta["samples"] = list(samples)
-    meta["n_samples"] = len(samples)
-    meta["n_complete"] = sum(1 for s in samples if s.get("status") == "complete")
-    meta["n_failed"] = sum(1 for s in samples if s.get("status") == "failed")
-    meta["tables"] = {"combined": "tables/combined.csv"}
-    if extra:
-        meta.update(extra)
-    write_bundle_metadata(bundle, meta)

@@ -5,6 +5,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from imajin.analysis.arrays import layer_axes_from_metadata, materialize_array
 from imajin.agent.qt_dispatch import call_on_main
 from imajin.agent.state import (
     get_table,
@@ -27,7 +28,7 @@ _TIME_PROPS = ["label", "area", "mean_intensity", "max_intensity", "min_intensit
 
 
 def _materialize(arr) -> np.ndarray:
-    return np.asarray(arr.compute() if hasattr(arr, "compute") else arr)
+    return materialize_array(arr)
 
 
 def _voxel_scale(scale: tuple[float, ...] | None, ndim: int) -> tuple[float, ...] | None:
@@ -84,18 +85,7 @@ def _add_physical_columns(
 
 def _layer_axes(layer: Any, ndim: int) -> str:
     md = getattr(layer, "metadata", {}) or {}
-    axes = md.get("axes") if isinstance(md, dict) else None
-    if isinstance(axes, str):
-        layer_axes = axes.replace("C", "")
-        if len(layer_axes) == ndim:
-            return layer_axes
-    if ndim == 4:
-        return "TZYX"
-    if ndim == 3:
-        return "TYX"
-    if ndim == 2:
-        return "YX"
-    return "".join(f"A{i}" for i in range(ndim))
+    return layer_axes_from_metadata(md, ndim, default_3d="ZYX")
 
 
 def _resolve_time_axis(layer: Any, image_ndim: int, time_axis: int | str | None) -> int:
@@ -103,7 +93,10 @@ def _resolve_time_axis(layer: Any, image_ndim: int, time_axis: int | str | None)
     if time_axis is None:
         if "T" in axes:
             return axes.index("T")
-        return 0
+        raise ValueError(
+            f"image layer axes {axes!r} do not include a time axis. Reload with "
+            "metadata axes containing 'T' or pass time_axis explicitly."
+        )
     if isinstance(time_axis, int):
         idx = time_axis if time_axis >= 0 else image_ndim + time_axis
         if idx < 0 or idx >= image_ndim:

@@ -288,6 +288,80 @@ def test_project_autosaves_session_annotations(tmp_path: Path) -> None:
     assert status["last_autosave"]["ok"] is True
 
 
+def test_defer_autosave_coalesces_bulk_state_changes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from imajin.agent import state
+    from imajin import project as project_module
+
+    root = tmp_path / "deferred-autosave.imajin"
+    project_module.create_project(root)
+
+    real_save = project_module.save_project
+    calls: list[str | None] = []
+
+    def spy_save_project(path: str | Path | None = None) -> dict[str, object]:
+        calls.append(str(path) if path is not None else None)
+        return real_save(path)
+
+    monkeypatch.setattr(project_module, "save_project", spy_save_project)
+
+    with project_module.defer_autosave("bulk_edit"):
+        state.put_sample("control 1", group="control")
+        state.set_table(
+            "measurements",
+            pd.DataFrame({"sample_name": ["control 1"], "mean_intensity": [12.5]}),
+        )
+        assert calls == []
+
+    assert calls == [None]
+    samples = json.loads((root / "samples.json").read_text())
+    tables = json.loads((root / "tables" / "index.json").read_text())
+    status = project_module.project_status()
+    assert samples[0]["sample_name"] == "control 1"
+    assert tables[0]["name"] == "measurements"
+    assert status["last_autosave"]["reason"] == "bulk_edit"
+
+
+def test_bulk_state_update_coalesces_notifications_and_autosave(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from imajin.agent import state
+    from imajin import project as project_module
+
+    root = tmp_path / "bulk-state.imajin"
+    project_module.create_project(root)
+
+    real_save = project_module.save_project
+    save_calls: list[str | None] = []
+
+    def spy_save_project(path: str | Path | None = None) -> dict[str, object]:
+        save_calls.append(str(path) if path is not None else None)
+        return real_save(path)
+
+    table_notifications: list[None] = []
+
+    def on_tables_changed() -> None:
+        table_notifications.append(None)
+
+    monkeypatch.setattr(project_module, "save_project", spy_save_project)
+    state.on_tables_changed(on_tables_changed)
+    try:
+        with state.bulk_state_update("bulk_state"):
+            state.put_sample("control 1", group="control")
+            state.put_table("measurements", pd.DataFrame({"label": [1]}))
+            assert save_calls == []
+            assert table_notifications == []
+    finally:
+        state.current_session().table_listeners.remove(on_tables_changed)
+
+    assert save_calls == [None]
+    assert len(table_notifications) == 1
+    assert project_module.project_status()["last_autosave"]["reason"] == "bulk_state"
+
+
 def test_autosave_is_suspended_during_load(tmp_path: Path) -> None:
     from imajin.agent import state
     from imajin.project import create_project, load_project
@@ -301,6 +375,31 @@ def test_autosave_is_suspended_during_load(tmp_path: Path) -> None:
 
     assert loaded["n_samples"] == 1
     assert (root / "project.json").read_text() == original_project_json
+
+
+def test_load_project_coalesces_table_notifications(tmp_path: Path) -> None:
+    from imajin.agent import state
+    from imajin.project import create_project, load_project, save_project
+
+    root = tmp_path / "load-table-notify.imajin"
+    create_project(root)
+    state.set_table("measurements", pd.DataFrame({"label": [1]}))
+    save_project()
+    state.reset_tables()
+
+    notifications: list[None] = []
+
+    def on_tables_changed() -> None:
+        notifications.append(None)
+
+    state.on_tables_changed(on_tables_changed)
+    try:
+        loaded = load_project(root)
+    finally:
+        state.current_session().table_listeners.remove(on_tables_changed)
+
+    assert loaded["n_tables"] == 1
+    assert len(notifications) == 1
 
 
 def test_recipe_round_trip_with_cell_diameter_and_domain(tmp_path) -> None:

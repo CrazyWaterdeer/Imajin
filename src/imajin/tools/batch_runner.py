@@ -1,0 +1,670 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Any
+
+from imajin.agent.execution import raise_if_cancelled, report_progress
+from imajin.agent.qt_dispatch import call_on_main
+from imajin.agent.state import (
+    attach_sample_columns_to_table,
+    bulk_state_update,
+    get_file,
+    get_recipe,
+    get_sample,
+    list_samples,
+    put_run,
+)
+from imajin.analysis.workflow import (
+    build_sample_summary,
+    first_analysis_preprocess,
+    normalize_domain_spec,
+    normalize_match_text,
+    projection_request,
+    release_worker_memory,
+    rss_mb,
+)
+from imajin.tools.layers import remove_layers_by_name, viewer_layer_names
+from imajin.workers.qt_worker import CancelledError
+
+
+def cleanup_new_layers(base_layer_names: set[str]) -> list[str]:
+    return cleanup_sample_layers(base_layer_names, [])
+
+
+def cleanup_sample_layers(
+    base_layer_names: set[str],
+    managed_layer_names: list[str],
+) -> list[str]:
+    current = viewer_layer_names()
+    current_set = set(current)
+    created = [name for name in current if name not in base_layer_names]
+    managed = [name for name in managed_layer_names if name in current_set]
+    to_remove = list(dict.fromkeys([*created, *managed]))
+    return call_on_main(remove_layers_by_name, to_remove)
+
+
+def loaded_layer_metadata_text(layer: Any) -> str:
+    md = getattr(layer, "metadata", {}) or {}
+    parts = [getattr(layer, "name", "")]
+    if isinstance(md, dict):
+        for key in ("name", "channel_name", "marker", "color"):
+            if key in md and md[key] is not None:
+                parts.append(str(md[key]))
+    try:
+        from imajin.agent.state import layer_channel_metadata
+
+        channel_info = layer_channel_metadata(layer)
+    except Exception:
+        channel_info = {}
+    if isinstance(channel_info, dict):
+        for key in (
+            "name",
+            "channel_name",
+            "marker",
+            "color",
+            "display_color_name",
+            "dye_name",
+            "excitation_wavelength_nm",
+            "emission_wavelength_nm",
+        ):
+            if key in channel_info and channel_info[key] is not None:
+                parts.append(str(channel_info[key]))
+    return " ".join(parts)
+
+
+def resolve_target_within_loaded_layers(
+    target: str | None,
+    loaded_layers: list[str],
+) -> str | None:
+    """Resolve a recipe target only against layers loaded for the current sample."""
+    if not loaded_layers:
+        return target
+    current = list(dict.fromkeys(str(name) for name in loaded_layers))
+    if target is None:
+        return current[0] if len(current) == 1 else None
+    if target in current:
+        return target
+
+    from imajin.agent.state import canonical_channel_color, get_viewer
+
+    query = normalize_match_text(target)
+    target_color = canonical_channel_color(target)
+    viewer = get_viewer()
+    matches: list[str] = []
+    for layer_name in current:
+        try:
+            layer = viewer.layers[layer_name]
+        except Exception:
+            continue
+        text = normalize_match_text(loaded_layer_metadata_text(layer))
+        layer_color = canonical_channel_color(text)
+        if query and (query == normalize_match_text(layer_name) or query in text):
+            matches.append(layer_name)
+        elif target_color is not None and layer_color == target_color:
+            matches.append(layer_name)
+
+    unique = list(dict.fromkeys(matches))
+    if len(unique) == 1:
+        return unique[0]
+    if len(current) == 1:
+        return current[0]
+    return target
+
+
+def load_file_for_sample_if_needed(
+    info: dict[str, Any],
+    *,
+    auto_load_files: bool,
+) -> dict[str, Any] | None:
+    if not auto_load_files or not info.get("file_path"):
+        return None
+    sample_layers = list(getattr(info["sample"], "layers", []) or [])
+    existing = set(call_on_main(viewer_layer_names))
+    if sample_layers and any(layer_name in existing for layer_name in sample_layers):
+        return None
+    from imajin.tools import files as _files
+
+    return call_on_main(_files.load_file, str(info["file_path"]))
+
+
+def project_layer_for_recipe(
+    layer_name: str | None,
+    *,
+    projection: str | None,
+    axis: Any,
+) -> dict[str, Any] | None:
+    if projection is None:
+        return None
+    if layer_name is None:
+        raise ValueError("projection requires a target layer")
+    from imajin.tools import view as _view
+
+    if projection == "mean":
+        return _view.average_projection(layer_name, axis=axis)
+    if projection == "max":
+        return _view.max_projection(layer_name, axis=axis)
+    raise ValueError("projection must be mean or max")
+
+
+def resolve_sample_inputs(sample_name: str) -> dict[str, Any]:
+    """Pick the layer name + file path the recipe should operate on for one sample."""
+    sample = get_sample(sample_name)
+    layer_name = sample.layers[0] if sample.layers else None
+    file_path: str | None = None
+    file_id: str | None = None
+    if sample.file_ids:
+        file_id = sample.file_ids[0]
+        try:
+            file_path = get_file(file_id).path
+        except KeyError:
+            pass
+    elif sample.files:
+        file_path = sample.files[0]
+    return {
+        "sample": sample,
+        "layer_name": layer_name,
+        "file_path": file_path,
+        "file_id": file_id,
+    }
+
+
+@dataclass
+class BatchRecipeRunner:
+    recipe_name: str
+    sample_names: list[str] | None = None
+    execution_mode: str = "serial_cleanup"
+    auto_load_files: bool = True
+    keep_layers: bool = False
+    keep_failed_layers: bool = False
+
+    def run(self) -> dict[str, Any]:
+        from imajin.project import defer_autosave
+
+        with defer_autosave("batch_recipe_run"):
+            with bulk_state_update("batch_recipe_run"):
+                return self._run()
+
+    def _run(self) -> dict[str, Any]:
+        self.recipe = get_recipe(self.recipe_name)
+        self.names = self._sample_names()
+        if not self.names:
+            return self._empty_result()
+
+        self.mode = self._normalize_execution_mode()
+        self.cleanup_enabled = (
+            self.mode in {"serial_cleanup", "cleanup"} and not self.keep_layers
+        )
+        self.seg = self.recipe.segmentation or {}
+        self.measurement = self.recipe.measurement or {}
+        self.pre_steps = self.recipe.preprocessing or []
+        self.pre_choice = first_analysis_preprocess(self.pre_steps)
+        self.projection, self.projection_axis = projection_request(
+            self.measurement,
+            self.pre_steps,
+        )
+        self.domain_strategy, self.domain_options = normalize_domain_spec(
+            self.recipe.domain
+        )
+        self.runs: list[dict[str, Any]] = []
+        self.sample_summaries: list[dict[str, Any]] = []
+        self.n_complete = 0
+        self.n_failed = 0
+
+        self.parent_bundle = self._create_parent_bundle()
+        from imajin.result_bundles import with_active_bundle
+
+        with with_active_bundle(self.parent_bundle):
+            cancelled = False
+            try:
+                for index, name in enumerate(self.names):
+                    raise_if_cancelled()
+                    self._process_sample(index, name)
+            except CancelledError:
+                cancelled = True
+                self._append_cancelled_sample_summaries()
+                raise
+            finally:
+                self._finalize_bundle(cancelled=cancelled)
+
+        return {
+            "recipe": self.recipe_name,
+            "n_samples": len(self.names),
+            "n_complete": self.n_complete,
+            "n_failed": self.n_failed,
+            "execution_mode": self.mode,
+            "cleanup_enabled": self.cleanup_enabled,
+            "runs": self.runs,
+            "bundle_path": str(self.parent_bundle),
+        }
+
+    def _sample_names(self) -> list[str]:
+        if self.sample_names is None:
+            return [s["sample_name"] for s in list_samples()]
+        return list(self.sample_names)
+
+    def _empty_result(self) -> dict[str, Any]:
+        return {
+            "recipe": self.recipe_name,
+            "n_samples": 0,
+            "n_complete": 0,
+            "n_failed": 0,
+            "runs": [],
+            "bundle_path": None,
+            "execution_mode": self.execution_mode,
+            "cleanup_enabled": False,
+        }
+
+    def _normalize_execution_mode(self) -> str:
+        mode = self.execution_mode.strip().lower().replace("-", "_")
+        if mode == "parallel_headless":
+            raise ValueError(
+                "parallel_headless is planned for headless/CLI workers but is not "
+                "implemented in the napari GUI runner yet. Use serial_cleanup."
+            )
+        if mode not in {"serial_cleanup", "cleanup", "serial"}:
+            raise ValueError(
+                "execution_mode must be 'serial_cleanup', 'serial', or 'parallel_headless'"
+            )
+        return mode
+
+    def _create_parent_bundle(self) -> Any:
+        from imajin.results import create_result_bundle
+
+        return create_result_bundle(
+            name=self.recipe.name,
+            kind="batch",
+            tier="two_tier" if self.domain_strategy is not None else "single_tier",
+            metadata={
+                "recipe": {
+                    "name": self.recipe.name,
+                    "target_channel": self.recipe.target_channel,
+                    "preprocessing": list(self.recipe.preprocessing or []),
+                    "segmentation": dict(self.recipe.segmentation or {}),
+                    "measurement": dict(self.recipe.measurement or {}),
+                    "domain": dict(self.recipe.domain) if self.recipe.domain else None,
+                    "cell_diameter_um": self.recipe.cell_diameter_um,
+                },
+            },
+        )
+
+    def _process_sample(self, index: int, name: str) -> None:
+        total = len(self.names)
+        info = resolve_sample_inputs(name)
+        sample = info["sample"]
+        current_file = info["file_path"] or info["layer_name"] or sample.sample_name
+        base_layer_names = set(call_on_main(viewer_layer_names))
+        mem_before = rss_mb()
+        failed_sample = False
+        managed_layer_names: list[str] = []
+        runs_len_before = len(self.runs)
+        report_progress(
+            progress=index / total,
+            stage="sample",
+            current_file=current_file,
+            file_index=index + 1,
+            total_files=total,
+            completed=self.n_complete,
+            failed=self.n_failed,
+            skipped=0,
+            show_in_chat=True,
+            message=f"Processing {sample.sample_name} ({index + 1}/{total}).",
+            detail={
+                "rss_mb": mem_before,
+                "layer_count": len(base_layer_names),
+                "execution_mode": self.mode,
+            },
+        )
+        try:
+            result, target = self._analyze_sample(info, managed_layer_names)
+        except CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            failed_sample = True
+            self._record_exception(sample, info, exc)
+            self._report_sample_failed(index, current_file, sample.sample_name)
+        else:
+            if not result.get("ok"):
+                failed_sample = True
+                self._record_not_ok(sample, info, result)
+                self._report_sample_failed(index, current_file, sample.sample_name)
+            else:
+                self._record_success(sample, info, result, target)
+                self._report_sample_complete(index, current_file, sample.sample_name)
+        finally:
+            self._cleanup_after_sample(
+                index=index,
+                current_file=current_file,
+                sample_name=sample.sample_name,
+                failed_sample=failed_sample,
+                base_layer_names=base_layer_names,
+                managed_layer_names=managed_layer_names,
+                runs_len_before=runs_len_before,
+                mem_before=mem_before,
+            )
+
+    def _analyze_sample(
+        self,
+        info: dict[str, Any],
+        managed_layer_names: list[str],
+    ) -> tuple[dict[str, Any], str | None]:
+        from imajin.results import slugify_result_name
+        from imajin.tools import workflows as _workflows
+        from imajin.result_bundles import with_active_sample_slug
+
+        load_result = load_file_for_sample_if_needed(
+            info,
+            auto_load_files=self.auto_load_files,
+        )
+        raise_if_cancelled()
+        target = self.recipe.target_channel or info["layer_name"]
+        loaded_layers = list((load_result or {}).get("layer_names") or [])
+        managed_layer_names.extend(str(name) for name in loaded_layers)
+        target = call_on_main(
+            resolve_target_within_loaded_layers,
+            target,
+            loaded_layers,
+        )
+        if target is None and len(loaded_layers) == 1:
+            target = loaded_layers[0]
+        if self.projection is not None and target is None:
+            raise ValueError(
+                "measurement.projection requires a resolved target layer. "
+                "Set recipe.target_channel to a layer name/color that resolves "
+                "within each loaded sample."
+            )
+        projection_record = project_layer_for_recipe(
+            target,
+            projection=self.projection,
+            axis=self.projection_axis,
+        )
+        raise_if_cancelled()
+        analysis_target = projection_record["new_layer"] if projection_record else target
+        if projection_record:
+            managed_layer_names.append(str(projection_record["new_layer"]))
+        sample = info["sample"]
+        with with_active_sample_slug(slugify_result_name(sample.sample_name)):
+            result = _workflows.analyze_target_cells(
+                target=analysis_target,
+                do_3D=False if projection_record else self.seg.get("do_3D"),
+                diameter=self.seg.get("diameter"),
+                preprocess=self.pre_choice,
+                segmentation_method=self.seg.get("tool")
+                or self.seg.get("method", "target_objects"),
+                segmentation_options=self.seg,
+                domain_strategy=self.domain_strategy,
+                domain_options=self.domain_options,
+            )
+        return result, target
+
+    def _record_exception(
+        self,
+        sample: Any,
+        info: dict[str, Any],
+        exc: Exception,
+    ) -> None:
+        run_id = put_run(
+            sample_id=sample.sample_id,
+            file_id=info["file_id"] or "",
+            recipe_id=self.recipe.recipe_id,
+            status="failed",
+            error=str(exc),
+        )
+        self.runs.append({"run_id": run_id, "status": "failed", "error": str(exc)})
+        self.sample_summaries.append(
+            build_sample_summary(
+                sample_name=sample.sample_name,
+                status="failed",
+                error=str(exc),
+                group=sample.group,
+                file_id=info["file_id"],
+                source_file=info["file_path"],
+                source_layer=info["layer_name"],
+            )
+        )
+        self.n_failed += 1
+
+    def _record_not_ok(
+        self,
+        sample: Any,
+        info: dict[str, Any],
+        result: dict[str, Any],
+    ) -> None:
+        error = result.get("error", "analysis returned ok=false")
+        run_id = put_run(
+            sample_id=sample.sample_id,
+            file_id=info["file_id"] or "",
+            recipe_id=self.recipe.recipe_id,
+            status="failed",
+            error=error,
+            summary=result,
+        )
+        self.runs.append(
+            {
+                "run_id": run_id,
+                "status": "failed",
+                "error": result.get("error"),
+            }
+        )
+        self.sample_summaries.append(
+            build_sample_summary(
+                sample_name=sample.sample_name,
+                status="failed",
+                error=error,
+                group=sample.group,
+                file_id=info["file_id"],
+                source_file=info["file_path"],
+                source_layer=info["layer_name"],
+            )
+        )
+        self.n_failed += 1
+
+    def _record_success(
+        self,
+        sample: Any,
+        info: dict[str, Any],
+        result: dict[str, Any],
+        target: str | None,
+    ) -> None:
+        attached_tables: list[str] = []
+        for tname_key in ("table_name", "tier_table_name"):
+            tname = result.get(tname_key)
+            if not tname or tname in attached_tables:
+                continue
+            attach_sample_columns_to_table(
+                table_name=tname,
+                sample_id=sample.sample_id,
+                sample_name=sample.sample_name,
+                group=sample.group,
+                file_id=info["file_id"],
+                source_file=info["file_path"],
+                source_layer=result.get("target_channel"),
+            )
+            attached_tables.append(tname)
+
+        run_id = put_run(
+            sample_id=sample.sample_id,
+            file_id=info["file_id"] or "",
+            recipe_id=self.recipe.recipe_id,
+            status="complete",
+            table_names=list(attached_tables),
+            layer_names=[
+                layer_name
+                for layer_name in (
+                    result.get("labels_layer"),
+                    result.get("preprocessed_layer"),
+                )
+                if layer_name
+            ],
+            summary={
+                "n_objects": result.get("n_objects"),
+                "object_unit": result.get("object_unit"),
+                "segmentation_method": result.get("segmentation_method"),
+                "analysis_dim": result.get("analysis_dim"),
+                "target_channel": result.get("target_channel"),
+                "source_target_channel": target,
+                "projection": self.projection,
+                "projection_axis": self.projection_axis,
+                "warnings": result.get("warnings", []),
+                "qc_png_skipped_reason": result.get("qc_png_skipped_reason"),
+            },
+        )
+        self.runs.append(
+            {
+                "run_id": run_id,
+                "status": "complete",
+                "sample_name": sample.sample_name,
+                "table_names": list(attached_tables),
+            }
+        )
+        self.sample_summaries.append(
+            build_sample_summary(
+                sample_name=sample.sample_name,
+                status="complete",
+                n_cells=int(result.get("n_cells", result.get("n_objects", 0)) or 0),
+                n_domain_components=result.get("n_domain_components"),
+                domain_area_um2=result.get("domain_area_um2"),
+                qc_warnings=list(result.get("warnings") or []),
+                outputs=dict(result.get("result_files") or {}),
+                group=sample.group,
+                file_id=info["file_id"],
+                source_file=info["file_path"],
+                source_layer=result.get("target_channel"),
+            )
+        )
+        self.n_complete += 1
+
+    def _report_sample_failed(
+        self,
+        index: int,
+        current_file: str,
+        sample_name: str,
+    ) -> None:
+        total = len(self.names)
+        report_progress(
+            progress=(index + 1) / total,
+            stage="failed",
+            current_file=current_file,
+            file_index=index + 1,
+            total_files=total,
+            completed=self.n_complete,
+            failed=self.n_failed,
+            skipped=0,
+            show_in_chat=True,
+            message=f"Failed {sample_name}; continuing.",
+        )
+
+    def _report_sample_complete(
+        self,
+        index: int,
+        current_file: str,
+        sample_name: str,
+    ) -> None:
+        total = len(self.names)
+        report_progress(
+            progress=(index + 1) / total,
+            stage="complete_sample",
+            current_file=current_file,
+            file_index=index + 1,
+            total_files=total,
+            completed=self.n_complete,
+            failed=self.n_failed,
+            skipped=0,
+            show_in_chat=True,
+            message=f"Completed {sample_name} ({index + 1}/{total}).",
+        )
+
+    def _cleanup_after_sample(
+        self,
+        *,
+        index: int,
+        current_file: str,
+        sample_name: str,
+        failed_sample: bool,
+        base_layer_names: set[str],
+        managed_layer_names: list[str],
+        runs_len_before: int,
+        mem_before: float,
+    ) -> None:
+        removed_layers: list[str] = []
+        if self.cleanup_enabled and not (failed_sample and self.keep_failed_layers):
+            try:
+                removed_layers = cleanup_sample_layers(
+                    base_layer_names,
+                    managed_layer_names,
+                )
+            except Exception:
+                removed_layers = []
+        release_worker_memory()
+        mem_after = rss_mb()
+        if len(self.runs) > runs_len_before:
+            self.runs[-1]["cleanup_removed_layers"] = removed_layers
+            self.runs[-1]["rss_mb_before"] = mem_before
+            self.runs[-1]["rss_mb_after"] = mem_after
+        total = len(self.names)
+        report_progress(
+            progress=(index + 1) / total,
+            stage="cleanup",
+            current_file=current_file,
+            file_index=index + 1,
+            total_files=total,
+            completed=self.n_complete,
+            failed=self.n_failed,
+            skipped=0,
+            show_in_chat=True,
+            message=f"Cleaned up {len(removed_layers)} layers for {sample_name}.",
+            detail={
+                "rss_mb": mem_after,
+                "cleanup_removed_layers": len(removed_layers),
+                "layer_count": len(call_on_main(viewer_layer_names)),
+            },
+        )
+
+    def _append_cancelled_sample_summaries(self) -> None:
+        processed_names = {
+            summary["sample_name"] for summary in self.sample_summaries
+        }
+        for skip_name in self.names:
+            if skip_name in processed_names:
+                continue
+            try:
+                sample = get_sample(skip_name)
+                group = sample.group
+                file_id = sample.file_ids[0] if sample.file_ids else None
+            except Exception:  # noqa: BLE001
+                group = None
+                file_id = None
+            self.sample_summaries.append(
+                build_sample_summary(
+                    sample_name=skip_name,
+                    status="skipped",
+                    group=group,
+                    file_id=file_id,
+                )
+            )
+
+    def _finalize_bundle(self, *, cancelled: bool) -> None:
+        from imajin.result_bundles import finalize_bundle_metadata, write_combined_csv
+
+        primary_tables: list[str] = []
+        for run in self.runs:
+            names = run.get("table_names") or []
+            if names:
+                primary_tables.append(names[-1])
+        if cancelled:
+            try:
+                write_combined_csv(self.parent_bundle, primary_tables)
+                finalize_bundle_metadata(
+                    self.parent_bundle,
+                    samples=self.sample_summaries,
+                    status="cancelled",
+                )
+            except Exception:  # noqa: BLE001
+                pass
+            return
+
+        write_combined_csv(self.parent_bundle, primary_tables)
+        finalize_bundle_metadata(
+            self.parent_bundle,
+            samples=self.sample_summaries,
+            status="complete",
+        )

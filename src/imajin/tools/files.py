@@ -4,6 +4,7 @@ from typing import Any
 
 from imajin.agent.state import get_table, get_viewer
 from imajin.paths import normalize_user_path
+from imajin.tools.layers import remove_layers_by_name as _remove_layers_by_name
 from imajin.tools.registry import tool
 
 
@@ -32,26 +33,6 @@ def _layer_names_for_source_path(path: str) -> list[str]:
         if _layer_source_path(layer) == wanted:
             names.append(str(layer.name))
     return names
-
-
-def _remove_layers_by_name(layer_names: list[str]) -> list[str]:
-    viewer = get_viewer()
-    removed: list[str] = []
-    for name in reversed(list(dict.fromkeys(str(n) for n in layer_names))):
-        try:
-            layer = viewer.layers[name]
-        except Exception:
-            continue
-        try:
-            viewer.layers.remove(layer)
-            removed.append(name)
-        except Exception:
-            try:
-                viewer.layers.remove(name)
-                removed.append(name)
-            except Exception:
-                continue
-    return removed
 
 
 def _existing_load_result(path: str, layer_names: list[str]) -> dict[str, Any]:

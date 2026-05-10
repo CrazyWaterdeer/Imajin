@@ -384,11 +384,11 @@ def _resolve_files_for_sample(
     """Return (file_paths, file_ids). Either input can be empty.
     Paths are matched against registered FileRecords; unmatched paths are
     accepted but get no file_id."""
-    from imajin.agent.state import _FILES, get_file
+    from imajin.agent.state import get_file, iter_file_records
 
     resolved_paths: list[str] = []
     resolved_ids: list[str] = list(file_ids or [])
-    by_path = {rec.path: rec for rec in _FILES.values()}
+    by_path = {rec.path: rec for rec in iter_file_records()}
 
     for raw in files or []:
         raw_path = normalize_user_path(raw)
@@ -535,10 +535,10 @@ def _scan_measurement_tables(measurement: str) -> "pd.DataFrame":
     plus the sample/group identifier columns."""
     import pandas as pd
 
-    from imajin.agent.state import _TABLES
+    from imajin.agent.state import iter_table_entries
 
     frames: list[pd.DataFrame] = []
-    for entry in _TABLES.values():
+    for entry in iter_table_entries():
         df = entry.df
         if df is None or df.empty:
             continue

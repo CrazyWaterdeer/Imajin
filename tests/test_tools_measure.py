@@ -162,7 +162,26 @@ def test_measure_intensity_over_time_dynamic_labels(viewer) -> None:
 
 def test_measure_intensity_over_time_rejects_shape_mismatch(viewer) -> None:
     viewer.add_labels(np.ones((8, 8), dtype=np.int32), name="rois")
-    viewer.add_image(np.zeros((3, 10, 10), dtype=np.float32), name="movie")
+    viewer.add_image(
+        np.zeros((3, 10, 10), dtype=np.float32),
+        name="movie",
+        metadata={"axes": "TYX"},
+    )
 
     with pytest.raises(ValueError, match="shape mismatch"):
         measure.measure_intensity_over_time("rois", "movie")
+
+
+def test_measure_intensity_over_time_requires_time_axis_metadata_or_argument(viewer) -> None:
+    viewer.add_labels(np.ones((8, 8), dtype=np.int32), name="rois")
+    viewer.add_image(np.zeros((3, 8, 8), dtype=np.float32), name="stack_without_axes")
+
+    with pytest.raises(ValueError, match="do not include a time axis"):
+        measure.measure_intensity_over_time("rois", "stack_without_axes")
+
+    res = measure.measure_intensity_over_time(
+        "rois",
+        "stack_without_axes",
+        time_axis=0,
+    )
+    assert res["n_timepoints"] == 3
