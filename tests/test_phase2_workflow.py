@@ -489,6 +489,7 @@ def test_analyze_target_cells_single_tier_writes_new_layout_bundle(
     assert res["ok"] is True
     bundle = Path(res["result_bundle_path"])
     assert bundle.exists()
+    assert bundle.name.endswith("__single")
     assert (bundle / "labels" / "cells" / "reporter.tif").exists()
     assert (bundle / "labels" / "domain").is_dir()
     assert not any((bundle / "labels" / "domain").iterdir())
@@ -526,6 +527,7 @@ def test_analyze_target_cells_two_tier_writes_bundle(
     assert res["ok"] is True
     bundle = Path(res["result_bundle_path"])
     assert bundle.exists()
+    assert bundle.name.endswith("__two_tier")
     assert (bundle / "labels" / "cells" / "reporter.tif").exists()
     assert (bundle / "labels" / "domain" / "reporter.tif").exists()
 

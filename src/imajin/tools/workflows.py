@@ -665,7 +665,7 @@ def analyze_target_cells(
         own_bundle = parent is None
         if own_bundle:
             bundle_path = create_result_bundle(
-                name=target_layer,
+                name=f"{target_layer}__single",
                 kind="single",
                 tier="single_tier",
                 metadata={
@@ -770,7 +770,7 @@ def analyze_target_cells(
         own_bundle = parent is None
         if own_bundle:
             bundle_path = create_result_bundle(
-                name=target_layer,
+                name=f"{target_layer}__two_tier",
                 kind="single",
                 tier="two_tier",
                 metadata={
@@ -1007,6 +1007,7 @@ def run_recipe_on_samples(
                 mem_before = _rss_mb()
                 failed_sample = False
                 managed_layer_names: list[str] = []
+                runs_len_before = len(runs)
                 report_progress(
                     progress=index / total,
                     stage="sample",
@@ -1240,7 +1241,7 @@ def run_recipe_on_samples(
                             removed_layers = []
                     _release_worker_memory()
                     mem_after = _rss_mb()
-                    if runs:
+                    if len(runs) > runs_len_before:
                         runs[-1]["cleanup_removed_layers"] = removed_layers
                         runs[-1]["rss_mb_before"] = mem_before
                         runs[-1]["rss_mb_after"] = mem_after
