@@ -12,6 +12,7 @@ from imajin.agent.execution import raise_if_cancelled, report_progress
 from imajin.agent.qt_dispatch import call_on_main
 from imajin.agent.state import (
     AmbiguousChannelError,
+    get_sample,
     resolve_target_channel,
 )
 from imajin.tools import measure as _measure
@@ -1262,14 +1263,12 @@ def run_recipe_on_samples(
                     )
         except CancelledError:
             cancelled = True
-            from imajin.agent import state as _cancel_state
-
             processed_names = {summary["sample_name"] for summary in sample_summaries}
             for skip_name in sample_names:
                 if skip_name in processed_names:
                     continue
                 try:
-                    s_skip = _cancel_state.get_sample(skip_name)
+                    s_skip = get_sample(skip_name)
                     group = s_skip.group
                     file_id = s_skip.file_ids[0] if s_skip.file_ids else None
                 except Exception:  # noqa: BLE001
@@ -1294,16 +1293,24 @@ def run_recipe_on_samples(
                 names = run.get("table_names") or []
                 if names:
                     primary_tables.append(names[-1])
-            try:
+            if cancelled:
+                try:
+                    write_combined_csv(parent_bundle, primary_tables)
+                    finalize_bundle_metadata(
+                        parent_bundle,
+                        samples=sample_summaries,
+                        status="cancelled",
+                    )
+                except Exception:  # noqa: BLE001
+                    # Never let bundle finalization mask the CancelledError being re-raised.
+                    pass
+            else:
                 write_combined_csv(parent_bundle, primary_tables)
                 finalize_bundle_metadata(
                     parent_bundle,
                     samples=sample_summaries,
-                    status="cancelled" if cancelled else "complete",
+                    status="complete",
                 )
-            except Exception:  # noqa: BLE001
-                # Never let bundle finalization mask the original error.
-                pass
 
     return {
         "recipe": recipe_name,
