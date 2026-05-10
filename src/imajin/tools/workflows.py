@@ -48,6 +48,23 @@ def _empty_bundle_outputs() -> dict[str, str | None]:
     }
 
 
+def _single_bundle_run_context_extras(anchor: Path | None) -> dict[str, Any]:
+    from imajin.agent.state import list_channel_annotations
+
+    channel_roles: dict[str, str] = {}
+    for entry in list_channel_annotations():
+        layer_name = entry.get("layer_name")
+        role = entry.get("role")
+        if layer_name and role:
+            channel_roles[str(layer_name)] = str(role)
+
+    return {
+        "folder_set": [str(anchor)] if anchor is not None else [],
+        "channel_roles": channel_roles,
+        "scope_filters": [],
+    }
+
+
 def _write_analysis_bundle_outputs(
     *,
     target_layer: str,
@@ -75,6 +92,7 @@ def _write_analysis_bundle_outputs(
     sample_slug = current_sample_slug() or slugify_result_name(target_layer)
     parent = current_bundle()
     own_bundle = parent is None
+    anchor: Path | None = None
     if own_bundle:
         from imajin.anchor import resolve_session_anchor
 
@@ -131,6 +149,7 @@ def _write_analysis_bundle_outputs(
                 bundle_path,
                 samples=[summary],
                 status="complete",
+                extra={"run_context_extras": _single_bundle_run_context_extras(anchor)},
             )
         except Exception as exc:  # noqa: BLE001
             warnings.append(f"bundle could not be finalized: {type(exc).__name__}: {exc}")

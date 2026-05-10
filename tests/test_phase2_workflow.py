@@ -318,6 +318,7 @@ def test_analyze_target_cells_bundle_lands_in_layer_anchor_folder(
         scale=(0.5, 0.5),
         metadata={"path": str(source)},
     )
+    state.put_channel_annotation("reporter", role="target", color="green")
 
     res = workflows.analyze_target_cells(target="reporter")
 
@@ -326,6 +327,11 @@ def test_analyze_target_cells_bundle_lands_in_layer_anchor_folder(
     assert bundle.parent == anchor.resolve()
     assert bundle.name.endswith("__single")
     assert (bundle / "labels" / "cells" / "reporter.tif").exists()
+
+    meta = json.loads((bundle / "metadata.json").read_text())
+    assert meta["run_context"]["folder_set"] == [str(anchor.resolve())]
+    assert meta["run_context"]["channel_roles"] == {"reporter": "target"}
+    assert meta["run_context"]["scope_filters"] == []
 
 
 def test_analyze_target_cells_with_explicit_target(viewer, monkeypatch) -> None:
