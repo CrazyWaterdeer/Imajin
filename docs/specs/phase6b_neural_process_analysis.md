@@ -316,7 +316,7 @@ class NeuralTraceQC:
     notes: str | None
 ```
 
-Project persistence should eventually save these records and linked tables.
+Result bundles should eventually save these records and linked tables.
 
 ## Export
 

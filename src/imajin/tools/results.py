@@ -47,8 +47,7 @@ def _resolve_output_path(
 
 @tool(
     description="Save a Labels layer to disk as TIFF. If path is omitted, saves to "
-    "the standard Imajin results directory (project reports if a project is open; "
-    "otherwise the user's Imajin results folder). Use this for persistent masks/ROIs.",
+    "the standard Imajin results directory. Use this for persistent masks/ROIs.",
     phase="4",
 )
 def save_labels(

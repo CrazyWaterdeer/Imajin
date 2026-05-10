@@ -1,5 +1,13 @@
 # Phase 5 Spec: Project Persistence and Reproducibility
 
+> Deprecated as of the anchor-folder bundle work. Imajin no longer has a
+> `project.json` persistence layer or New/Open/Save Project UI. Current
+> persistence is the result bundle: each analysis writes a self-contained
+> `<timestamp>_<name>/` folder under the input anchor folder, with
+> `metadata.json` split into `recipe_params`, `run_context`, and `environment`.
+> Use `import_recipe_from_bundle` to reuse prior technical settings on a new
+> folder. The historical project-folder design below is kept only as background.
+
 ## Goal
 
 Make Imajin analyses persistent, reloadable, and reproducible.

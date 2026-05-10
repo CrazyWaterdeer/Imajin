@@ -677,7 +677,7 @@ def put_table(
 def set_table(
     name: str, df: pd.DataFrame, spec: dict[str, Any] | None = None
 ) -> str:
-    """Set or replace a table by exact name for project restore paths."""
+    """Set or replace a table by exact name for restore/import paths."""
     _TABLES[name] = TableEntry(df=df, spec=dict(spec or {}))
     _state_changed("table_restored", tables_changed=True)
     return name
@@ -811,7 +811,7 @@ def reset_channel_annotations() -> None:
 
 
 def snapshot_session_state() -> dict[str, Any]:
-    """Return JSON-friendly session state used by project persistence."""
+    """Return JSON-friendly session state for diagnostics and import/export."""
     return {
         "files": list_files(),
         "samples": list_samples(),

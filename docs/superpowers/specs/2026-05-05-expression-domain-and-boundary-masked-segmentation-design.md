@@ -77,7 +77,8 @@ class AnalysisRecipe:
 }
 ```
 
-`put_recipe` extended to accept these. Project save/load round-trips them.
+`put_recipe` extended to accept these. Result bundle `recipe_params` and
+`import_recipe_from_bundle` round-trip them.
 
 ## Behaviour Specification
 
@@ -186,7 +187,7 @@ The result is informational. The agent or workflow decides whether to use it.
 | `src/imajin/tools/segment.py` | + `segment_expression_domain`, + `_threshold_noise_floor`, + `_intersect_labels_with_mask`; modify `segment_target_objects` to accept `boundary_mask`; extend `_write_segmentation_qc_png` with optional `secondary_outline_mask` |
 | `src/imajin/tools/channels.py` | + `detect_counterstain_channel` (and supporting marker-name lookup) |
 | `src/imajin/tools/workflows.py` | extend `analyze_target_cells` with two-tier branch, + `_derive_size_params` helper |
-| `src/imajin/agent/state.py` | `AnalysisRecipe` + `cell_diameter_um`, `domain`; `put_recipe` accepts new args; project save/load round-trip |
+| `src/imajin/agent/state.py` | `AnalysisRecipe` + `cell_diameter_um`, `domain`; `put_recipe` accepts new args; bundle recipe import round-trip |
 | `src/imajin/tools/experiment.py` | `create_analysis_recipe` accepts new fields |
 | `tests/test_segment.py` | unit tests for `segment_expression_domain`, `boundary_mask`, `_threshold_noise_floor`, single-tier regression of `segment_target_objects` |
 | `tests/test_workflows.py` | end-to-end two-tier workflow with synthetic fixture |
@@ -235,7 +236,9 @@ End-to-end workflow:
 - `cell_diameter_um=15` derives `min_distance_um=10.5`, `min_area_um2 ≈ 44`.
 
 Recipe round-trip:
-- A recipe with `cell_diameter_um` and `domain` block saves and reloads through `Project.save` / `Project.load` with values intact.
+- A recipe with `cell_diameter_um` and `domain` block saves in bundle
+  `recipe_params` and imports through `import_recipe_from_bundle` with values
+  intact.
 - A recipe without these fields loads as `cell_diameter_um=None`, `domain=None` (single-tier).
 
 ## Out of Scope

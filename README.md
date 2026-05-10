@@ -112,10 +112,11 @@ required.
 
 ## Status
 
-Core single-file workflows are implemented (file loading → preprocessing →
-cell segmentation → measurement/time-course measurement → colocalization →
-3D views → reporting). Workflow templates, true folder-batch processing, and
-connectome-backed neural identification are deferred. Offscreen Qt tests skip
+Core workflows are implemented (file loading → preprocessing → segmentation →
+measurement/time-course measurement → colocalization → 3D views → reporting),
+including folder-batch recipes that emit self-contained result bundles next to
+the input data. Sessions are ephemeral; reproducibility comes from bundle
+metadata and recipe import rather than project files. Offscreen Qt tests skip
 OpenGL screenshot/animation paths; heavy model/API paths remain marked as
 `slow` or `integration`.
 

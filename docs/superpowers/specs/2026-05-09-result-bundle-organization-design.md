@@ -35,10 +35,12 @@ The bundle is the contract for downstream stats/graphs. Stats reads `tables/comb
 
 ## Architecture
 
-### Bundle root location (unchanged)
+### Bundle root location
 
-- Project open: `<project_root>/reports/bundles/`
-- No project: `~/Documents/Imajin/results/bundles/` (Windows mapped automatically per existing `_windows_documents_dir`)
+- With registered input files: directly under the anchor input folder as
+  `<anchor>/<timestamp>_<name>/`.
+- Without an anchor: `~/Documents/Imajin/results/bundles/` (Windows mapped
+  automatically per existing `_windows_documents_dir`).
 
 ### Bundle layout
 

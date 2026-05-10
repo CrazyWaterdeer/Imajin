@@ -244,7 +244,7 @@ def _summarize_messages(messages: list[dict[str, Any]]) -> str:
         counts = ", ".join(f"{name} x{count}" for name, count in sorted(tool_counts.items()))
         lines.append(f"Tool activity before compaction: {counts}")
     lines.append(
-        "Use the current viewer/session/project state as authoritative; earlier raw "
+        "Use the current viewer and session state as authoritative; earlier raw "
         "tool outputs were omitted to stay within model context."
     )
     return "\n".join(lines)
