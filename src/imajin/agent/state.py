@@ -58,15 +58,6 @@ class QCRecord:
 _QC_RECORDS: dict[str, QCRecord] = _CURRENT_SESSION.qc_records
 
 
-def _autosave_project(reason: str) -> None:
-    try:
-        from imajin.project import autosave_current_project
-
-        autosave_current_project(reason)
-    except Exception:
-        pass
-
-
 def _state_changed(reason: str, *, tables_changed: bool = False) -> None:
     global _PENDING_TABLES_CHANGED
 
@@ -76,7 +67,6 @@ def _state_changed(reason: str, *, tables_changed: bool = False) -> None:
         return
     if tables_changed:
         _emit_tables_changed()
-    _autosave_project(reason)
 
 
 def _tables_changed() -> None:
@@ -99,14 +89,11 @@ def bulk_state_update(reason: str | None = None):
     finally:
         _STATE_CHANGE_DEPTH = max(0, _STATE_CHANGE_DEPTH - 1)
         if _STATE_CHANGE_DEPTH == 0:
-            pending_reasons = list(dict.fromkeys(_PENDING_STATE_REASONS))
             tables_changed = _PENDING_TABLES_CHANGED
             _PENDING_STATE_REASONS = []
             _PENDING_TABLES_CHANGED = False
             if tables_changed:
                 _emit_tables_changed()
-            if pending_reasons:
-                _autosave_project(reason or ", ".join(pending_reasons))
 
 
 def _slugify(name: str) -> str:

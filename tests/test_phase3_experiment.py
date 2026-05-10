@@ -805,7 +805,7 @@ def test_run_recipe_on_samples_no_samples_returns_empty() -> None:
     assert res["bundle_path"] is None
 
 
-def test_run_recipe_on_samples_defers_project_autosave(
+def test_run_recipe_on_samples_does_not_autosave_project(
     viewer,
     monkeypatch,
     tmp_path: Path,
@@ -850,7 +850,7 @@ def test_run_recipe_on_samples_defers_project_autosave(
     res = workflows.run_recipe_on_samples(recipe_name="autosave_batch")
 
     assert res["n_complete"] == 1
-    assert calls == [None]
+    assert calls == []
 
 
 # --- Task 11: summarize_experiment -------------------------------------------

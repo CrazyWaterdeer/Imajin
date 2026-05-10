@@ -580,13 +580,6 @@ class ToolExecutionService:
                 listener(job)
             except Exception:
                 pass
-        if job.status in {"complete", "failed", "cancelled"}:
-            try:
-                from imajin.project import autosave_current_project
-
-                autosave_current_project(f"job_{job.status}")
-            except Exception:
-                pass
 
 
 def _now() -> str:

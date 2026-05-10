@@ -262,9 +262,9 @@ def test_project_tool_name_argument_works_through_execution_service(
     assert result["name"] == "via service"
 
 
-def test_project_autosaves_session_annotations(tmp_path: Path) -> None:
+def test_project_save_persists_session_annotations(tmp_path: Path) -> None:
     from imajin.agent import state
-    from imajin.project import create_project, project_status
+    from imajin.project import create_project, project_status, save_project
 
     root = tmp_path / "autosave.imajin"
     create_project(root)
@@ -275,6 +275,7 @@ def test_project_autosaves_session_annotations(tmp_path: Path) -> None:
         pd.DataFrame({"sample_name": ["control 1"], "mean_intensity": [12.5]}),
         spec={"op": "measure_intensity"},
     )
+    save_project()
 
     samples = json.loads((root / "samples.json").read_text())
     tables = json.loads((root / "tables" / "index.json").read_text())
@@ -285,10 +286,9 @@ def test_project_autosaves_session_annotations(tmp_path: Path) -> None:
     assert (root / tables[0]["path"]).exists()
     assert status["n_samples"] == 1
     assert status["n_tables"] == 1
-    assert status["last_autosave"]["ok"] is True
 
 
-def test_defer_autosave_coalesces_bulk_state_changes(
+def test_defer_autosave_no_longer_saves_state_changes(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -315,16 +315,15 @@ def test_defer_autosave_coalesces_bulk_state_changes(
         )
         assert calls == []
 
-    assert calls == [None]
+    assert calls == []
+    project_module.save_project()
     samples = json.loads((root / "samples.json").read_text())
     tables = json.loads((root / "tables" / "index.json").read_text())
-    status = project_module.project_status()
     assert samples[0]["sample_name"] == "control 1"
     assert tables[0]["name"] == "measurements"
-    assert status["last_autosave"]["reason"] == "bulk_edit"
 
 
-def test_bulk_state_update_coalesces_notifications_and_autosave(
+def test_bulk_state_update_coalesces_table_notifications_without_autosave(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -357,18 +356,19 @@ def test_bulk_state_update_coalesces_notifications_and_autosave(
     finally:
         state.current_session().table_listeners.remove(on_tables_changed)
 
-    assert save_calls == [None]
+    assert save_calls == []
     assert len(table_notifications) == 1
-    assert project_module.project_status()["last_autosave"]["reason"] == "bulk_state"
+    assert project_module.project_status()["last_autosave"] is None
 
 
-def test_autosave_is_suspended_during_load(tmp_path: Path) -> None:
+def test_load_project_does_not_rewrite_project_metadata(tmp_path: Path) -> None:
     from imajin.agent import state
-    from imajin.project import create_project, load_project
+    from imajin.project import create_project, load_project, save_project
 
     root = tmp_path / "load-suspend.imajin"
     create_project(root)
     state.put_sample("before", group="control")
+    save_project()
 
     original_project_json = (root / "project.json").read_text()
     loaded = load_project(root)

@@ -178,11 +178,8 @@ class BatchRecipeRunner:
     keep_failed_layers: bool = False
 
     def run(self) -> dict[str, Any]:
-        from imajin.project import defer_autosave
-
-        with defer_autosave("batch_recipe_run"):
-            with bulk_state_update("batch_recipe_run"):
-                return self._run()
+        with bulk_state_update("batch_recipe_run"):
+            return self._run()
 
     def _run(self) -> dict[str, Any]:
         self.recipe = get_recipe(self.recipe_name)
