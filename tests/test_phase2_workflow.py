@@ -290,9 +290,12 @@ def test_analyze_target_cells_saves_result_bundle(viewer, tmp_path) -> None:
     assert res["result_bundle_path"].startswith(
         str(tmp_path / "project" / "reports" / "bundles")
     )
-    assert len(res["result_files"]["labels"]) == 1
-    assert len(res["result_files"]["tables"]) == 1
-    assert len(res["result_files"]["qc"]) == 1
+    assert res["result_files"]["labels_cells"] == "labels/cells/green_target.tif"
+    assert res["result_files"]["labels_domain"] is None
+    assert res["result_files"]["qc_png"] is not None
+    bundle = Path(res["result_bundle_path"])
+    assert (bundle / "labels" / "cells" / "green_target.tif").exists()
+    assert (bundle / "tables" / "combined.csv").exists()
 
 
 def test_analyze_target_cells_with_explicit_target(viewer, monkeypatch) -> None:

@@ -52,7 +52,7 @@ def test_save_result_bundle_collects_labels_tables_and_qc(viewer, tmp_path) -> N
     bundle = tmp_path / "project" / "reports" / "bundles"
     assert res["bundle_path"].startswith(str(bundle))
     metadata = json.loads((Path(res["bundle_path"]) / "metadata.json").read_text())
-    assert metadata["metadata"]["sample"] == "sample_1"
+    assert metadata["sample"] == "sample_1"
     outputs = res["outputs"]
     assert len(outputs["labels"]) == 1
     assert len(outputs["tables"]) == 1
