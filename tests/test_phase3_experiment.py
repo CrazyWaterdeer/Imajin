@@ -756,6 +756,8 @@ def test_run_recipe_on_samples_propagates_cancellation(
     from imajin.tools import workflows
     from imajin.workers.qt_worker import CancelledError
 
+    monkeypatch.setenv("IMAJIN_RESULTS_DIR", str(tmp_path))
+
     p = tmp_path / "sample_1.tif"
     p.write_bytes(b"fake")
     experiment.register_files([str(p)])
@@ -782,6 +784,10 @@ def test_run_recipe_on_samples_propagates_cancellation(
         workflows.run_recipe_on_samples(recipe_name="cancel_recipe")
 
     assert state.list_runs() == []
+    bundles = list((tmp_path / "bundles").iterdir())
+    assert len(bundles) == 1
+    meta = json.loads((bundles[0] / "metadata.json").read_text())
+    assert meta["status"] == "cancelled"
 
 
 def test_run_recipe_on_samples_no_samples_returns_empty() -> None:
@@ -1330,3 +1336,63 @@ def test_run_recipe_on_samples_metadata_records_failed_sample(
     # No labels file written for the failed sample
     failed_slug = failed["sample_name"]
     assert not (bundle / "labels" / "cells" / f"{failed_slug}.tif").exists()
+
+
+def test_run_recipe_on_samples_cancellation_finalizes_metadata(
+    viewer, monkeypatch, tmp_path: Path
+) -> None:
+    from imajin.tools import workflows
+    from imajin.workers.qt_worker import CancelledError
+
+    monkeypatch.setenv("IMAJIN_RESULTS_DIR", str(tmp_path))
+
+    img = np.zeros((40, 40), dtype=np.float32)
+    img[10:30, 10:30] = 200.0
+    viewer.add_image(img, name="ctrl_1_ch0", scale=(0.5, 0.5))
+    viewer.add_image(img.copy(), name="trt_1_ch0", scale=(0.5, 0.5))
+    state.put_channel_annotation("ctrl_1_ch0", role="target", color="green")
+
+    a = tmp_path / "ctrl_1.lsm"
+    b = tmp_path / "trt_1.lsm"
+    a.write_bytes(b"")
+    b.write_bytes(b"")
+    experiment.register_files([str(a), str(b)])
+    experiment.annotate_samples(
+        [
+            {"sample_name": "ctrl_1", "group": "control",
+             "files": [str(a)], "layers": ["ctrl_1_ch0"]},
+            {"sample_name": "trt_1", "group": "treatment",
+             "files": [str(b)], "layers": ["trt_1_ch0"]},
+        ]
+    )
+    experiment.create_analysis_recipe(
+        name="r_cancel",
+        target_channel="ctrl_1_ch0",
+        segmentation={"tool": "intensity_regions"},
+        measurement={"properties": ["area"]},
+    )
+
+    call = {"n": 0}
+    real = workflows.analyze_target_cells
+
+    def side_effect(*args, **kwargs):
+        call["n"] += 1
+        if call["n"] == 1:
+            return real(*args, **kwargs)
+        raise CancelledError("Tool execution cancelled by user.")
+
+    monkeypatch.setattr(workflows, "analyze_target_cells", side_effect)
+
+    with pytest.raises(CancelledError):
+        workflows.run_recipe_on_samples(
+            recipe_name="r_cancel", sample_names=["ctrl_1", "trt_1"]
+        )
+
+    bundles_dir = tmp_path / "bundles"
+    bundles = list(bundles_dir.iterdir())
+    assert len(bundles) == 1
+    bundle = bundles[0]
+    meta = json.loads((bundle / "metadata.json").read_text())
+    assert meta["status"] == "cancelled"
+    statuses = [s["status"] for s in meta["samples"]]
+    assert statuses == ["complete", "skipped"]
