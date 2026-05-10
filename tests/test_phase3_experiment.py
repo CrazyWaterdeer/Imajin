@@ -791,7 +791,8 @@ def test_run_recipe_on_samples_propagates_cancellation(
     ]
     assert len(bundles) == 1
     meta = json.loads((bundles[0] / "metadata.json").read_text())
-    assert meta["status"] == "cancelled"
+    assert meta["schema_version"] == 2
+    assert meta["run_context"]["status"] == "cancelled"
 
 
 def test_run_recipe_on_samples_no_samples_returns_empty() -> None:
@@ -1357,15 +1358,17 @@ def test_run_recipe_on_samples_finalizes_metadata_with_samples(
     res = workflows.run_recipe_on_samples(recipe_name="r_meta")
     bundle = Path(res["bundle_path"])
     meta = json.loads((bundle / "metadata.json").read_text())
+    run_context = meta["run_context"]
 
-    assert meta["kind"] == "batch"
-    assert meta["tier"] == "single_tier"
-    assert meta["status"] == "complete"
-    assert meta["n_samples"] == 1
-    assert meta["n_complete"] == 1
-    assert meta["n_failed"] == 0
-    assert len(meta["samples"]) == 1
-    s = meta["samples"][0]
+    assert meta["schema_version"] == 2
+    assert run_context["kind"] == "batch"
+    assert run_context["tier"] == "single_tier"
+    assert run_context["status"] == "complete"
+    assert run_context["n_samples"] == 1
+    assert run_context["n_complete"] == 1
+    assert run_context["n_failed"] == 0
+    assert len(run_context["samples"]) == 1
+    s = run_context["samples"][0]
     assert s["sample_name"] == "ctrl_1"
     assert s["group"] == "control"
     assert s["file_id"] == "ctrl_1"
@@ -1425,11 +1428,12 @@ def test_run_recipe_on_samples_metadata_records_failed_sample(
     )
     bundle = Path(res["bundle_path"])
     meta = json.loads((bundle / "metadata.json").read_text())
-    statuses = sorted(s["status"] for s in meta["samples"])
+    run_context = meta["run_context"]
+    statuses = sorted(s["status"] for s in run_context["samples"])
     assert statuses == ["complete", "failed"]
-    assert meta["n_complete"] == 1
-    assert meta["n_failed"] == 1
-    failed = next(s for s in meta["samples"] if s["status"] == "failed")
+    assert run_context["n_complete"] == 1
+    assert run_context["n_failed"] == 1
+    failed = next(s for s in run_context["samples"] if s["status"] == "failed")
     assert failed["error"]
     # No labels file written for the failed sample
     failed_slug = failed["sample_name"]
@@ -1494,6 +1498,7 @@ def test_run_recipe_on_samples_cancellation_finalizes_metadata(
     assert len(bundles) == 1
     bundle = bundles[0]
     meta = json.loads((bundle / "metadata.json").read_text())
-    assert meta["status"] == "cancelled"
-    statuses = [s["status"] for s in meta["samples"]]
+    assert meta["schema_version"] == 2
+    assert meta["run_context"]["status"] == "cancelled"
+    statuses = [s["status"] for s in meta["run_context"]["samples"]]
     assert statuses == ["complete", "skipped"]

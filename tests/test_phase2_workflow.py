@@ -526,12 +526,17 @@ def test_analyze_target_cells_single_tier_writes_new_layout_bundle(
     assert (bundle / "qc").is_dir()
 
     meta = json.loads((bundle / "metadata.json").read_text())
-    assert meta["kind"] == "single"
-    assert meta["tier"] == "single_tier"
-    assert meta["status"] == "complete"
-    assert len(meta["samples"]) == 1
-    assert meta["samples"][0]["status"] == "complete"
-    assert meta["samples"][0]["outputs"]["labels_cells"] == "labels/cells/reporter.tif"
+    run_context = meta["run_context"]
+    assert meta["schema_version"] == 2
+    assert run_context["kind"] == "single"
+    assert run_context["tier"] == "single_tier"
+    assert run_context["status"] == "complete"
+    assert len(run_context["samples"]) == 1
+    assert run_context["samples"][0]["status"] == "complete"
+    assert (
+        run_context["samples"][0]["outputs"]["labels_cells"]
+        == "labels/cells/reporter.tif"
+    )
 
 
 def test_analyze_target_cells_two_tier_writes_bundle(
@@ -562,11 +567,16 @@ def test_analyze_target_cells_two_tier_writes_bundle(
     assert (bundle / "labels" / "domain" / "reporter.tif").exists()
 
     meta = json.loads((bundle / "metadata.json").read_text())
-    assert meta["kind"] == "single"
-    assert meta["tier"] == "two_tier"
-    assert meta["status"] == "complete"
-    assert len(meta["samples"]) == 1
-    assert meta["samples"][0]["outputs"]["labels_domain"] == "labels/domain/reporter.tif"
+    run_context = meta["run_context"]
+    assert meta["schema_version"] == 2
+    assert run_context["kind"] == "single"
+    assert run_context["tier"] == "two_tier"
+    assert run_context["status"] == "complete"
+    assert len(run_context["samples"]) == 1
+    assert (
+        run_context["samples"][0]["outputs"]["labels_domain"]
+        == "labels/domain/reporter.tif"
+    )
 
 
 def test_analyze_target_cells_writes_into_active_parent_bundle(

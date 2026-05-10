@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 from datetime import timedelta
 from pathlib import Path
@@ -13,6 +14,10 @@ from imajin.results import (
     _kst_now,
     create_result_bundle,
     read_bundle_metadata,
+)
+from imajin.result_bundles import (
+    finalize_bundle_metadata,
+    read_bundle_metadata_normalized,
 )
 from imajin.tools.results import (
     current_bundle,
@@ -188,3 +193,57 @@ def test_populate_sample_outputs_rejects_collision(tmp_path, viewer, monkeypatch
         populate_sample_outputs(
             bundle, sample_slug="s1", labels_cells="cells_layer"
         )
+
+
+def test_finalize_writes_schema_v2(tmp_path) -> None:
+    bundle = create_result_bundle("demo", root=tmp_path, kind="batch", tier="two_tier")
+
+    finalize_bundle_metadata(
+        bundle,
+        samples=[{"sample_name": "s1", "status": "complete"}],
+        status="complete",
+        extra={
+            "recipe_params": {
+                "name": "demo",
+                "segmentation": {"method": "target_objects"},
+            },
+            "run_context_extras": {
+                "folder_set": [str(tmp_path)],
+                "channel_roles": {"Ch1": "target"},
+                "scope_filters": [],
+            },
+        },
+    )
+
+    meta = json.loads((bundle / "metadata.json").read_text())
+    assert meta["schema_version"] == 2
+    assert meta["recipe_params"]["segmentation"]["method"] == "target_objects"
+    assert meta["run_context"]["kind"] == "batch"
+    assert meta["run_context"]["tier"] == "two_tier"
+    assert meta["run_context"]["status"] == "complete"
+    assert meta["run_context"]["channel_roles"] == {"Ch1": "target"}
+    assert meta["run_context"]["folder_set"] == [str(tmp_path)]
+    assert "deps" in meta["environment"]
+
+
+def test_read_bundle_metadata_normalizes_v1(tmp_path) -> None:
+    bundle = tmp_path / "old_bundle"
+    bundle.mkdir()
+    (bundle / "metadata.json").write_text(
+        """
+        {
+          "recipe": {"name": "old", "segmentation": {"method": "target_objects"}},
+          "kind": "batch", "tier": "two_tier", "name": "old",
+          "status": "complete", "samples": []
+        }
+        """,
+        encoding="utf-8",
+    )
+
+    norm = read_bundle_metadata_normalized(bundle)
+
+    assert norm["schema_version"] == 2
+    assert norm["recipe_params"]["name"] == "old"
+    assert norm["run_context"]["kind"] == "batch"
+    assert norm["run_context"]["tier"] == "two_tier"
+    assert norm["run_context"]["status"] == "complete"

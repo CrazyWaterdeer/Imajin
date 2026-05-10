@@ -13,7 +13,6 @@ from imajin.agent.qt_dispatch import call_on_main
 from imajin.agent.state import get_table
 from imajin.paths import normalize_user_path
 from imajin.results import read_bundle_metadata, write_bundle_metadata
-from imajin.tools.napari_ops import snapshot_layer
 
 
 _active_bundle: contextvars.ContextVar[Path | None] = contextvars.ContextVar(
@@ -65,6 +64,7 @@ def label_output_dtype(data: np.ndarray) -> np.dtype:
 def write_label_layer(bundle: Path, tier: str, sample_slug: str, layer_name: str) -> str:
     """Snapshot a label layer and write it to bundle/labels/<tier>/<slug>.tif."""
     import tifffile
+    from imajin.tools.napari_ops import snapshot_layer
 
     layer = call_on_main(snapshot_layer, layer_name)
     data = materialize_result_array(layer.data)
@@ -140,6 +140,57 @@ def write_combined_csv(bundle: Path, table_names: list[str]) -> Path:
     return out
 
 
+def _environment_from_flat_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
+    return {
+        key: metadata[key]
+        for key in ("python_version", "imajin_version", "deps", "git_commit")
+        if metadata.get(key) is not None
+    }
+
+
+def _normalize_bundle_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
+    if metadata.get("schema_version") == 2:
+        return {
+            "schema_version": 2,
+            "recipe_params": dict(metadata.get("recipe_params") or {}),
+            "run_context": dict(metadata.get("run_context") or {}),
+            "environment": dict(metadata.get("environment") or {}),
+        }
+
+    run_context_keys = {
+        "kind",
+        "tier",
+        "name",
+        "status",
+        "created_at",
+        "samples",
+        "n_samples",
+        "n_complete",
+        "n_failed",
+        "tables",
+    }
+    run_context = {
+        key: metadata[key]
+        for key in run_context_keys
+        if key in metadata
+    }
+    return {
+        "schema_version": 2,
+        "recipe_params": dict(metadata.get("recipe") or metadata.get("recipe_params") or {}),
+        "run_context": run_context,
+        "environment": _environment_from_flat_metadata(metadata),
+    }
+
+
+def read_bundle_metadata_normalized(bundle: Path | str) -> dict[str, Any]:
+    """Read bundle metadata as the schema-v2 logical shape.
+
+    Older flat metadata files are mapped into recipe_params/run_context/environment
+    so reuse tools and downstream stats do not need version-specific branches.
+    """
+    return _normalize_bundle_metadata(read_bundle_metadata(bundle))
+
+
 def finalize_bundle_metadata(
     bundle: Path,
     *,
@@ -147,13 +198,38 @@ def finalize_bundle_metadata(
     status: str,
     extra: dict[str, Any] | None = None,
 ) -> None:
-    meta = read_bundle_metadata(bundle)
-    meta["status"] = status
-    meta["samples"] = list(samples)
-    meta["n_samples"] = len(samples)
-    meta["n_complete"] = sum(1 for s in samples if s.get("status") == "complete")
-    meta["n_failed"] = sum(1 for s in samples if s.get("status") == "failed")
-    meta["tables"] = {"combined": "tables/combined.csv"}
-    if extra:
-        meta.update(extra)
-    write_bundle_metadata(bundle, meta)
+    seed = read_bundle_metadata(bundle)
+    normalized = _normalize_bundle_metadata(seed)
+    extra = dict(extra or {})
+    run_context_extras = dict(extra.pop("run_context_extras", {}) or {})
+
+    recipe_params = (
+        extra.pop("recipe_params", None)
+        or normalized.get("recipe_params")
+        or {}
+    )
+    environment = {
+        **dict(normalized.get("environment") or {}),
+        **dict(extra.pop("environment", {}) or {}),
+    }
+    samples_list = list(samples)
+    run_context = {
+        **dict(normalized.get("run_context") or {}),
+        "status": status,
+        "samples": samples_list,
+        "n_samples": len(samples_list),
+        "n_complete": sum(1 for s in samples_list if s.get("status") == "complete"),
+        "n_failed": sum(1 for s in samples_list if s.get("status") == "failed"),
+        "tables": {"combined": "tables/combined.csv"},
+        **run_context_extras,
+        **extra,
+    }
+    write_bundle_metadata(
+        bundle,
+        {
+            "schema_version": 2,
+            "recipe_params": dict(recipe_params),
+            "run_context": run_context,
+            "environment": environment,
+        },
+    )
