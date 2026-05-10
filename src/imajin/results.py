@@ -161,12 +161,28 @@ def unique_result_dir(category: str, dirname: str) -> Path:
         i += 1
 
 
+def _unique_subdir(root: Path, dirname: str) -> Path:
+    """Create a unique <root>/<slugified-dirname>[_N] path without colliding."""
+    root.mkdir(parents=True, exist_ok=True)
+    base = slugify_result_name(dirname)
+    candidate = root / base
+    if not candidate.exists():
+        return candidate
+    i = 2
+    while True:
+        candidate = root / f"{base}_{i}"
+        if not candidate.exists():
+            return candidate
+        i += 1
+
+
 def create_result_bundle(
     name: str,
     *,
     kind: str = "single",
     tier: str | None = None,
     metadata: dict[str, Any] | None = None,
+    root: Path | str | None = None,
 ) -> Path:
     """Create a fresh bundle directory with the standard layout and seed metadata.
 
@@ -186,7 +202,10 @@ def create_result_bundle(
     """
     now = _kst_now()
     timestamp = now.strftime("%Y%m%d_%H%M%S")
-    bundle = unique_result_dir("bundles", f"{timestamp}_{slugify_result_name(name)}")
+    if root is not None:
+        bundle = _unique_subdir(Path(root), f"{timestamp}_{slugify_result_name(name)}")
+    else:
+        bundle = unique_result_dir("bundles", f"{timestamp}_{slugify_result_name(name)}")
     for sub in ("labels/cells", "labels/domain", "tables", "qc", "stats", "figures"):
         (bundle / sub).mkdir(parents=True, exist_ok=True)
     env = _collect_env_info()

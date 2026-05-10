@@ -85,6 +85,18 @@ def test_results_root_falls_back_to_user_root_when_no_anchor(tmp_path, monkeypat
     assert _results.results_root() == tmp_path / "user_root"
 
 
+def test_create_result_bundle_uses_explicit_root(tmp_path):
+    from imajin.results import create_result_bundle
+
+    bundle = create_result_bundle("demo", root=tmp_path)
+    assert bundle.parent == tmp_path
+    assert bundle.name.endswith("_demo")
+    assert (bundle / "metadata.json").exists()
+    # The standard layout is created
+    for sub in ("labels/cells", "labels/domain", "tables", "qc", "stats", "figures"):
+        assert (bundle / sub).is_dir()
+
+
 def test_record_result_keeps_manifest_out_of_anchor_folder(tmp_path, monkeypatch):
     """`manifest.jsonl` must never land in the raw-data anchor folder."""
     from imajin import results as _results
