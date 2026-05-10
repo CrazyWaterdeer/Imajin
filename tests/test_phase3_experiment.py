@@ -1376,6 +1376,81 @@ def test_run_recipe_on_samples_finalizes_metadata_with_samples(
     assert s["outputs"]["labels_cells"] == "labels/cells/ctrl_1.tif"
 
 
+def test_run_recipe_on_samples_records_folder_set_and_channel_roles(
+    viewer,
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    from imajin.tools import workflows
+
+    monkeypatch.setenv("IMAJIN_RESULTS_DIR", str(tmp_path / "fallback"))
+
+    folder_a = tmp_path / "2026-05-09"
+    folder_b = tmp_path / "2026-05-10"
+    folder_a.mkdir()
+    folder_b.mkdir()
+    file_a = folder_a / "ctrl_1.lsm"
+    file_b = folder_b / "trt_1.lsm"
+    file_a.write_bytes(b"")
+    file_b.write_bytes(b"")
+
+    viewer.add_image(np.ones((8, 8), dtype=np.float32), name="ctrl_layer")
+    viewer.add_image(np.ones((8, 8), dtype=np.float32), name="trt_layer")
+    state.put_channel_annotation("ctrl_layer", role="target", color="green")
+    state.put_channel_annotation("trt_layer", role="counterstain", color="uv")
+
+    experiment.register_files([str(file_b), str(file_a)])
+    experiment.annotate_samples(
+        [
+            {
+                "sample_name": "ctrl_1",
+                "group": "control",
+                "files": [str(file_a)],
+                "layers": ["ctrl_layer"],
+            },
+            {
+                "sample_name": "trt_1",
+                "group": "treated",
+                "files": [str(file_b)],
+                "layers": ["trt_layer"],
+            },
+        ]
+    )
+    experiment.create_analysis_recipe(
+        name="r_context",
+        segmentation={"tool": "intensity_regions"},
+        measurement={"properties": ["area"]},
+    )
+
+    def fake_analyze_target_cells(*args, **kwargs):
+        return {
+            "ok": True,
+            "target_channel": kwargs.get("target"),
+            "segmentation_method": "intensity_regions",
+            "analysis_dim": "2d",
+            "n_objects": 1,
+            "n_cells": 1,
+            "result_files": {},
+            "warnings": [],
+        }
+
+    monkeypatch.setattr(workflows, "analyze_target_cells", fake_analyze_target_cells)
+
+    res = workflows.run_recipe_on_samples(recipe_name="r_context")
+    meta = json.loads((Path(res["bundle_path"]) / "metadata.json").read_text())
+    run_context = meta["run_context"]
+
+    assert run_context["folder_set"] == [
+        str(folder_a.resolve()),
+        str(folder_b.resolve()),
+    ]
+    assert run_context["channel_roles"] == {
+        "ctrl_layer": "target",
+        "trt_layer": "counterstain",
+    }
+    assert run_context["scope_filters"] == []
+
+
 def test_run_recipe_on_samples_metadata_records_failed_sample(
     viewer, monkeypatch, tmp_path: Path
 ) -> None:

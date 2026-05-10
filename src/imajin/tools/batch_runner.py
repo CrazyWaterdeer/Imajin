@@ -666,6 +666,7 @@ class BatchRecipeRunner:
                     self.parent_bundle,
                     samples=self.sample_summaries,
                     status="cancelled",
+                    extra={"run_context_extras": self._run_context_extras()},
                 )
             except Exception:  # noqa: BLE001
                 pass
@@ -676,4 +677,32 @@ class BatchRecipeRunner:
             self.parent_bundle,
             samples=self.sample_summaries,
             status="complete",
+            extra={"run_context_extras": self._run_context_extras()},
         )
+
+    def _run_context_extras(self) -> dict[str, Any]:
+        from pathlib import Path
+        from imajin.agent.state import list_channel_annotations
+
+        folder_set: set[str] = set()
+        for name in self.names:
+            try:
+                info = resolve_sample_inputs(name)
+            except Exception:  # noqa: BLE001
+                continue
+            file_path = info.get("file_path")
+            if file_path:
+                folder_set.add(str(Path(file_path).expanduser().resolve().parent))
+
+        channel_roles: dict[str, str] = {}
+        for entry in list_channel_annotations():
+            layer_name = entry.get("layer_name")
+            role = entry.get("role")
+            if layer_name and role:
+                channel_roles[str(layer_name)] = str(role)
+
+        return {
+            "folder_set": sorted(folder_set, key=str.lower),
+            "channel_roles": channel_roles,
+            "scope_filters": [],
+        }
