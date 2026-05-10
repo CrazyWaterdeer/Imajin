@@ -225,43 +225,6 @@ def test_future_schema_version_fails_clearly(tmp_path: Path) -> None:
         load_project(root)
 
 
-def test_project_tools_are_registered(tmp_path: Path) -> None:
-    from imajin.tools import call_tool
-
-    root = tmp_path / "tool.imajin"
-    created = call_tool("create_project", path=str(root), name="via tool")
-    saved = call_tool("save_project")
-    status = call_tool("project_status")
-    loaded = call_tool("load_project", path=str(root))
-
-    assert created["name"] == "via tool"
-    assert saved["path"] == str(root.resolve())
-    assert status["open"] is True
-    assert loaded["name"] == "via tool"
-
-
-def test_project_tool_name_argument_works_through_execution_service(
-    qapp, tmp_path: Path
-) -> None:
-    from imajin.agent.execution import ToolExecutionService
-    from imajin.agent.qt_tool_runner import MainThreadToolRunner
-
-    # Regression: several dispatch layers have their own "name" parameter.
-    # Tool inputs named "name" must still reach create_project.
-    runner = MainThreadToolRunner()
-    service = ToolExecutionService()
-    root = tmp_path / "service.imajin"
-
-    result = service.call_tool_blocking(
-        "create_project",
-        {"path": str(root), "name": "via service"},
-        source="manual",
-        tool_caller=runner.call,
-    )
-
-    assert result["name"] == "via service"
-
-
 def test_project_save_persists_session_annotations(tmp_path: Path) -> None:
     from imajin.agent import state
     from imajin.project import create_project, project_status, save_project

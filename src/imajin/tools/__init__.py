@@ -12,7 +12,6 @@ from imajin.tools.registry import (
 # Import tool modules to trigger @tool registration on package import.
 from imajin.tools import files  # noqa: F401, E402
 from imajin.tools import experiment  # noqa: F401, E402
-from imajin.tools import project  # noqa: F401, E402
 from imajin.tools import channels  # noqa: F401, E402
 from imajin.tools import preprocess  # noqa: F401, E402
 from imajin.tools import segment  # noqa: F401, E402
