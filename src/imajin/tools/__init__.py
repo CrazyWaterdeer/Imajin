@@ -26,6 +26,7 @@ from imajin.tools import stats  # noqa: F401, E402
 from imajin.tools import figures  # noqa: F401, E402
 from imajin.tools import report  # noqa: F401, E402
 from imajin.tools import results  # noqa: F401, E402
+from imajin.tools import recipe_import  # noqa: F401, E402
 from imajin.tools import workflows  # noqa: F401, E402
 from imajin.tools import specialists  # noqa: F401, E402
 
