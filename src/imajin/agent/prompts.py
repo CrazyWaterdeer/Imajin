@@ -173,6 +173,12 @@ When the user's request matches one of these intents, run the full pipeline with
   one folder containing every sample's labels/cells/, labels/domain/ (two-tier
   only), tables/combined.csv, qc/, and metadata.json. Cite this path when
   reporting batch outcomes to the user.
+  When the user references a prior result bundle path or says "전에 했던 거랑
+  똑같이" / "이 분석처럼", call `import_recipe_from_bundle(bundle_path=<path>)`
+  first to register the prior bundle's `recipe_params`. Then collect only the
+  current run's missing pieces: file scope, sample annotations, and channel
+  roles. Do NOT reuse the prior bundle's sample list, folder_set, or channel
+  mapping because those are run-specific `run_context`.
 
 - **channel color references** / **"green에서 측정"** / **"red channel 분석"** /
   **"far red는 counterstain"** →
