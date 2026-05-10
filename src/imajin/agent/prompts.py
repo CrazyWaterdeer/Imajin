@@ -169,6 +169,10 @@ When the user's request matches one of these intents, run the full pipeline with
   cluster cores), put the Tier-1 mask spec in the separate `domain` slot:
   domain={'strategy':'noise_floor','k_mad':5.0,'dark_percentile':10.0,'min_area_um2':5.0}.
   Never put 'expression_domain' in the segmentation slot; the runner will reject it.
+  When the batch finishes, `run_recipe_on_samples` returns `bundle_path`, the
+  one folder containing every sample's labels/cells/, labels/domain/ (two-tier
+  only), tables/combined.csv, qc/, and metadata.json. Cite this path when
+  reporting batch outcomes to the user.
 
 - **channel color references** / **"green에서 측정"** / **"red channel 분석"** /
   **"far red는 counterstain"** →
