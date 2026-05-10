@@ -58,3 +58,54 @@ def test_save_result_bundle_collects_labels_tables_and_qc(viewer, tmp_path) -> N
     assert len(outputs["tables"]) == 1
     assert len(outputs["qc"]) == 1
     assert tifffile.imread(outputs["labels"][0]).max() == 1
+
+
+def test_results_root_uses_session_anchor_when_no_project(tmp_path, monkeypatch):
+    from imajin import results as _results
+
+    folder = tmp_path / "2026-05-11"
+    folder.mkdir()
+    fake_file = folder / "img.lsm"
+    fake_file.write_bytes(b"")
+
+    monkeypatch.setattr("imajin.project.current_project", lambda: None)
+    monkeypatch.setattr(
+        "imajin.agent.state.list_files",
+        lambda: [{"path": str(fake_file)}],
+    )
+    assert _results.results_root() == folder.absolute()
+
+
+def test_results_root_falls_back_to_user_root_when_no_anchor(tmp_path, monkeypatch):
+    from imajin import results as _results
+
+    monkeypatch.setattr("imajin.project.current_project", lambda: None)
+    monkeypatch.setattr("imajin.agent.state.list_files", lambda: [])
+    monkeypatch.setattr(_results, "user_results_root", lambda: tmp_path / "user_root")
+    assert _results.results_root() == tmp_path / "user_root"
+
+
+def test_record_result_keeps_manifest_out_of_anchor_folder(tmp_path, monkeypatch):
+    """`manifest.jsonl` must never land in the raw-data anchor folder."""
+    from imajin import results as _results
+
+    anchor = tmp_path / "2026-05-11"
+    anchor.mkdir()
+    fake_file = anchor / "img.lsm"
+    fake_file.write_bytes(b"")
+    user_root = tmp_path / "user_root"
+
+    monkeypatch.setattr("imajin.project.current_project", lambda: None)
+    monkeypatch.setattr(
+        "imajin.agent.state.list_files",
+        lambda: [{"path": str(fake_file)}],
+    )
+    monkeypatch.setattr(_results, "user_results_root", lambda: user_root)
+
+    # Sanity: results_root would point at the anchor folder
+    assert _results.results_root() == anchor.absolute()
+
+    # But record_result must drop the manifest at user_root, NOT at anchor
+    _results.record_result("test_kind", fake_file)
+    assert (user_root / "manifest.jsonl").exists()
+    assert not (anchor / "manifest.jsonl").exists()

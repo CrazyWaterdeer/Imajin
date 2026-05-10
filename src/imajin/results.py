@@ -110,6 +110,16 @@ def results_root() -> Path:
         project = None
     if project is not None:
         return project.path / "reports"
+
+    try:
+        from imajin.anchor import resolve_session_anchor
+
+        anchor = resolve_session_anchor()
+    except Exception:
+        anchor = None
+    if anchor is not None:
+        return anchor
+
     return user_results_root()
 
 
@@ -209,8 +219,22 @@ def read_bundle_metadata(bundle: str | Path) -> dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def _manifest_root() -> Path:
+    """Where manifest.jsonl lives — kept out of anchor folders so user data
+    directories stay clean. Falls back to ``user_results_root`` when no
+    project is open."""
+    try:
+        from imajin.project import current_project
+        project = current_project()
+    except Exception:
+        project = None
+    if project is not None:
+        return project.path / "reports"
+    return user_results_root()
+
+
 def record_result(kind: str, path: str | Path, metadata: dict[str, Any] | None = None) -> None:
-    root = results_root()
+    root = _manifest_root()
     root.mkdir(parents=True, exist_ok=True)
     record = {
         "kind": kind,
