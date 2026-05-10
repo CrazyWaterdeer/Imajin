@@ -27,6 +27,9 @@ from imajin.tools.registry import tool
 _active_bundle: contextvars.ContextVar[Path | None] = contextvars.ContextVar(
     "imajin_active_bundle", default=None
 )
+_active_sample_slug: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "imajin_active_sample_slug", default=None
+)
 
 
 def current_bundle() -> Path | None:
@@ -36,6 +39,15 @@ def current_bundle() -> Path | None:
     the parent bundle to per-sample analyze_target_cells calls).
     """
     return _active_bundle.get()
+
+
+def current_sample_slug() -> str | None:
+    """Return the slug of the sample currently being processed, or None.
+
+    Set by `with_active_sample_slug` so per-call writers can name files by
+    sample name in a batch instead of by layer name.
+    """
+    return _active_sample_slug.get()
 
 
 @contextlib.contextmanager
@@ -55,6 +67,19 @@ def with_active_bundle(path: Path | str) -> Iterator[Path]:
         yield p
     finally:
         _active_bundle.reset(token)
+
+
+@contextlib.contextmanager
+def with_active_sample_slug(slug: str | None) -> Iterator[str | None]:
+    """Mark a per-sample slug used by per-call bundle writers.
+
+    Same propagation caveats as `with_active_bundle` apply.
+    """
+    token = _active_sample_slug.set(slug)
+    try:
+        yield slug
+    finally:
+        _active_sample_slug.reset(token)
 
 
 def _materialize(arr: Any) -> np.ndarray:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import numpy as np
@@ -1221,3 +1222,111 @@ def test_run_recipe_on_samples_writes_combined_csv(
     df = pd.read_csv(combined)
     assert {"sample_name", "group", "file_id"}.issubset(df.columns)
     assert set(df["sample_name"].unique()) == {"ctrl_1", "trt_1"}
+
+
+def test_run_recipe_on_samples_finalizes_metadata_with_samples(
+    viewer, monkeypatch, tmp_path: Path
+) -> None:
+    from imajin.tools import workflows
+
+    monkeypatch.setenv("IMAJIN_RESULTS_DIR", str(tmp_path))
+
+    img = np.zeros((40, 40), dtype=np.float32)
+    img[10:30, 10:30] = 200.0
+    viewer.add_image(img, name="ctrl_1_ch0", scale=(0.5, 0.5))
+    state.put_channel_annotation("ctrl_1_ch0", role="target", color="green")
+
+    p = tmp_path / "ctrl_1.lsm"
+    p.write_bytes(b"")
+    experiment.register_files([str(p)])
+    experiment.annotate_samples(
+        [{"sample_name": "ctrl_1", "group": "control",
+          "files": [str(p)], "layers": ["ctrl_1_ch0"]}]
+    )
+    experiment.create_analysis_recipe(
+        name="r_meta",
+        target_channel="green",
+        segmentation={"tool": "intensity_regions"},
+        measurement={"properties": ["area"]},
+    )
+
+    res = workflows.run_recipe_on_samples(recipe_name="r_meta")
+    bundle = Path(res["bundle_path"])
+    meta = json.loads((bundle / "metadata.json").read_text())
+
+    assert meta["kind"] == "batch"
+    assert meta["tier"] == "single_tier"
+    assert meta["status"] == "complete"
+    assert meta["n_samples"] == 1
+    assert meta["n_complete"] == 1
+    assert meta["n_failed"] == 0
+    assert len(meta["samples"]) == 1
+    s = meta["samples"][0]
+    assert s["sample_name"] == "ctrl_1"
+    assert s["group"] == "control"
+    assert s["file_id"] == "ctrl_1"
+    assert s["status"] == "complete"
+    assert s["outputs"]["labels_cells"] == "labels/cells/ctrl_1.tif"
+
+
+def test_run_recipe_on_samples_metadata_records_failed_sample(
+    viewer, monkeypatch, tmp_path: Path
+) -> None:
+    from imajin.tools import workflows
+
+    monkeypatch.setenv("IMAJIN_RESULTS_DIR", str(tmp_path))
+
+    img = np.zeros((40, 40), dtype=np.float32)
+    img[10:30, 10:30] = 200.0
+    viewer.add_image(img, name="ctrl_1_ch0", scale=(0.5, 0.5))
+    viewer.add_image(np.zeros_like(img), name="trt_1_ch0", scale=(0.5, 0.5))
+    state.put_channel_annotation("ctrl_1_ch0", role="target", color="green")
+
+    a = tmp_path / "ctrl_1.lsm"
+    b = tmp_path / "trt_1.lsm"
+    a.write_bytes(b"")
+    b.write_bytes(b"")
+    experiment.register_files([str(a), str(b)])
+    experiment.annotate_samples(
+        [
+            {"sample_name": "ctrl_1", "group": "control",
+             "files": [str(a)], "layers": ["ctrl_1_ch0"]},
+            {"sample_name": "trt_1", "group": "treatment",
+             "files": [str(b)], "layers": ["trt_1_ch0"]},
+        ]
+    )
+    experiment.create_analysis_recipe(
+        name="r_fail",
+        target_channel="ctrl_1_ch0",
+        segmentation={"tool": "intensity_regions"},
+        measurement={"properties": ["area"]},
+    )
+
+    # Force the second sample to fail by stubbing analyze_target_cells; the
+    # recipe locks target to ctrl_1_ch0 for both samples, so we pivot on the
+    # active sample slug (set by run_recipe_on_samples per sample).
+    from imajin.tools import workflows as _wf
+    from imajin.tools.results import current_sample_slug
+    real_analyze = _wf.analyze_target_cells
+
+    def _flaky_analyze(*args, **kwargs):
+        if current_sample_slug() == "trt_1":
+            raise RuntimeError("synthetic failure for trt_1")
+        return real_analyze(*args, **kwargs)
+
+    monkeypatch.setattr(_wf, "analyze_target_cells", _flaky_analyze)
+
+    res = workflows.run_recipe_on_samples(
+        recipe_name="r_fail", sample_names=["ctrl_1", "trt_1"]
+    )
+    bundle = Path(res["bundle_path"])
+    meta = json.loads((bundle / "metadata.json").read_text())
+    statuses = sorted(s["status"] for s in meta["samples"])
+    assert statuses == ["complete", "failed"]
+    assert meta["n_complete"] == 1
+    assert meta["n_failed"] == 1
+    failed = next(s for s in meta["samples"] if s["status"] == "failed")
+    assert failed["error"]
+    # No labels file written for the failed sample
+    failed_slug = failed["sample_name"]
+    assert not (bundle / "labels" / "cells" / f"{failed_slug}.tif").exists()

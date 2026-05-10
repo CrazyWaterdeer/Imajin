@@ -653,12 +653,13 @@ def analyze_target_cells(
         from imajin.results import create_result_bundle, slugify_result_name as _slug
         from imajin.tools.results import (
             current_bundle,
+            current_sample_slug,
             populate_sample_outputs,
             write_combined_csv,
             finalize_bundle_metadata,
         )
 
-        sample_slug = _slug(target_layer)
+        sample_slug = current_sample_slug() or _slug(target_layer)
         parent = current_bundle()
         own_bundle = parent is None
         if own_bundle:
@@ -757,12 +758,13 @@ def analyze_target_cells(
         from imajin.results import create_result_bundle, slugify_result_name as _slug
         from imajin.tools.results import (
             current_bundle,
+            current_sample_slug,
             populate_sample_outputs,
             write_combined_csv,
             finalize_bundle_metadata,
         )
 
-        sample_slug = _slug(target_layer)
+        sample_slug = current_sample_slug() or _slug(target_layer)
         parent = current_bundle()
         own_bundle = parent is None
         if own_bundle:
@@ -967,12 +969,13 @@ def run_recipe_on_samples(
     domain_strategy, domain_options = _normalize_domain_spec(recipe.domain)
 
     runs: list[dict[str, Any]] = []
+    sample_summaries: list[dict[str, Any]] = []
     n_complete = 0
     n_failed = 0
     total = len(sample_names)
 
-    from imajin.results import create_result_bundle
-    from imajin.tools.results import with_active_bundle
+    from imajin.results import create_result_bundle, slugify_result_name as _slug_name
+    from imajin.tools.results import with_active_bundle, with_active_sample_slug
 
     parent_bundle = create_result_bundle(
         name=recipe.name,
@@ -1051,17 +1054,18 @@ def run_recipe_on_samples(
                 )
                 if projection_record:
                     managed_layer_names.append(str(projection_record["new_layer"]))
-                result = analyze_target_cells(
-                    target=analysis_target,
-                    do_3D=False if projection_record else seg.get("do_3D"),
-                    diameter=seg.get("diameter"),
-                    preprocess=pre_choice,
-                    segmentation_method=seg.get("tool")
-                    or seg.get("method", "target_objects"),
-                    segmentation_options=seg,
-                    domain_strategy=domain_strategy,
-                    domain_options=domain_options,
-                )
+                with with_active_sample_slug(_slug_name(s.sample_name)):
+                    result = analyze_target_cells(
+                        target=analysis_target,
+                        do_3D=False if projection_record else seg.get("do_3D"),
+                        diameter=seg.get("diameter"),
+                        preprocess=pre_choice,
+                        segmentation_method=seg.get("tool")
+                        or seg.get("method", "target_objects"),
+                        segmentation_options=seg,
+                        domain_strategy=domain_strategy,
+                        domain_options=domain_options,
+                    )
             except CancelledError:
                 raise
             except Exception as exc:  # noqa: BLE001
@@ -1074,6 +1078,17 @@ def run_recipe_on_samples(
                     error=str(exc),
                 )
                 runs.append({"run_id": run_id, "status": "failed", "error": str(exc)})
+                sample_summaries.append(
+                    _build_sample_summary(
+                        sample_name=s.sample_name,
+                        status="failed",
+                        error=str(exc),
+                        group=s.group,
+                        file_id=info["file_id"],
+                        source_file=info["file_path"],
+                        source_layer=info["layer_name"],
+                    )
+                )
                 n_failed += 1
                 report_progress(
                     progress=(index + 1) / total,
@@ -1104,6 +1119,17 @@ def run_recipe_on_samples(
                             "status": "failed",
                             "error": result.get("error"),
                         }
+                    )
+                    sample_summaries.append(
+                        _build_sample_summary(
+                            sample_name=s.sample_name,
+                            status="failed",
+                            error=result.get("error", "analysis returned ok=false"),
+                            group=s.group,
+                            file_id=info["file_id"],
+                            source_file=info["file_path"],
+                            source_layer=info["layer_name"],
+                        )
                     )
                     n_failed += 1
                     report_progress(
@@ -1171,6 +1197,21 @@ def run_recipe_on_samples(
                             "table_names": list(attached_tables),
                         }
                     )
+                    sample_summaries.append(
+                        _build_sample_summary(
+                            sample_name=s.sample_name,
+                            status="complete",
+                            n_cells=int(result.get("n_cells", result.get("n_objects", 0)) or 0),
+                            n_domain_components=result.get("n_domain_components"),
+                            domain_area_um2=result.get("domain_area_um2"),
+                            qc_warnings=list(result.get("warnings") or []),
+                            outputs=dict(result.get("result_files") or {}),
+                            group=s.group,
+                            file_id=info["file_id"],
+                            source_file=info["file_path"],
+                            source_layer=result.get("target_channel"),
+                        )
+                    )
                     n_complete += 1
                     report_progress(
                         progress=(index + 1) / total,
@@ -1218,7 +1259,7 @@ def run_recipe_on_samples(
                     },
                 )
 
-        from imajin.tools.results import write_combined_csv
+        from imajin.tools.results import write_combined_csv, finalize_bundle_metadata
 
         primary_tables: list[str] = []
         for run in runs:
@@ -1228,6 +1269,9 @@ def run_recipe_on_samples(
             if names:
                 primary_tables.append(names[-1])
         write_combined_csv(parent_bundle, primary_tables)
+        finalize_bundle_metadata(
+            parent_bundle, samples=sample_summaries, status="complete"
+        )
 
     return {
         "recipe": recipe_name,
