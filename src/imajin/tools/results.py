@@ -29,6 +29,7 @@ with_active_sample_slug = _bundle_io.with_active_sample_slug
 write_combined_csv = _bundle_io.write_combined_csv
 _label_output_dtype = _bundle_io.label_output_dtype
 _materialize = _bundle_io.materialize_result_array
+_write_label_tiff = _bundle_io.write_label_tiff
 
 
 def _resolve_output_path(
@@ -104,8 +105,6 @@ def save_labels(
     labels_layer: str,
     path: str | None = None,
 ) -> dict[str, Any]:
-    import tifffile
-
     layer = call_on_main(snapshot_layer, labels_layer)
     data = _materialize(layer.data)
     out_dtype = _label_output_dtype(data)
@@ -117,8 +116,7 @@ def save_labels(
         filename=f"{slugify_result_name(labels_layer)}.tif",
         root=_anchor_for_layers([labels_layer]),
     )
-    out.parent.mkdir(parents=True, exist_ok=True)
-    tifffile.imwrite(out, labels)
+    _write_label_tiff(out, labels)
     record_result(
         "labels_tiff",
         out,
@@ -151,8 +149,6 @@ def save_result_bundle(
     figures: list[str] | None = None,
     metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    import tifffile
-
     bundle = create_result_bundle(
         name,
         kind="single",
@@ -171,12 +167,13 @@ def save_result_bundle(
         data = _materialize(layer.data)
         labels = data.astype(_label_output_dtype(data), copy=False)
         out = bundle / "labels" / "cells" / f"{slugify_result_name(labels_layer)}.tif"
-        tifffile.imwrite(out, labels)
+        _write_label_tiff(out, labels)
         outputs["labels"].append(str(out))
 
     for table_name in table_names or []:
         df = get_table(table_name)
         out = bundle / "tables" / f"{slugify_result_name(table_name)}.csv"
+        out.parent.mkdir(parents=True, exist_ok=True)
         df.to_csv(out, index=False)
         outputs["tables"].append(str(out))
 
@@ -197,6 +194,7 @@ def save_result_bundle(
         if not src.exists():
             continue
         dst = bundle / "qc" / src.name
+        dst.parent.mkdir(parents=True, exist_ok=True)
         if src.resolve() != dst.resolve():
             shutil.copy2(src, dst)
         outputs["qc"].append(str(dst))
@@ -208,6 +206,7 @@ def save_result_bundle(
         if not src.exists():
             continue
         dst = bundle / "figures" / src.name
+        dst.parent.mkdir(parents=True, exist_ok=True)
         if src.resolve() != dst.resolve():
             shutil.copy2(src, dst)
         outputs["figures"].append(str(dst))

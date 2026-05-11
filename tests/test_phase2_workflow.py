@@ -451,7 +451,7 @@ def test_analyze_target_cells_two_tier_produces_long_format(viewer) -> None:
     assert set(table["tier"].unique()) == {"domain", "cells"}
     domain_rows = table[table["tier"] == "domain"]
     cell_rows = table[table["tier"] == "cells"]
-    assert len(domain_rows) >= 2
+    assert len(domain_rows) == 1
     assert len(cell_rows) >= 1
 
 
@@ -531,9 +531,11 @@ def test_analyze_target_cells_single_tier_writes_new_layout_bundle(
     assert bundle.exists()
     assert bundle.name.endswith("__single")
     assert (bundle / "labels" / "cells" / "reporter.tif").exists()
-    assert (bundle / "labels" / "domain").is_dir()
-    assert not any((bundle / "labels" / "domain").iterdir())
-    assert (bundle / "qc").is_dir()
+    assert not (bundle / "labels" / "domain").exists()
+    if res["result_files"]["qc_png"] is None:
+        assert not (bundle / "qc").exists()
+    else:
+        assert (bundle / res["result_files"]["qc_png"]).exists()
 
     meta = json.loads((bundle / "metadata.json").read_text())
     run_context = meta["run_context"]

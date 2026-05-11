@@ -362,8 +362,12 @@ def analyze_target_cells(
         domain_result = {
             "labels_layer": domain_layer,
             "n_components": int(domain_layer_md.get("n_components", 0)),
+            "domain_label_count": int(domain_layer_md.get("domain_label_count", 0)),
             "domain_area_um2": float(domain_layer_md.get("domain_area_um2", 0.0)),
+            "domain_volume_um3": domain_layer_md.get("domain_volume_um3"),
+            "domain_voxels": int(domain_layer_md.get("domain_voxels", 0)),
             "counterstain_warnings": list(domain_layer_md.get("counterstain_warnings", [])),
+            "domain_warnings": list(domain_layer_md.get("domain_warnings", [])),
         }
 
         domain_measure = _measure.measure_intensity(
@@ -410,10 +414,14 @@ def analyze_target_cells(
                         seg_result.get("n_objects", seg_result.get("n_cells", 0))
                     ),
                     "n_domain_components": domain_result["n_components"],
+                    "domain_label_count": domain_result["domain_label_count"],
                     "domain_area_um2": domain_result["domain_area_um2"],
+                    "domain_volume_um3": domain_result["domain_volume_um3"],
+                    "domain_voxels": domain_result["domain_voxels"],
                     "qc_warnings": (
                         list(seg_result.get("qc_warnings", []))
                         + list(domain_result.get("counterstain_warnings", []))
+                        + list(domain_result.get("domain_warnings", []))
                     ),
                 },
             )
@@ -432,7 +440,10 @@ def analyze_target_cells(
             "cells_layer": seg_result["labels_layer"],
             "domain_layer": domain_layer,
             "n_domain_components": domain_result["n_components"],
+            "domain_label_count": domain_result["domain_label_count"],
             "domain_area_um2": domain_result["domain_area_um2"],
+            "domain_volume_um3": domain_result["domain_volume_um3"],
+            "domain_voxels": domain_result["domain_voxels"],
             "n_cells": int(seg_result.get("n_objects", 0)),
             "tier_table_name": tier_table_name,
             "primary_table_name": tier_table_name,
@@ -444,7 +455,11 @@ def analyze_target_cells(
             "result_bundle_path": str(bundle_path) if own_bundle else None,
             "result_files": dict(bundle_outputs),
             "voxel_scale": voxel,
-            "warnings": warnings + list(domain_result.get("counterstain_warnings", [])),
+            "warnings": (
+                warnings
+                + list(domain_result.get("counterstain_warnings", []))
+                + list(domain_result.get("domain_warnings", []))
+            ),
         }
 
     return {

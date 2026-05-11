@@ -180,12 +180,8 @@ def create_result_bundle(
     Layout:
         <ts>_<name>/
         ├── metadata.json
-        ├── labels/cells/
-        ├── labels/domain/
-        ├── tables/
-        ├── qc/
-        ├── stats/
-        └── figures/
+
+    Output subdirectories are created lazily when a writer actually emits files.
 
     `kind` is "single" or "batch"; `tier` is "single_tier" or "two_tier" (or
     None when not yet decided — the caller can update via write_bundle_metadata).
@@ -197,8 +193,6 @@ def create_result_bundle(
         bundle = _unique_subdir(Path(root), f"{timestamp}_{slugify_result_name(name)}")
     else:
         bundle = unique_result_dir("bundles", f"{timestamp}_{slugify_result_name(name)}")
-    for sub in ("labels/cells", "labels/domain", "tables", "qc", "stats", "figures"):
-        (bundle / sub).mkdir(parents=True, exist_ok=True)
     env = _collect_env_info()
     payload: dict[str, Any] = dict(metadata or {})
     payload.update({

@@ -260,7 +260,10 @@ def build_sample_summary(
     error: str | None = None,
     n_cells: int | None = None,
     n_domain_components: int | None = None,
+    domain_label_count: int | None = None,
     domain_area_um2: float | None = None,
+    domain_volume_um3: float | None = None,
+    domain_voxels: int | None = None,
     qc_warnings: list[str] | None = None,
     outputs: dict[str, str | None] | None = None,
     group: str | None = None,
@@ -280,7 +283,10 @@ def build_sample_summary(
         "summary": {
             "n_cells": n_cells,
             "n_domain_components": n_domain_components,
+            "domain_label_count": domain_label_count,
             "domain_area_um2": domain_area_um2,
+            "domain_volume_um3": domain_volume_um3,
+            "domain_voxels": domain_voxels,
             "qc_warnings": list(qc_warnings or []),
         },
     }

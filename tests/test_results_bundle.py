@@ -68,11 +68,11 @@ def test_create_result_bundle_uses_kst_timestamp_in_folder_name(tmp_path, monkey
     assert re.match(r"^\d{8}_\d{6}_demo$", name), name
 
 
-def test_create_result_bundle_creates_new_layout_subdirs(tmp_path, monkeypatch) -> None:
+def test_create_result_bundle_creates_subdirs_lazily(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("IMAJIN_RESULTS_DIR", str(tmp_path))
     bundle = create_result_bundle("demo", kind="single")
     for sub in ("labels/cells", "labels/domain", "tables", "qc", "stats", "figures"):
-        assert (bundle / sub).is_dir(), f"missing subdir: {sub}"
+        assert not (bundle / sub).exists(), f"unexpected empty subdir: {sub}"
     assert not (bundle / "labels" / "anything.tif").exists()
 
 

@@ -356,6 +356,37 @@ def test_segment_expression_domain_intersects_with_nuclear_counterstain(viewer) 
     assert labels[90, 90] == 0, "between nuclei must be excluded by counterstain"
 
 
+def test_segment_expression_domain_3d_filters_noise_and_merges_domain(viewer) -> None:
+    rng = np.random.default_rng(9)
+    reporter = rng.normal(5.0, 0.7, (10, 64, 64)).astype(np.float32)
+    reporter[3:7, 20:42, 22:44] += 35.0
+    coords = (
+        rng.integers(0, reporter.shape[0], size=300),
+        rng.integers(0, reporter.shape[1], size=300),
+        rng.integers(0, reporter.shape[2], size=300),
+    )
+    reporter[coords] += 80.0
+
+    viewer.add_image(reporter, name="rep3d", scale=(1.0, 0.5, 0.5))
+
+    res = segment.segment_expression_domain(
+        "rep3d",
+        k_mad=5.0,
+        min_area_um2=8.0,
+        smooth_sigma_um=0.5,
+        save_qc_png=False,
+    )
+
+    labels = np.asarray(viewer.layers[res["labels_layer"]].data)
+    assert labels.shape == reporter.shape
+    assert labels.max() == 1
+    assert res["domain_label_count"] == 1
+    assert res["n_components"] <= 8
+    assert labels[4, 30, 30] > 0
+    assert labels[0, 0, 0] == 0
+    assert res["domain_volume_um3"] is not None
+
+
 def test_segment_expression_domain_skips_non_nuclear_counterstain(viewer) -> None:
     reporter = np.zeros((100, 100), dtype=np.float32)
     reporter[20:80, 20:80] = 50.0

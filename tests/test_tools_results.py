@@ -23,7 +23,7 @@ def test_save_labels_writes_tiff_to_results_root(viewer, tmp_path, monkeypatch) 
     assert res["path"] == str(out)
     assert out.exists()
     saved = tifffile.imread(out)
-    np.testing.assert_array_equal(saved, labels.astype(np.uint16))
+    np.testing.assert_array_equal(saved, labels.astype(np.uint8))
     assert (tmp_path / "results" / "manifest.jsonl").exists()
 
 
@@ -145,9 +145,8 @@ def test_create_result_bundle_uses_explicit_root(tmp_path):
     assert bundle.parent == tmp_path
     assert bundle.name.endswith("_demo")
     assert (bundle / "metadata.json").exists()
-    # The standard layout is created
     for sub in ("labels/cells", "labels/domain", "tables", "qc", "stats", "figures"):
-        assert (bundle / sub).is_dir()
+        assert not (bundle / sub).exists()
 
 
 def test_record_result_keeps_anchored_manifest_out_of_user_results(tmp_path, monkeypatch):

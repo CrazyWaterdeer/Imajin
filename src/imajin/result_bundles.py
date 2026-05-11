@@ -56,14 +56,25 @@ def materialize_result_array(arr: Any) -> np.ndarray:
 
 def label_output_dtype(data: np.ndarray) -> np.dtype:
     max_label = int(np.nanmax(data)) if data.size else 0
+    if max_label <= np.iinfo(np.uint8).max:
+        return np.dtype(np.uint8)
     if max_label <= np.iinfo(np.uint16).max:
         return np.dtype(np.uint16)
     return np.dtype(np.uint32)
 
 
+def write_label_tiff(path: Path, labels: np.ndarray) -> None:
+    import tifffile
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        tifffile.imwrite(path, labels, compression="zlib", photometric="minisblack")
+    except Exception:  # noqa: BLE001
+        tifffile.imwrite(path, labels, photometric="minisblack")
+
+
 def write_label_layer(bundle: Path, tier: str, sample_slug: str, layer_name: str) -> str:
     """Snapshot a label layer and write it to bundle/labels/<tier>/<slug>.tif."""
-    import tifffile
     from imajin.tools.napari_ops import snapshot_layer
 
     layer = call_on_main(snapshot_layer, layer_name)
@@ -77,7 +88,7 @@ def write_label_layer(bundle: Path, tier: str, sample_slug: str, layer_name: str
             f"{rel} already exists in bundle {bundle.name}; "
             "sample_slug collision suspected"
         )
-    tifffile.imwrite(out, labels)
+    write_label_tiff(out, labels)
     return rel.as_posix()
 
 
@@ -87,6 +98,7 @@ def copy_qc_png(bundle: Path, qc_png: str, sample_slug: str) -> str | None:
         return None
     rel = Path("qc") / f"{sample_slug}.png"
     dst = bundle / rel
+    dst.parent.mkdir(parents=True, exist_ok=True)
     if src.resolve() != dst.resolve():
         shutil.copy2(src, dst)
     return rel.as_posix()
