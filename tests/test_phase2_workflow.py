@@ -312,8 +312,8 @@ def test_analyze_target_cells_bundle_lands_in_layer_anchor_folder(
     source = anchor / "reporter.lsm"
     source.write_bytes(b"")
 
-    img = np.zeros((40, 40), dtype=np.float32)
-    img[10:30, 10:30] = 200.0
+    img = np.random.default_rng(0).normal(5.0, 0.2, (300, 300)).astype(np.float32)
+    img[80:220, 90:230] = 200.0
     viewer.add_image(
         img,
         name="reporter",
@@ -328,6 +328,8 @@ def test_analyze_target_cells_bundle_lands_in_layer_anchor_folder(
     bundle = Path(res["result_bundle_path"])
     assert bundle.parent == anchor.resolve()
     assert bundle.name.endswith("__single")
+    assert str(res["qc_png_path"]).startswith(str(anchor.resolve()))
+    assert not (tmp_path / "fallback").exists()
     assert (bundle / "labels" / "cells" / "reporter.tif").exists()
 
     meta = json.loads((bundle / "metadata.json").read_text())

@@ -37,12 +37,62 @@ def _resolve_output_path(
     category: str,
     filename: str,
     bundle: Path | None = None,
+    root: Path | None = None,
 ) -> Path:
     if path:
         return normalize_user_path(path).resolve()
     if bundle is not None:
         return bundle / category / filename
+    if root is not None:
+        out = root / category / filename
+        if not out.exists():
+            return out
+        stem = out.stem
+        suffix = out.suffix
+        i = 2
+        while True:
+            candidate = root / category / f"{stem}_{i}{suffix}"
+            if not candidate.exists():
+                return candidate
+            i += 1
     return unique_result_path(category, filename)
+
+
+def _source_paths_for_layers(layer_names: list[str] | None) -> list[str]:
+    paths: list[str] = []
+    for layer_name in layer_names or []:
+        try:
+            snap = call_on_main(snapshot_layer, layer_name)
+        except Exception:
+            continue
+        md = snap.metadata if isinstance(snap.metadata, dict) else {}
+        raw = md.get("source_path") or md.get("path")
+        if raw:
+            paths.append(str(raw))
+            continue
+        source_layer = md.get("source_layer")
+        if not source_layer:
+            continue
+        try:
+            source_snap = call_on_main(snapshot_layer, str(source_layer))
+        except Exception:
+            continue
+        source_md = (
+            source_snap.metadata if isinstance(source_snap.metadata, dict) else {}
+        )
+        source_path = source_md.get("source_path") or source_md.get("path")
+        if source_path:
+            paths.append(str(source_path))
+    return list(dict.fromkeys(paths))
+
+
+def _anchor_for_layers(layer_names: list[str] | None) -> Path | None:
+    from imajin.anchor import resolve_anchor_folder, resolve_session_anchor
+
+    source_paths = _source_paths_for_layers(layer_names)
+    if source_paths:
+        return resolve_anchor_folder(source_paths)
+    return resolve_session_anchor()
 
 
 @tool(
@@ -65,6 +115,7 @@ def save_labels(
         path,
         category="labels",
         filename=f"{slugify_result_name(labels_layer)}.tif",
+        root=_anchor_for_layers([labels_layer]),
     )
     out.parent.mkdir(parents=True, exist_ok=True)
     tifffile.imwrite(out, labels)
@@ -102,7 +153,12 @@ def save_result_bundle(
 ) -> dict[str, Any]:
     import tifffile
 
-    bundle = create_result_bundle(name, kind="single", metadata=metadata)
+    bundle = create_result_bundle(
+        name,
+        kind="single",
+        metadata=metadata,
+        root=_anchor_for_layers(labels_layers),
+    )
     outputs: dict[str, list[str]] = {
         "labels": [],
         "tables": [],

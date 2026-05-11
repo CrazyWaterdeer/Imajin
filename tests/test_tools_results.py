@@ -27,6 +27,29 @@ def test_save_labels_writes_tiff_to_results_root(viewer, tmp_path, monkeypatch) 
     assert (tmp_path / "results" / "manifest.jsonl").exists()
 
 
+def test_save_labels_uses_source_layer_anchor(viewer, tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("IMAJIN_RESULTS_DIR", str(tmp_path / "fallback"))
+    anchor = tmp_path / "raw"
+    anchor.mkdir()
+    source = anchor / "sample.lsm"
+    source.write_bytes(b"")
+    viewer.add_image(
+        np.zeros((12, 12), dtype=np.float32),
+        name="reporter",
+        metadata={"source_path": str(source)},
+    )
+    labels = np.zeros((12, 12), dtype=np.int32)
+    labels[2:8, 3:9] = 1
+    viewer.add_labels(labels, name="target_objects", metadata={"source_layer": "reporter"})
+
+    res = results.save_labels("target_objects")
+
+    out = anchor / "labels" / "target_objects.tif"
+    assert res["path"] == str(out)
+    assert out.exists()
+    assert not (tmp_path / "fallback").exists()
+
+
 def test_save_result_bundle_collects_labels_tables_and_qc(
     viewer, tmp_path, monkeypatch
 ) -> None:
@@ -59,6 +82,37 @@ def test_save_result_bundle_collects_labels_tables_and_qc(
     assert len(outputs["tables"]) == 1
     assert len(outputs["qc"]) == 1
     assert tifffile.imread(outputs["labels"][0]).max() == 1
+
+
+def test_save_result_bundle_uses_source_layer_anchor(viewer, tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("IMAJIN_RESULTS_DIR", str(tmp_path / "fallback"))
+    anchor = tmp_path / "raw"
+    anchor.mkdir()
+    source = anchor / "sample.lsm"
+    source.write_bytes(b"")
+    viewer.add_image(
+        np.zeros((10, 10), dtype=np.float32),
+        name="reporter",
+        metadata={"source_path": str(source)},
+    )
+    labels = np.zeros((10, 10), dtype=np.int32)
+    labels[2:5, 2:5] = 1
+    viewer.add_labels(labels, name="objects", metadata={"source_layer": "reporter"})
+    state.put_table(
+        "measurements",
+        pd.DataFrame({"label": [1], "mean_intensity": [42.0]}),
+        spec={"tool": "measure_intensity", "labels_layer": "objects"},
+    )
+
+    res = results.save_result_bundle(
+        name="sample analysis",
+        labels_layers=["objects"],
+        table_names=["measurements"],
+    )
+
+    bundle = Path(res["bundle_path"])
+    assert bundle.parent == anchor.resolve()
+    assert not (tmp_path / "fallback").exists()
 
 
 def test_results_root_uses_session_anchor_when_no_project(tmp_path, monkeypatch):
@@ -96,8 +150,8 @@ def test_create_result_bundle_uses_explicit_root(tmp_path):
         assert (bundle / sub).is_dir()
 
 
-def test_record_result_keeps_manifest_out_of_anchor_folder(tmp_path, monkeypatch):
-    """`manifest.jsonl` must never land in the raw-data anchor folder."""
+def test_record_result_keeps_anchored_manifest_out_of_user_results(tmp_path, monkeypatch):
+    """Anchored outputs must not recreate the user fallback results folder."""
     from imajin import results as _results
 
     anchor = tmp_path / "2026-05-11"
@@ -115,7 +169,7 @@ def test_record_result_keeps_manifest_out_of_anchor_folder(tmp_path, monkeypatch
     # Sanity: results_root would point at the anchor folder
     assert _results.results_root() == anchor.absolute()
 
-    # But record_result must drop the manifest at user_root, NOT at anchor
     _results.record_result("test_kind", fake_file)
-    assert (user_root / "manifest.jsonl").exists()
+    assert not user_root.exists()
+    assert (anchor / ".imajin" / "manifest.jsonl").exists()
     assert not (anchor / "manifest.jsonl").exists()

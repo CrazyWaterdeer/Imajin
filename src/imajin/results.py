@@ -229,14 +229,46 @@ def read_bundle_metadata(bundle: str | Path) -> dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def _manifest_root() -> Path:
-    """Where manifest.jsonl lives — kept out of anchor folders so user data
-    directories stay clean."""
-    return user_results_root()
+_RESULT_CATEGORY_DIRS = {
+    "bundles",
+    "figures",
+    "labels",
+    "qc",
+    "segmentation_qc",
+    "stats",
+    "tables",
+}
+
+
+def _manifest_root(path: str | Path | None = None) -> Path:
+    """Where manifest.jsonl lives.
+
+    If an output lands in the default user results root, keep the manifest there.
+    If an output lands beside the source data anchor, keep the manifest in a hidden
+    `.imajin` folder under that anchor so anchored analyses do not recreate
+    ~/Documents/Imajin just for bookkeeping.
+    """
+    if path is None:
+        return user_results_root()
+    user_root = user_results_root().expanduser().resolve()
+    try:
+        output_path = Path(path).expanduser().resolve()
+    except Exception:
+        output_path = Path(path).expanduser().absolute()
+    try:
+        if output_path.is_relative_to(user_root):
+            return user_root
+    except Exception:
+        pass
+    if output_path.is_dir():
+        return output_path.parent / ".imajin"
+    if output_path.parent.name in _RESULT_CATEGORY_DIRS:
+        return output_path.parent.parent / ".imajin"
+    return output_path.parent / ".imajin"
 
 
 def record_result(kind: str, path: str | Path, metadata: dict[str, Any] | None = None) -> None:
-    root = _manifest_root()
+    root = _manifest_root(path)
     root.mkdir(parents=True, exist_ok=True)
     record = {
         "kind": kind,

@@ -66,6 +66,10 @@ def _to_layer(ds) -> LayerData:
     }
 
     metadata = {"voxel_size_um": ds.voxel_size, "axes": ds.axes}
+    if ds.source_path is not None:
+        source_path = str(ds.source_path)
+        metadata["source_path"] = source_path
+        metadata["path"] = source_path
     for key in ("load_mode", "estimated_nbytes", "available_memory_bytes"):
         if key in ds.raw_metadata:
             metadata[key] = ds.raw_metadata[key]

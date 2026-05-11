@@ -55,7 +55,48 @@ def _slug(value: str) -> str:
     return text or "segmentation"
 
 
-def _default_qc_png_path(labels_layer: str) -> Path:
+def _unique_file(root: Path, filename: str) -> Path:
+    root.mkdir(parents=True, exist_ok=True)
+    candidate = root / filename
+    if not candidate.exists():
+        return candidate
+    stem = candidate.stem
+    suffix = candidate.suffix
+    i = 2
+    while True:
+        candidate = root / f"{stem}_{i}{suffix}"
+        if not candidate.exists():
+            return candidate
+        i += 1
+
+
+def _source_path_from_layer(layer: Any) -> str | None:
+    md = getattr(layer, "metadata", None)
+    if not isinstance(md, dict):
+        return None
+    raw = md.get("source_path") or md.get("path")
+    return str(raw) if raw else None
+
+
+def _source_metadata_from_layer(layer: Any) -> dict[str, str]:
+    source = _source_path_from_layer(layer)
+    if not source:
+        return {}
+    return {"source_path": source, "path": source}
+
+
+def _default_qc_png_path(labels_layer: str, source_layer: Any | None = None) -> Path:
+    if source_layer is not None:
+        source = _source_path_from_layer(source_layer)
+        if source:
+            from imajin.anchor import resolve_anchor_folder
+
+            anchor = resolve_anchor_folder([source])
+            if anchor is not None:
+                return _unique_file(
+                    anchor / "segmentation_qc",
+                    f"{_slug(labels_layer)}.png",
+                )
     return unique_result_path("segmentation_qc", f"{_slug(labels_layer)}.png")
 
 
@@ -238,6 +279,7 @@ def cellpose_sam(
         scale=tuple(L.scale),
         metadata={
             "source_layer": L.name,
+            **_source_metadata_from_layer(L),
             "segmentation_method": "cellpose_sam",
             "model": model,
             "diameter": diameter,
@@ -259,7 +301,7 @@ def cellpose_sam(
             out_path = (
                 normalize_user_path(qc_png_path).resolve()
                 if qc_png_path
-                else _default_qc_png_path(layer.name)
+                else _default_qc_png_path(layer.name, L)
             )
             saved_qc_png, qc_png_skipped_reason = _save_qc_png(
                 data,
@@ -374,6 +416,7 @@ def segment_intensity_regions(
         scale=tuple(L.scale),
         metadata={
             "source_layer": L.name,
+            **_source_metadata_from_layer(L),
             "segmentation_method": "intensity_regions",
             "threshold_method": threshold_method,
             "threshold": threshold,
@@ -402,7 +445,7 @@ def segment_intensity_regions(
             out_path = (
                 normalize_user_path(qc_png_path).resolve()
                 if qc_png_path
-                else _default_qc_png_path(layer.name)
+                else _default_qc_png_path(layer.name, L)
             )
             saved_qc_png, qc_png_skipped_reason = _save_qc_png(
                 data,
@@ -619,6 +662,7 @@ def segment_target_objects(
         scale=tuple(L.scale),
         metadata={
             "source_layer": L.name,
+            **_source_metadata_from_layer(L),
             "segmentation_method": "target_objects",
             "object_unit": "object_or_roi",
             "background_radius": background_radius,
@@ -663,7 +707,7 @@ def segment_target_objects(
             out_path = (
                 normalize_user_path(qc_png_path).resolve()
                 if qc_png_path
-                else _default_qc_png_path(layer.name)
+                else _default_qc_png_path(layer.name, L)
             )
             saved_qc_png, qc_png_skipped_reason = _save_qc_png(
                 raw,
@@ -831,6 +875,7 @@ def segment_expression_domain(
             scale=tuple(L.scale),
             metadata={
                 "source_layer": L.name,
+                **_source_metadata_from_layer(L),
                 "segmentation_method": "expression_domain",
                 "noise_floor_threshold": float(threshold),
                 "k_mad": float(k_mad),
@@ -874,6 +919,7 @@ def segment_expression_domain(
         scale=tuple(L.scale),
         metadata={
             "source_layer": L.name,
+            **_source_metadata_from_layer(L),
             "segmentation_method": "expression_domain",
             "noise_floor_threshold": float(threshold),
             "k_mad": float(k_mad),
@@ -894,7 +940,7 @@ def segment_expression_domain(
             out_path = (
                 normalize_user_path(qc_png_path).resolve()
                 if qc_png_path
-                else _default_qc_png_path(layer.name)
+                else _default_qc_png_path(layer.name, L)
             )
             saved_qc_png, qc_png_skipped_reason = _save_qc_png(
                 raw,
