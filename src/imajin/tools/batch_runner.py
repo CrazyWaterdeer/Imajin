@@ -43,35 +43,6 @@ def cleanup_sample_layers(
     return call_on_main(remove_layers_by_name, to_remove)
 
 
-def _default_statistics_value_columns(df: Any, *, limit: int = 6) -> list[str]:
-    numeric = list(df.select_dtypes(include="number").columns)
-    excluded = {
-        "label",
-        "time",
-        "time_index",
-        "area",
-        "area_px",
-        "volume_voxels",
-    }
-    preferred_tokens = (
-        "mean_intensity",
-        "max_intensity",
-        "min_intensity",
-        "area_um2",
-        "volume_um3",
-    )
-    out: list[str] = []
-    for token in preferred_tokens:
-        for col in numeric:
-            if col in out or col in excluded or col.startswith("centroid"):
-                continue
-            if token in col:
-                out.append(col)
-                if len(out) >= limit:
-                    return out
-    return out
-
-
 def _statistics_partitions(df: Any) -> list[tuple[str, Any]]:
     if "tier" not in df.columns:
         return [("all", df)]
