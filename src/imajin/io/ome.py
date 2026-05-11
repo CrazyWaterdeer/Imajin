@@ -7,7 +7,12 @@ from xml.etree import ElementTree as ET
 
 import tifffile
 
-from imajin.io.channel_metadata import build_channel_info
+from imajin.io.channel_metadata import (
+    acquisition_settings_from_mapping,
+    apply_dtype_bit_depth,
+    build_channel_info,
+    laser_settings_from_mapping,
+)
 from imajin.io.dataset import Dataset
 from imajin.io.memory import (
     array_nbytes,
@@ -43,23 +48,36 @@ def _parse_ome_xml(
             ):
                 name = ch.get("Name") or ch.get("ID") or f"ch{len(channels)}"
                 channels.append(name)
+                extra = {
+                    k: v
+                    for k, v in {
+                        "excitation_wavelength_unit": ch.get(
+                            "ExcitationWavelengthUnit"
+                        ),
+                        "emission_wavelength_unit": ch.get(
+                            "EmissionWavelengthUnit"
+                        ),
+                        "pinhole_size_unit": ch.get("PinholeSizeUnit"),
+                    }.items()
+                    if v is not None
+                }
+                extra.update(acquisition_settings_from_mapping(dict(ch.attrib)))
+                detector = ch.find(".//ome:DetectorSettings", _OME_NS)
+                if detector is None:
+                    detector = ch.find(".//DetectorSettings")
+                if detector is not None:
+                    extra.update(acquisition_settings_from_mapping(dict(detector.attrib)))
+                light = ch.find(".//ome:LightSourceSettings", _OME_NS)
+                if light is None:
+                    light = ch.find(".//LightSourceSettings")
+                if light is not None:
+                    extra.update(laser_settings_from_mapping(dict(light.attrib)))
                 channel_metadata.append(
                     build_channel_info(
                         name=name,
                         excitation=ch.get("ExcitationWavelength"),
                         emission=ch.get("EmissionWavelength"),
-                        extra={
-                            k: v
-                            for k, v in {
-                                "excitation_wavelength_unit": ch.get(
-                                    "ExcitationWavelengthUnit"
-                                ),
-                                "emission_wavelength_unit": ch.get(
-                                    "EmissionWavelengthUnit"
-                                ),
-                            }.items()
-                            if v is not None
-                        },
+                        extra=extra,
                     )
                 )
     except ET.ParseError:
@@ -109,6 +127,7 @@ def load_ome(path: Path | str) -> Dataset:
         load_mode = "memmap"
 
     voxel_size, channel_names, channel_metadata = _parse_ome_xml(ome_xml)
+    channel_metadata = apply_dtype_bit_depth(channel_metadata, dtype)
 
     return Dataset(
         data=data,

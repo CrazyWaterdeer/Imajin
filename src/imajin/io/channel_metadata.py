@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from typing import Any
 
 
@@ -28,9 +29,100 @@ _NAME_COLOR_ALIASES: dict[str, str] = {
     "647": "ir",
 }
 
+_SETTING_ALIASES: dict[str, tuple[str, ...]] = {
+    "laser_intensity": (
+        "laser_intensity",
+        "laser power",
+        "laser_power",
+        "laserpower",
+        "power",
+        "transmission",
+        "laser transmission",
+        "laser_transmission",
+        "attenuation",
+    ),
+    "detector_gain": (
+        "detector_gain",
+        "detector gain",
+        "detectorgain",
+        "gain",
+        "master gain",
+        "master_gain",
+        "amplifier gain",
+        "amplifier_gain",
+        "voltage",
+        "detector voltage",
+        "detector_voltage",
+    ),
+    "pinhole_size": (
+        "pinhole_size",
+        "pinhole size",
+        "pinholesize",
+        "pinhole",
+        "pinhole diameter",
+        "pinhole_diameter",
+        "pinholesizeairy",
+        "pinhole airy",
+    ),
+    "bit_depth": (
+        "bit_depth",
+        "bit depth",
+        "bitsperpixel",
+        "bits per pixel",
+        "bits_per_pixel",
+        "significantbits",
+        "significant_bits",
+        "validbits",
+        "valid_bits",
+        "colorbit",
+        "color bit",
+    ),
+}
+
 
 def _norm(value: str) -> str:
     return " ".join(value.lower().replace("_", " ").replace("-", " ").split())
+
+
+def _compact_key(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "", str(value).lower())
+
+
+def _coerce_setting_value(value: Any) -> Any:
+    if value is None or value == "":
+        return None
+    if isinstance(value, bool):
+        return bool(value)
+    if isinstance(value, (int, float)):
+        val = float(value)
+        return int(val) if val.is_integer() else val
+    text = str(value).strip()
+    if not text:
+        return None
+    try:
+        val = float(text)
+        return int(val) if val.is_integer() else val
+    except ValueError:
+        pass
+    match = re.search(r"[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?", text)
+    if match:
+        try:
+            val = float(match.group(0))
+            return int(val) if val.is_integer() else val
+        except ValueError:
+            pass
+    return text
+
+
+def _lookup_alias(mapping: dict[str, Any], aliases: tuple[str, ...]) -> Any:
+    if not isinstance(mapping, dict):
+        return None
+    compact = {_compact_key(k): v for k, v in mapping.items()}
+    for alias in aliases:
+        key = _compact_key(alias)
+        if key in compact:
+            return compact[key]
+    return None
 
 
 def wavelength_nm(value: Any) -> float | None:
@@ -47,6 +139,60 @@ def wavelength_nm(value: Any) -> float | None:
     if val < 10:
         return val * 1000
     return val
+
+
+def bit_depth_from_dtype(dtype: Any) -> int | None:
+    if dtype is None or dtype == "":
+        return None
+    try:
+        import numpy as np
+
+        return int(np.dtype(dtype).itemsize * 8)
+    except Exception:
+        return None
+
+
+def acquisition_settings_from_mapping(mapping: dict[str, Any]) -> dict[str, Any]:
+    settings: dict[str, Any] = {}
+    for field, aliases in _SETTING_ALIASES.items():
+        value = _coerce_setting_value(_lookup_alias(mapping, aliases))
+        if value is not None:
+            settings[field] = value
+            if field == "bit_depth":
+                settings["color_bit_depth"] = value
+    return settings
+
+
+def laser_settings_from_mapping(mapping: dict[str, Any]) -> dict[str, Any]:
+    settings = acquisition_settings_from_mapping(mapping)
+    wavelength = _lookup_alias(
+        mapping,
+        (
+            "laser_wavelength",
+            "laser wavelength",
+            "laserwavelength",
+            "wavelength",
+            "excitation_wavelength",
+            "excitation wavelength",
+        ),
+    )
+    wavelength_value = wavelength_nm(wavelength)
+    if wavelength_value is not None:
+        settings["laser_wavelength_nm"] = float(wavelength_value)
+    return settings
+
+
+def apply_dtype_bit_depth(
+    channel_metadata: list[dict[str, Any]],
+    dtype: Any,
+) -> list[dict[str, Any]]:
+    bit_depth = bit_depth_from_dtype(dtype)
+    if bit_depth is None:
+        return channel_metadata
+    for item in channel_metadata:
+        item.setdefault("bit_depth", bit_depth)
+        item.setdefault("color_bit_depth", bit_depth)
+    return channel_metadata
 
 
 def color_from_wavelengths(

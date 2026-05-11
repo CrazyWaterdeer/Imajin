@@ -46,7 +46,7 @@ def test_channel_metadata_from_lsm_scan_wavelengths() -> None:
         "ScanInformation": {
             "Tracks": [
                 {
-                    "IlluminationChannels": [{"Wavelength": 4.88e-7}],
+                    "IlluminationChannels": [{"Wavelength": 4.88e-7, "Power": 2.5}],
                     "DataChannels": [{"Name": "GCaMP"}],
                 },
                 {
@@ -64,6 +64,36 @@ def test_channel_metadata_from_lsm_scan_wavelengths() -> None:
     assert [m["name"] for m in metadata] == ["GCaMP", "mCherry", "Cy5"]
     assert [m["color"] for m in metadata] == ["green", "red", "ir"]
     assert metadata[0]["excitation_wavelength_nm"] == pytest.approx(488)
+    assert metadata[0]["laser_intensity"] == pytest.approx(2.5)
+
+
+def test_channel_metadata_extracts_lsm_acquisition_settings() -> None:
+    meta = {
+        "ScanInformation": {
+            "Tracks": [
+                {
+                    "IlluminationChannels": [
+                        {"Name": "488", "Wavelength": 488.0, "Transmission": 7.5}
+                    ],
+                    "DetectionChannels": [
+                        {
+                            "ChannelName": "GFP",
+                            "DyeName": "GFP",
+                            "DetectorGain": 650,
+                            "PinholeDiameter": "1.2 AU",
+                        }
+                    ],
+                }
+            ]
+        }
+    }
+
+    [metadata] = _channel_metadata(meta)
+
+    assert metadata["color"] == "green"
+    assert metadata["laser_intensity"] == pytest.approx(7.5)
+    assert metadata["detector_gain"] == pytest.approx(650)
+    assert metadata["pinhole_size"] == pytest.approx(1.2)
 
 
 def test_channel_metadata_prefers_detection_channels_over_laser_order() -> None:

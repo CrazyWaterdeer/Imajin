@@ -4,7 +4,12 @@ from pathlib import Path
 from typing import Any
 from xml.etree import ElementTree as ET
 
-from imajin.io.channel_metadata import build_channel_info
+from imajin.io.channel_metadata import (
+    acquisition_settings_from_mapping,
+    apply_dtype_bit_depth,
+    build_channel_info,
+    laser_settings_from_mapping,
+)
 from imajin.io.dataset import Dataset
 from imajin.paths import normalize_user_path
 
@@ -39,8 +44,27 @@ def _channel_metadata_from_xml(metadata: Any) -> list[dict[str, Any]]:
             or attrs.get("Emission")
             or attrs.get("DetectionWavelength")
         )
+        extra = acquisition_settings_from_mapping(dict(attrs))
+        for child in elem.iter():
+            if child is elem:
+                continue
+            child_name = _local_name(str(child.tag)).lower()
+            child_attrs = dict(getattr(child, "attrib", {}) or {})
+            if not child_attrs:
+                continue
+            if "detector" in child_name:
+                extra.update(acquisition_settings_from_mapping(child_attrs))
+            elif "laser" in child_name or "lightsource" in child_name:
+                extra.update(laser_settings_from_mapping(child_attrs))
+            else:
+                extra.update(acquisition_settings_from_mapping(child_attrs))
         channels.append(
-            build_channel_info(name=name, excitation=excitation, emission=emission)
+            build_channel_info(
+                name=name,
+                excitation=excitation,
+                emission=emission,
+                extra=extra,
+            )
         )
     return channels
 
@@ -74,6 +98,11 @@ def load_czi(path: Path | str) -> Dataset:
             channel_metadata = parsed
     except Exception:
         raw["czi"] = {}
+
+    channel_metadata = apply_dtype_bit_depth(
+        channel_metadata,
+        getattr(data, "dtype", None),
+    )
 
     return Dataset(
         data=data,

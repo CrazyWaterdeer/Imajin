@@ -206,6 +206,9 @@ class BatchRecipeRunner:
         self.sample_summaries: list[dict[str, Any]] = []
         self.n_complete = 0
         self.n_failed = 0
+        self.metadata_validation = self._validate_metadata_preflight()
+        if self.metadata_validation.get("status") == "fail":
+            return self._metadata_validation_failure()
 
         self.parent_bundle = self._create_parent_bundle()
         from imajin.result_bundles import with_active_bundle
@@ -232,6 +235,7 @@ class BatchRecipeRunner:
             "cleanup_enabled": self.cleanup_enabled,
             "runs": self.runs,
             "bundle_path": str(self.parent_bundle),
+            "metadata_validation": self.metadata_validation,
         }
 
     def _sample_names(self) -> list[str]:
@@ -263,6 +267,73 @@ class BatchRecipeRunner:
                 "execution_mode must be 'serial_cleanup', 'serial', or 'parallel_headless'"
             )
         return mode
+
+    def _validate_metadata_preflight(self) -> dict[str, Any]:
+        from imajin.analysis.metadata_validation import validate_acquisition_metadata
+
+        records: list[dict[str, Any]] = []
+        for name in self.names:
+            info = resolve_sample_inputs(name)
+            file_path = info.get("file_path")
+            if not file_path:
+                continue
+            metadata_summary: dict[str, Any] = {}
+            file_id = info.get("file_id")
+            if file_id:
+                try:
+                    metadata_summary = dict(get_file(file_id).metadata_summary or {})
+                except KeyError:
+                    metadata_summary = {}
+            records.append(
+                {
+                    "path": file_path,
+                    "file_id": file_id,
+                    "sample_name": name,
+                    "target_channel": self.recipe.target_channel,
+                    "metadata_summary": metadata_summary,
+                }
+            )
+        if not records:
+            return {
+                "ok": True,
+                "status": "warning",
+                "analysis_kind": "intensity",
+                "settings_checked": [],
+                "warnings": [
+                    "metadata preflight skipped because no source file paths are "
+                    "registered for the selected samples"
+                ],
+                "mismatches": [],
+                "missing_settings": [],
+                "metadata_errors": [],
+                "channels": [],
+                "metadata_only": True,
+            }
+        return validate_acquisition_metadata(
+            records,
+            target_channel=self.recipe.target_channel,
+            analysis_kind="auto",
+            measurement=self.measurement,
+            strict_missing=False,
+        )
+
+    def _metadata_validation_failure(self) -> dict[str, Any]:
+        error = self.metadata_validation.get("error") or "metadata validation failed"
+        return {
+            "recipe": self.recipe_name,
+            "n_samples": len(self.names),
+            "n_complete": 0,
+            "n_failed": len(self.names),
+            "execution_mode": self.mode,
+            "cleanup_enabled": False,
+            "runs": [],
+            "bundle_path": None,
+            "metadata_validation": self.metadata_validation,
+            "error": (
+                f"{error}; analysis was not run. Check that all target-channel "
+                "acquisition settings match before comparing intensity."
+            ),
+        }
 
     def _create_parent_bundle(self) -> Any:
         from imajin.anchor import resolve_anchor_folder
@@ -702,4 +773,5 @@ class BatchRecipeRunner:
             "folder_set": sorted(folder_set, key=str.lower),
             "channel_roles": channel_roles,
             "scope_filters": [],
+            "metadata_validation": getattr(self, "metadata_validation", {}),
         }

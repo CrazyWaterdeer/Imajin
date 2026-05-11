@@ -7,9 +7,13 @@ from typing import Any
 import tifffile
 
 from imajin.io.channel_metadata import (
+    acquisition_settings_from_mapping,
+    apply_dtype_bit_depth,
     build_channel_info,
     color_from_name,
+    color_from_wavelengths,
     display_color_name,
+    laser_settings_from_mapping,
     rgb_from_8bit_triplet,
 )
 from imajin.io.dataset import Dataset
@@ -135,6 +139,7 @@ def _channel_info_from_detection_channel(
         value = _first_present(ch, src_key)
         if value is not None:
             extra[dst_key] = str(value)
+    extra.update(acquisition_settings_from_mapping(ch))
 
     info = build_channel_info(
         name=str(channel_name) if channel_name is not None else None,
@@ -149,6 +154,48 @@ def _channel_info_from_detection_channel(
     return info
 
 
+def _illumination_settings(illum: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(illum, dict):
+        return {}
+    settings = laser_settings_from_mapping(illum)
+    wavelength = settings.get("laser_wavelength_nm")
+    if isinstance(wavelength, (int, float)):
+        color = color_from_wavelengths(excitation_nm=float(wavelength))
+        if color:
+            settings["laser_color"] = color
+    name = _first_present(illum, "Name", "LaserName", "LightSourceName")
+    if name is not None:
+        settings["laser_name"] = str(name)
+    return settings
+
+
+def _illumination_settings_for_channel(
+    channel_info: dict[str, Any],
+    illumination: list[dict[str, Any]],
+) -> dict[str, Any]:
+    usable = [dict(item) for item in illumination if item]
+    if not usable:
+        return {}
+    if len(usable) == 1:
+        return usable[0]
+    color = channel_info.get("color")
+    if color:
+        matches = [item for item in usable if item.get("laser_color") == color]
+        if len(matches) == 1:
+            return matches[0]
+    excitation = channel_info.get("excitation_wavelength_nm")
+    if isinstance(excitation, (int, float)):
+        matches = [
+            item
+            for item in usable
+            if isinstance(item.get("laser_wavelength_nm"), (int, float))
+            and abs(float(item["laser_wavelength_nm"]) - float(excitation)) < 1e-6
+        ]
+        if len(matches) == 1:
+            return matches[0]
+    return {}
+
+
 def _channel_metadata(lsm_meta: dict[str, Any]) -> list[dict[str, Any]]:
     names = _channel_names(lsm_meta)
     out: list[dict[str, Any]] = []
@@ -160,27 +207,26 @@ def _channel_metadata(lsm_meta: dict[str, Any]) -> list[dict[str, Any]]:
         for track in tracks if isinstance(tracks, list) else []:
             if not isinstance(track, dict):
                 continue
+            illumination = track.get("IlluminationChannels", [])
+            illumination_iter = illumination if isinstance(illumination, list) else []
+            illumination_settings = [
+                _illumination_settings(illum)
+                for illum in illumination_iter
+                if isinstance(illum, dict)
+            ]
             detection = track.get("DetectionChannels", [])
             if isinstance(detection, list) and detection:
                 for ch in detection:
                     if not isinstance(ch, dict):
                         continue
                     fallback = names[len(out)] if len(out) < len(names) else None
-                    out.append(_channel_info_from_detection_channel(ch, fallback))
+                    info = _channel_info_from_detection_channel(ch, fallback)
+                    info.update(
+                        _illumination_settings_for_channel(info, illumination_settings)
+                    )
+                    out.append(info)
                 continue
 
-            illumination = track.get("IlluminationChannels", [])
-            illum_wavelengths: list[Any] = []
-            for illum in illumination if isinstance(illumination, list) else []:
-                if isinstance(illum, dict):
-                    illum_wavelengths.append(
-                        _first_present(
-                            illum,
-                            "Wavelength",
-                            "LaserWavelength",
-                            "ExcitationWavelength",
-                        )
-                    )
             data_channels = track.get("DataChannels", [])
             for i, ch in enumerate(data_channels if isinstance(data_channels, list) else []):
                 if not isinstance(ch, dict):
@@ -195,21 +241,22 @@ def _channel_metadata(lsm_meta: dict[str, Any]) -> list[dict[str, Any]]:
                     "LaserWavelength",
                     "IlluminationWavelength",
                 )
-                if excitation is None and i < len(illum_wavelengths):
-                    excitation = illum_wavelengths[i]
+                if excitation is None and len(illumination_settings) == 1:
+                    excitation = illumination_settings[0].get("laser_wavelength_nm")
                 emission = _first_present(
                     ch,
                     "EmissionWavelength",
                     "DetectionWavelength",
                     "AcquisitionWavelength",
                 )
-                out.append(
-                    build_channel_info(
-                        name=str(name) if name is not None else None,
-                        excitation=excitation,
-                        emission=emission,
-                    )
+                info = build_channel_info(
+                    name=str(name) if name is not None else None,
+                    excitation=excitation,
+                    emission=emission,
+                    extra=acquisition_settings_from_mapping(ch),
                 )
+                info.update(_illumination_settings_for_channel(info, illumination_settings))
+                out.append(info)
 
     if not out:
         out = [build_channel_info(name=name) for name in names]
@@ -290,7 +337,7 @@ def load_lsm(path: Path | str, position_index: int = 0) -> Dataset:
         axes=axes,
         voxel_size=_voxel_size_um(lsm_meta),
         channel_names=_channel_names(lsm_meta),
-        channel_metadata=_channel_metadata(lsm_meta),
+        channel_metadata=apply_dtype_bit_depth(_channel_metadata(lsm_meta), dtype),
         source_path=p,
         raw_metadata={
             "lsm": dict(lsm_meta),

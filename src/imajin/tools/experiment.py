@@ -207,10 +207,22 @@ def register_files(
         if not exists:
             n_missing += 1
         resolved = p.resolve() if exists else p
+        metadata_summary: dict[str, Any] = {}
+        if supported and exists:
+            try:
+                from imajin.io.metadata import read_metadata_summary
+
+                metadata_summary = read_metadata_summary(resolved)
+            except Exception as exc:  # noqa: BLE001
+                metadata_summary = {
+                    "metadata_error": f"{type(exc).__name__}: {exc}",
+                    "metadata_read_mode": "metadata_only",
+                }
         file_id = put_file(
             path=str(resolved),
             original_name=original_name,
             file_type=file_type,
+            metadata_summary=metadata_summary,
         )
         out.append(
             {
@@ -221,6 +233,7 @@ def register_files(
                 "supported": supported,
                 "exists": exists,
                 "load_status": "unloaded",
+                "metadata_summary": metadata_summary,
             }
         )
 
@@ -374,6 +387,60 @@ def filter_registered_files(
         file_ids=file_ids,
         offset=offset,
         limit=limit,
+    )
+
+
+@tool(
+    description="Validate acquisition metadata before batch analysis without loading "
+    "pixel arrays. For intensity analyses this compares the target channel across "
+    "the selected files for laser intensity, detector gain, color bit depth, and "
+    "pinhole size. Counterstain/non-target channels are ignored. Use this after "
+    "register_files/filter_registered_files and before run_recipe_on_samples when "
+    "comparing fluorescence intensity across files. analysis_kind='area' skips "
+    "intensity acquisition settings.",
+    phase="3",
+)
+def validate_analysis_metadata(
+    paths: list[str] | None = None,
+    file_ids: list[str] | None = None,
+    include: list[str] | None = None,
+    exclude: list[str] | None = None,
+    target_channel: str | None = None,
+    analysis_kind: str = "auto",
+    measurement: dict[str, Any] | None = None,
+    strict_missing: bool = True,
+) -> dict[str, Any]:
+    from imajin.agent.state import list_files
+    from imajin.analysis.metadata_validation import validate_acquisition_metadata
+
+    records: list[dict[str, Any]] = []
+    if paths:
+        for raw in paths:
+            p = normalize_user_path(raw)
+            records.append({"path": str(p.resolve() if p.exists() else p)})
+
+    file_id_filter = {str(fid) for fid in (file_ids or [])}
+    for rec in list_files():
+        if file_id_filter and str(rec.get("file_id")) not in file_id_filter:
+            continue
+        if not file_id_filter and paths:
+            continue
+        if not _record_matches_terms(rec, include=include, exclude=exclude):
+            continue
+        records.append(
+            {
+                "path": rec.get("path"),
+                "file_id": rec.get("file_id"),
+                "metadata_summary": rec.get("metadata_summary"),
+            }
+        )
+
+    return validate_acquisition_metadata(
+        records,
+        target_channel=target_channel,
+        analysis_kind=analysis_kind,
+        measurement=measurement,
+        strict_missing=strict_missing,
     )
 
 

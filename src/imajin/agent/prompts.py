@@ -160,15 +160,21 @@ When the user's request matches one of these intents, run the full pipeline with
 
 - **batch analysis over multiple files** / **"batch 분석"** / **"여러 파일 분석"** →
   use the batch workflow: `register_files` → `annotate_samples` →
-  `create_analysis_recipe` → `run_recipe_on_samples`. Do not loop over files by
-  repeatedly calling `load_file`; the recipe runner loads one sample at a time and
-  cleans up sample layers after each iteration to avoid accumulating image volumes
-  in RAM. The recipe's `segmentation` slot is Tier-2 only — use
+  `create_analysis_recipe` → `validate_analysis_metadata` →
+  `run_recipe_on_samples`. Do not loop over files by repeatedly calling `load_file`;
+  the recipe runner loads one sample at a time and cleans up sample layers after
+  each iteration to avoid accumulating image volumes in RAM. The recipe's
+  `segmentation` slot is Tier-2 only — use
   method='target_objects' | 'cellpose_sam' | 'intensity_regions'. For two-tier
   expression-domain analysis (e.g. CaLexA reporters with halo around saturated
   cluster cores), put the Tier-1 mask spec in the separate `domain` slot:
   domain={'strategy':'noise_floor','k_mad':5.0,'dark_percentile':10.0,'min_area_um2':5.0}.
   Never put 'expression_domain' in the segmentation slot; the runner will reject it.
+  For intensity comparisons, metadata validation must happen before analysis. It
+  reads file metadata only, not pixel arrays; call `validate_analysis_metadata`
+  with strict_missing=True and compare only the measured target channel for laser
+  intensity, detector gain, color bit depth, and pinhole size. Counterstain
+  settings may differ unless the counterstain is the measured channel.
   When the batch finishes, `run_recipe_on_samples` returns `bundle_path`, the
   one folder containing every sample's labels/cells/, labels/domain/ (two-tier
   only), tables/combined.csv, qc/, and metadata.json. Cite this path when
