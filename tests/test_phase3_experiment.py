@@ -926,6 +926,33 @@ def test_generate_experiment_report_html_writes_file(tmp_path, monkeypatch) -> N
     assert res["format"] == "html"
 
 
+def test_generate_experiment_report_includes_statistics_tables(tmp_path, monkeypatch) -> None:
+    from imajin.tools import report, stats
+
+    df = pd.DataFrame(
+        {
+            "sample_name": ["ctrl_1", "ctrl_2", "trt_1", "trt_2"],
+            "group": ["control", "control", "treatment", "treatment"],
+            "mean_intensity_reporter": [10.0, 11.0, 18.0, 19.0],
+        }
+    )
+    table = state.put_table("measurements", df, spec={"tool": "test"})
+    stats.describe_table(table, "mean_intensity_reporter", save_csv=False)
+    stats.compare_groups(table, "mean_intensity_reporter", save_csv=False)
+
+    log_path = tmp_path / "session.jsonl"
+    log_path.write_text("", encoding="utf-8")
+    from imajin.agent import provenance
+    monkeypatch.setattr(provenance, "_LOG_PATH", log_path)
+
+    out = tmp_path / "exp_report.md"
+    report.generate_experiment_report(str(out), format="md")
+    body = out.read_text(encoding="utf-8")
+    assert "## Statistics" in body
+    assert "mean_intensity_reporter" in body
+    assert "p_value" in body
+
+
 def test_create_analysis_recipe_passes_through_domain(viewer) -> None:
     from imajin.agent.state import get_recipe, reset_recipes
     from imajin.tools.experiment import create_analysis_recipe
@@ -1279,6 +1306,10 @@ def test_run_recipe_on_samples_writes_combined_csv(
     df = pd.read_csv(combined)
     assert {"sample_name", "group", "file_id"}.issubset(df.columns)
     assert set(df["sample_name"].unique()) == {"ctrl_1", "trt_1"}
+    stats_files = list((bundle / "stats").glob("*.csv"))
+    assert any("mean_intensity" in p.name for p in stats_files)
+    meta = json.loads((bundle / "metadata.json").read_text())
+    assert meta["run_context"]["statistics_outputs"]
 
 
 def test_run_recipe_on_samples_finalizes_metadata_with_samples(

@@ -3,6 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Iterable
 
+from imajin.paths import normalize_user_path
+
 
 def resolve_anchor_folder(file_paths: Iterable[str | Path]) -> Path | None:
     """Pick the anchor folder for a set of input file paths.
@@ -17,7 +19,7 @@ def resolve_anchor_folder(file_paths: Iterable[str | Path]) -> Path | None:
     for p in file_paths:
         if not p:
             continue
-        parent = Path(p).expanduser().absolute().parent
+        parent = normalize_user_path(p).expanduser().absolute().parent
         parents.add(parent)
     if not parents:
         return None

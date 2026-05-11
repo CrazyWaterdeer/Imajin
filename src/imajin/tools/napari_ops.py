@@ -16,11 +16,17 @@ def snapshot_layer(name: str) -> LayerSnapshot:
     from imajin.agent.state import get_layer
 
     layer = get_layer(name)
+    metadata = dict(getattr(layer, "metadata", {}) or {})
+    source = getattr(layer, "source", None)
+    source_path = getattr(source, "path", None) if source is not None else None
+    if source_path and not (metadata.get("source_path") or metadata.get("path")):
+        metadata["source_path"] = str(source_path)
+        metadata["path"] = str(source_path)
     return LayerSnapshot(
         name=layer.name,
         data=layer.data,
         scale=tuple(float(s) for s in getattr(layer, "scale", ())),
-        metadata=dict(getattr(layer, "metadata", {}) or {}),
+        metadata=metadata,
     )
 
 

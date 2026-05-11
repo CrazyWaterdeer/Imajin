@@ -168,7 +168,9 @@ When the user's request matches one of these intents, run the full pipeline with
   method='target_objects' | 'cellpose_sam' | 'intensity_regions'. For two-tier
   expression-domain analysis (e.g. CaLexA reporters with halo around saturated
   cluster cores), put the Tier-1 mask spec in the separate `domain` slot:
-  domain={'strategy':'noise_floor','k_mad':5.0,'dark_percentile':10.0,'min_area_um2':5.0}.
+  domain={'strategy':'noise_floor','k_mad':6.0,'dark_percentile':10.0,'min_area_um2':5.0}.
+  For CaLexA-like two-tier target_objects segmentation, prefer Tier-2 defaults
+  min_snr=1.5 and high_snr=3.0 unless the user asks for stricter bright regions.
   Never put 'expression_domain' in the segmentation slot; the runner will reject it.
   For intensity comparisons, metadata validation must happen before analysis. It
   reads file metadata only, not pixel arrays; call `validate_analysis_metadata`

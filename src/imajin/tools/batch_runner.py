@@ -43,6 +43,45 @@ def cleanup_sample_layers(
     return call_on_main(remove_layers_by_name, to_remove)
 
 
+def _default_statistics_value_columns(df: Any, *, limit: int = 6) -> list[str]:
+    numeric = list(df.select_dtypes(include="number").columns)
+    excluded = {
+        "label",
+        "time",
+        "time_index",
+        "area",
+        "area_px",
+        "volume_voxels",
+    }
+    preferred_tokens = (
+        "mean_intensity",
+        "max_intensity",
+        "min_intensity",
+        "area_um2",
+        "volume_um3",
+    )
+    out: list[str] = []
+    for token in preferred_tokens:
+        for col in numeric:
+            if col in out or col in excluded or col.startswith("centroid"):
+                continue
+            if token in col:
+                out.append(col)
+                if len(out) >= limit:
+                    return out
+    return out
+
+
+def _statistics_partitions(df: Any) -> list[tuple[str, Any]]:
+    if "tier" not in df.columns:
+        return [("all", df)]
+    partitions: list[tuple[str, Any]] = []
+    for tier, part in df.groupby("tier", dropna=False, sort=False):
+        tier_name = str(tier) if tier is not None else "unknown"
+        partitions.append((tier_name, part.reset_index(drop=True)))
+    return partitions or [("all", df)]
+
+
 def loaded_layer_metadata_text(layer: Any) -> str:
     md = getattr(layer, "metadata", {}) or {}
     parts = [getattr(layer, "name", "")]
@@ -204,6 +243,7 @@ class BatchRecipeRunner:
         )
         self.runs: list[dict[str, Any]] = []
         self.sample_summaries: list[dict[str, Any]] = []
+        self.statistics_outputs: list[dict[str, Any]] = []
         self.n_complete = 0
         self.n_failed = 0
         self.metadata_validation = self._validate_metadata_preflight()
@@ -236,6 +276,7 @@ class BatchRecipeRunner:
             "runs": self.runs,
             "bundle_path": str(self.parent_bundle),
             "metadata_validation": self.metadata_validation,
+            "statistics_outputs": list(self.statistics_outputs),
         }
 
     def _sample_names(self) -> list[str]:
@@ -599,7 +640,10 @@ class BatchRecipeRunner:
                 status="complete",
                 n_cells=int(result.get("n_cells", result.get("n_objects", 0)) or 0),
                 n_domain_components=result.get("n_domain_components"),
+                domain_label_count=result.get("domain_label_count"),
                 domain_area_um2=result.get("domain_area_um2"),
+                domain_volume_um3=result.get("domain_volume_um3"),
+                domain_voxels=result.get("domain_voxels"),
                 qc_warnings=list(result.get("warnings") or []),
                 outputs=dict(result.get("result_files") or {}),
                 group=sample.group,
@@ -719,6 +763,105 @@ class BatchRecipeRunner:
                 )
             )
 
+    def _write_batch_statistics(self, primary_tables: list[str]) -> None:
+        if not primary_tables:
+            return
+        import pandas as pd
+
+        from imajin.agent.state import get_table, put_table
+        from imajin.results import slugify_result_name
+        from imajin.tools import stats as _stats
+
+        frames = []
+        for name in primary_tables:
+            try:
+                frame = get_table(name)
+            except KeyError:
+                continue
+            if frame is not None and not frame.empty:
+                frames.append(frame.copy())
+        if not frames:
+            return
+        combined = pd.concat(frames, ignore_index=True, sort=False)
+        if not {"sample_name", "group"}.issubset(combined.columns):
+            return
+
+        outputs: list[dict[str, Any]] = []
+        for tier, part in _statistics_partitions(combined):
+            value_cols = _default_statistics_value_columns(part)
+            if not value_cols:
+                continue
+            for value_col in value_cols:
+                valid = part.copy()
+                valid[value_col] = pd.to_numeric(valid[value_col], errors="coerce")
+                valid = valid[valid[value_col].notna()].reset_index(drop=True)
+                if valid.empty:
+                    continue
+                stats_input_name = put_table(
+                    "__".join(
+                        [
+                            "stats_input",
+                            slugify_result_name(self.parent_bundle.name),
+                            slugify_result_name(tier),
+                            slugify_result_name(value_col),
+                        ]
+                    ),
+                    valid,
+                    spec={
+                        "tool": "batch_auto_statistics_input",
+                        "source_tables": list(primary_tables),
+                        "tier": tier,
+                        "value_col": value_col,
+                    },
+                )
+                desc = _stats.describe_table(
+                    stats_input_name,
+                    value_col,
+                    save_csv=True,
+                )
+                compare: dict[str, Any] | None = None
+                if valid["group"].nunique(dropna=True) >= 2:
+                    try:
+                        compare = _stats.compare_groups(
+                            stats_input_name,
+                            value_col,
+                            level="auto",
+                            save_csv=True,
+                        )
+                    except Exception as exc:  # noqa: BLE001
+                        compare = {
+                            "error": f"{type(exc).__name__}: {exc}",
+                            "value_col": value_col,
+                            "tier": tier,
+                        }
+                outputs.append(
+                    {
+                        "tier": tier,
+                        "value_col": value_col,
+                        "input_table": stats_input_name,
+                        "object_stats_table": desc.get("object_stats_table"),
+                        "sample_stats_table": desc.get("sample_stats_table"),
+                        "object_stats_csv": desc.get("object_stats_csv"),
+                        "sample_stats_csv": desc.get("sample_stats_csv"),
+                        "comparison_table": (
+                            compare.get("result_table")
+                            if isinstance(compare, dict)
+                            else None
+                        ),
+                        "comparison_csv": (
+                            compare.get("csv_path")
+                            if isinstance(compare, dict)
+                            else None
+                        ),
+                        "comparison_error": (
+                            compare.get("error")
+                            if isinstance(compare, dict)
+                            else None
+                        ),
+                    }
+                )
+        self.statistics_outputs = outputs
+
     def _finalize_bundle(self, *, cancelled: bool) -> None:
         from imajin.result_bundles import finalize_bundle_metadata, write_combined_csv
 
@@ -730,6 +873,7 @@ class BatchRecipeRunner:
         if cancelled:
             try:
                 write_combined_csv(self.parent_bundle, primary_tables)
+                self._write_batch_statistics(primary_tables)
                 finalize_bundle_metadata(
                     self.parent_bundle,
                     samples=self.sample_summaries,
@@ -741,6 +885,7 @@ class BatchRecipeRunner:
             return
 
         write_combined_csv(self.parent_bundle, primary_tables)
+        self._write_batch_statistics(primary_tables)
         finalize_bundle_metadata(
             self.parent_bundle,
             samples=self.sample_summaries,
@@ -774,4 +919,5 @@ class BatchRecipeRunner:
             "channel_roles": channel_roles,
             "scope_filters": [],
             "metadata_validation": getattr(self, "metadata_validation", {}),
+            "statistics_outputs": list(getattr(self, "statistics_outputs", [])),
         }

@@ -303,7 +303,7 @@ def describe_table(
     object_by = [group_col] if group_col and group_col in df.columns else []
     object_desc = _describe_by(df, value_col, object_by)
     object_table = put_table(
-        f"stats_object__{value_col}",
+        f"stats_object__{slugify_result_name(table_name)}__{slugify_result_name(value_col)}",
         object_desc,
         spec={
             "tool": "describe_table",
@@ -344,7 +344,7 @@ def describe_table(
         by = [group_col] if group_col and group_col in sample_df.columns else []
         sample_desc = _describe_by(sample_df.rename(columns={"mean": value_col}), value_col, by)
         sample_table = put_table(
-            f"stats_sample__{value_col}",
+            f"stats_sample__{slugify_result_name(table_name)}__{slugify_result_name(value_col)}",
             sample_desc,
             spec={
                 "tool": "describe_table",
@@ -519,7 +519,7 @@ def compare_groups(
     if warnings:
         result_df["warnings"] = "; ".join(warnings)
     result_table = put_table(
-        f"stats_compare__{value_col}",
+        f"stats_compare__{slugify_result_name(table_name)}__{slugify_result_name(value_col)}",
         result_df,
         spec={
             "tool": "compare_groups",

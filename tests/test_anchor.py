@@ -48,6 +48,15 @@ def test_dot_path_resolves_against_cwd(tmp_path, monkeypatch):
     assert anchor == tmp_path.absolute()
 
 
+def test_windows_style_path_is_normalized_under_wsl():
+    anchor = resolve_anchor_folder(
+        [r"C:\Users\Jin\Documents\School\GIST\Lab\Project\test\img.lsm"]
+    )
+    assert anchor == Path(
+        "/mnt/c/Users/Jin/Documents/School/GIST/Lab/Project/test"
+    ).absolute()
+
+
 def test_session_anchor_uses_registered_files(tmp_path):
     a = tmp_path / "alpha"
     a.mkdir()

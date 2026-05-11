@@ -549,7 +549,7 @@ def list_experiment() -> dict[str, Any]:
     "across many samples in a batch. `segmentation` is the Tier-2 step and must "
     "use one of method='target_objects' | 'cellpose_sam' | 'intensity_regions'. "
     "For two-tier expression-domain analysis, put the Tier-1 mask spec into the "
-    "separate `domain` slot, e.g. domain={'strategy':'noise_floor','k_mad':5.0,"
+    "separate `domain` slot, e.g. domain={'strategy':'noise_floor','k_mad':6.0,"
     "'dark_percentile':10.0,'min_area_um2':5.0}; do NOT put 'expression_domain' in "
     "the segmentation slot. Optional cell_diameter_um drives Tier-2 size derivation.",
     phase="3",

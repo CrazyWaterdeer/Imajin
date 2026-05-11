@@ -329,6 +329,8 @@ def test_analyze_target_cells_bundle_lands_in_layer_anchor_folder(
     assert bundle.parent == anchor.resolve()
     assert bundle.name.endswith("__single")
     assert str(res["qc_png_path"]).startswith(str(anchor.resolve()))
+    assert Path(res["qc_png_path"]).exists()
+    assert not (anchor / "segmentation_qc").exists()
     assert not (tmp_path / "fallback").exists()
     assert (bundle / "labels" / "cells" / "reporter.tif").exists()
 
@@ -577,6 +579,7 @@ def test_analyze_target_cells_two_tier_writes_bundle(
     assert bundle.name.endswith("__two_tier")
     assert (bundle / "labels" / "cells" / "reporter.tif").exists()
     assert (bundle / "labels" / "domain" / "reporter.tif").exists()
+    assert not (tmp_path / "segmentation_qc").exists()
 
     meta = json.loads((bundle / "metadata.json").read_text())
     run_context = meta["run_context"]

@@ -513,6 +513,68 @@ def _render_runs(runs) -> str:
     return "\n".join(lines)
 
 
+def _markdown_table_from_df(df, *, max_rows: int = 12) -> str:
+    if df is None or df.empty:
+        return "_No rows._"
+    shown = df.head(max_rows).copy()
+    cols = [str(c) for c in shown.columns]
+    lines = [
+        "| " + " | ".join(c.replace("|", "/") for c in cols) + " |",
+        "| " + " | ".join("---" for _ in cols) + " |",
+    ]
+    for _, row in shown.iterrows():
+        values = []
+        for value in row.tolist():
+            if isinstance(value, float):
+                values.append(f"{value:.4g}")
+            else:
+                values.append(str(value).replace("|", "/"))
+        lines.append("| " + " | ".join(values) + " |")
+    if len(df) > max_rows:
+        lines.append(f"\n_Showing {max_rows} of {len(df)} rows._")
+    return "\n".join(lines)
+
+
+def _render_statistics_markdown() -> str:
+    from imajin.agent.state import get_table_entry, list_tables
+
+    stats_tables: list[tuple[str, object, dict[str, object]]] = []
+    for name in list_tables():
+        try:
+            entry = get_table_entry(name)
+        except KeyError:
+            continue
+        spec = dict(entry.spec or {})
+        tool_name = str(spec.get("tool") or "")
+        if tool_name == "batch_auto_statistics_input":
+            continue
+        if tool_name in {
+            "describe_table",
+            "compare_groups",
+            "summarize_experiment",
+        } or name.startswith(("stats_", "summary_")):
+            stats_tables.append((name, entry.df, spec))
+    if not stats_tables:
+        return "## Statistics\n\n_No statistical analysis tables found._\n"
+
+    parts = ["## Statistics", ""]
+    for name, df, spec in stats_tables:
+        tool_name = spec.get("tool") or "statistics"
+        value_col = spec.get("value_col") or spec.get("measurement")
+        level = spec.get("level") or spec.get("data_level")
+        title_bits = [str(tool_name)]
+        if value_col:
+            title_bits.append(str(value_col))
+        if level:
+            title_bits.append(str(level))
+        parts.append(f"### {name}")
+        parts.append(f"- " + "; ".join(title_bits))
+        parts.append("")
+        parts.append(_markdown_table_from_df(df))
+        parts.append("")
+    return "\n".join(parts)
+
+
 def _render_warnings(runs) -> str:
     failed = [r for r in runs if r.get("status") == "failed"]
     if not failed:
@@ -569,6 +631,7 @@ def generate_experiment_report(
             _render_sample_table(samples),
             _render_recipes(recipes),
             _render_runs(runs),
+            _render_statistics_markdown(),
             methods_md,
             _render_neural_traces_markdown(neural_traces, qc_records),
             _render_qc_markdown(qc_records),

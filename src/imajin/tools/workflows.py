@@ -48,6 +48,40 @@ def _empty_bundle_outputs() -> dict[str, str | None]:
     }
 
 
+def _bundle_qc_png_path(
+    bundle_path: Path | None,
+    bundle_outputs: dict[str, str | None],
+    fallback: str | None,
+) -> str | None:
+    rel = bundle_outputs.get("qc_png")
+    if bundle_path is not None and rel:
+        return str((bundle_path / rel).resolve())
+    return fallback
+
+
+def _remove_copied_standalone_qc(
+    qc_png: str | None,
+    *,
+    bundle_path: Path,
+    copied_rel: str | None,
+) -> None:
+    if not qc_png or not copied_rel:
+        return
+    from imajin.paths import normalize_user_path
+
+    src = normalize_user_path(qc_png).resolve()
+    dst = (bundle_path / copied_rel).resolve()
+    if src == dst or not src.exists():
+        return
+    if src.parent.name != "segmentation_qc":
+        return
+    src.unlink()
+    try:
+        src.parent.rmdir()
+    except OSError:
+        pass
+
+
 def _single_bundle_run_context_extras(anchor: Path | None) -> dict[str, Any]:
     from imajin.agent.state import list_channel_annotations
 
@@ -133,6 +167,16 @@ def _write_analysis_bundle_outputs(
     except Exception as exc:  # noqa: BLE001
         warnings.append(
             f"bundle outputs could not be written: {type(exc).__name__}: {exc}"
+        )
+    try:
+        _remove_copied_standalone_qc(
+            qc_png,
+            bundle_path=bundle_path,
+            copied_rel=bundle_outputs.get("qc_png"),
+        )
+    except Exception as exc:  # noqa: BLE001
+        warnings.append(
+            f"standalone QC cleanup failed: {type(exc).__name__}: {exc}"
         )
 
     if own_bundle:
@@ -245,6 +289,11 @@ def analyze_target_cells(
         )
         if "min_area_um2" not in d_opts and "min_area_um2" in derived_pre:
             d_opts["min_area_um2"] = derived_pre["min_area_um2"]
+        d_opts.setdefault("k_mad", 6.0)
+        d_opts.setdefault("dark_percentile", 10.0)
+        d_opts.setdefault("smooth_sigma_um", 0.75)
+        d_opts.setdefault("max_components", 128)
+        d_opts.setdefault("save_qc_png", False)
         domain_pre = _seg_dom(
             image_layer=target_layer,
             **_filtered_kwargs(_seg_dom, d_opts),
@@ -263,6 +312,8 @@ def analyze_target_cells(
     seg_options.pop("diameter", None)
     if pre_computed_domain_layer is not None:
         seg_options.setdefault("boundary_mask", pre_computed_domain_layer)
+        seg_options.setdefault("min_snr", 1.5)
+        seg_options.setdefault("high_snr", 3.0)
     if method == "target_objects":
         seg_result = _segment.segment_target_objects(
             image_layer=seg_input_layer,
@@ -348,6 +399,11 @@ def analyze_target_cells(
             )
         )
         warnings.extend(bundle_warnings)
+        qc_png_path = _bundle_qc_png_path(
+            bundle_path,
+            bundle_outputs,
+            seg_result.get("qc_png_path"),
+        )
 
     if domain_strategy is not None:
         if domain_strategy != "noise_floor":
@@ -427,6 +483,11 @@ def analyze_target_cells(
             )
         )
         warnings.extend(bundle_warnings)
+        qc_png_path = _bundle_qc_png_path(
+            bundle_path,
+            bundle_outputs,
+            seg_result.get("qc_png_path"),
+        )
 
         return {
             "ok": True,
@@ -449,7 +510,7 @@ def analyze_target_cells(
             "primary_table_name": tier_table_name,
             "table_name": measure_result["table_name"],
             "table_columns": measure_result["columns"],
-            "qc_png_path": seg_result.get("qc_png_path"),
+            "qc_png_path": qc_png_path,
             "qc_png_error": seg_result.get("qc_png_error"),
             "qc_png_skipped_reason": seg_result.get("qc_png_skipped_reason"),
             "result_bundle_path": str(bundle_path) if own_bundle else None,
@@ -471,7 +532,11 @@ def analyze_target_cells(
         "segmentation_method": method,
         "analysis_dim": "3d" if use_3d else "2d",
         "labels_layer": seg_result["labels_layer"],
-        "qc_png_path": seg_result.get("qc_png_path"),
+        "qc_png_path": _bundle_qc_png_path(
+            bundle_path,
+            bundle_outputs,
+            seg_result.get("qc_png_path"),
+        ),
         "qc_png_error": seg_result.get("qc_png_error"),
         "qc_png_skipped_reason": seg_result.get("qc_png_skipped_reason"),
         "object_unit": seg_result.get("object_unit", "object_or_roi"),
