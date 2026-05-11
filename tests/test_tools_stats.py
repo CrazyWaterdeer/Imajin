@@ -62,6 +62,47 @@ def test_compare_groups_defaults_to_sample_level() -> None:
     assert row["p_value"] < 0.05
 
 
+def test_compare_groups_identical_constants_returns_p_one() -> None:
+    df = pd.DataFrame(
+        {
+            "sample_name": ["c1", "c2", "t1", "t2"],
+            "group": ["control", "control", "treated", "treated"],
+            "mean_intensity": [5.0, 5.0, 5.0, 5.0],
+        }
+    )
+    table = state.put_table("constant_measurements", df, spec={"tool": "test"})
+
+    res = stats.compare_groups(table, "mean_intensity", save_csv=False)
+
+    assert res["p_value"] == pytest.approx(1.0)
+    result_df = state.get_table(res["result_table"])
+    assert "identical constants" in result_df.loc[0, "warnings"]
+
+
+def test_ensure_default_statistics_creates_summary_and_comparison() -> None:
+    table = _endpoint_table()
+
+    outputs = stats.ensure_default_statistics(save_csv=False)
+
+    assert len(outputs) == 1
+    assert outputs[0]["source_table"] == table
+    assert outputs[0]["sample_stats_table"] in state.list_tables()
+    assert outputs[0]["comparison_table"] in state.list_tables()
+    compare_df = state.get_table(outputs[0]["comparison_table"])
+    assert compare_df.loc[0, "p_value"] < 0.05
+
+
+def test_ensure_default_statistics_adds_missing_comparison_after_summary() -> None:
+    table = _endpoint_table()
+    stats.describe_table(table, "mean_intensity", save_csv=False)
+
+    outputs = stats.ensure_default_statistics(save_csv=False)
+
+    assert len(outputs) == 1
+    assert outputs[0]["object_stats_table"] is None
+    assert outputs[0]["comparison_table"] in state.list_tables()
+
+
 def test_normalize_timecourse_and_extract_features() -> None:
     df = pd.DataFrame(
         {

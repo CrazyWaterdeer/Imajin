@@ -44,6 +44,8 @@ def test_plot_group_distribution_writes_svg(tmp_path) -> None:
     assert out.read_text(encoding="utf-8").lstrip().startswith("<?xml")
     assert res["data_level"] == "sample"
     assert res["plot_data_table"] in state.list_tables()
+    assert res["p_value"] < 0.05
+    assert res["stats_result_table"] in state.list_tables()
 
 
 def test_plot_timecourse_writes_svg(tmp_path) -> None:
@@ -93,3 +95,5 @@ def test_plot_scatter_writes_svg(tmp_path) -> None:
     assert res["path"] == str(out)
     assert out.exists()
     assert res["pearson_r"] == pytest.approx(1.0)
+    assert res["pearson_p_value"] == pytest.approx(0.0)
+    assert res["fit_slope"] == pytest.approx(2.0)

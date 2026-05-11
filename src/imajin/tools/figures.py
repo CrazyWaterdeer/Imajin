@@ -130,6 +130,83 @@ def _style_axes(ax: Any) -> None:
     ax.set_axisbelow(True)
 
 
+def _format_p_value(p_value: float | None) -> str | None:
+    if p_value is None:
+        return None
+    try:
+        p = float(p_value)
+    except (TypeError, ValueError):
+        return None
+    if not np.isfinite(p):
+        return None
+    if p < 1e-4:
+        return "p < 0.0001"
+    if p < 0.001:
+        return f"p = {p:.1e}"
+    return f"p = {p:.3f}"
+
+
+def _p_stars(p_value: float | None) -> str | None:
+    if p_value is None:
+        return None
+    p = float(p_value)
+    if not np.isfinite(p):
+        return None
+    if p < 0.0001:
+        return "****"
+    if p < 0.001:
+        return "***"
+    if p < 0.01:
+        return "**"
+    if p < 0.05:
+        return "*"
+    return "ns"
+
+
+def _annotate_p_value(
+    ax: Any,
+    *,
+    positions: np.ndarray,
+    values: list[np.ndarray],
+    p_value: float | None,
+    label: str | None,
+) -> None:
+    text = _p_stars(p_value)
+    if text is None:
+        text = label
+    if not text:
+        return
+    finite_parts = [v[np.isfinite(v)] for v in values if len(v)]
+    if not finite_parts:
+        return
+    finite_values = np.concatenate(finite_parts)
+    if finite_values.size == 0:
+        return
+    y_min = float(np.min(finite_values))
+    y_max = float(np.max(finite_values))
+    y_range = y_max - y_min
+    if y_range <= 0:
+        y_range = max(abs(y_max), 1.0)
+    y = y_max + 0.10 * y_range
+    h = 0.04 * y_range
+    x0 = float(positions[0])
+    x1 = float(positions[-1])
+    if len(positions) == 2:
+        ax.plot([x0, x0, x1, x1], [y, y + h, y + h, y], color="#222222", linewidth=0.8)
+        ax.text((x0 + x1) / 2.0, y + h, text, ha="center", va="bottom", fontsize=7)
+    else:
+        ax.text(
+            0.5,
+            0.98,
+            label or text,
+            transform=ax.transAxes,
+            ha="center",
+            va="top",
+            fontsize=7,
+        )
+    ax.set_ylim(top=y + 3 * h)
+
+
 @tool(
     description="Export a publication-style group distribution figure from a numeric "
     "measurement table. Defaults to sample-level means when sample_name is present, "
@@ -151,6 +228,9 @@ def plot_group_distribution(
     width: float = 3.2,
     height: float = 2.6,
     dpi: int = 600,
+    show_n: bool = True,
+    show_stats: bool = True,
+    stats_test: Literal["auto", "ttest", "welch", "mannwhitney", "anova", "kruskal"] = "auto",
     store_plot_data: bool = True,
 ) -> dict[str, Any]:
     df = _finite_numeric_frame(get_table(table_name), value_col)
@@ -171,6 +251,30 @@ def plot_group_distribution(
         .to_numpy(dtype=float)
         for g in groups
     ]
+    stats_result: dict[str, Any] | None = None
+    stats_error: str | None = None
+    p_label: str | None = None
+    p_value: float | None = None
+    if show_stats and len(groups) >= 2:
+        try:
+            from imajin.tools import stats as _stats
+
+            stats_result = _stats.compare_groups(
+                table_name,
+                value_col,
+                group_col=group_col,
+                sample_col=sample_col,
+                level=level,
+                sample_agg=sample_agg,
+                test=stats_test,
+                save_csv=True,
+            )
+            p_value = float(stats_result["p_value"])
+            test_name = str(stats_result.get("test") or stats_test)
+            p_text = _format_p_value(p_value)
+            p_label = f"{test_name}, {p_text}" if p_text else test_name
+        except Exception as exc:  # noqa: BLE001
+            stats_error = f"{type(exc).__name__}: {exc}"
 
     plt = _pyplot()
     fig, ax = plt.subplots(figsize=(float(width), float(height)))
@@ -220,10 +324,25 @@ def plot_group_distribution(
         )
 
     ax.set_xticks(positions)
-    ax.set_xticklabels([str(g) for g in groups], rotation=25, ha="right")
+    if show_n:
+        ax.set_xticklabels(
+            [f"{g}\nn={len(v)}" for g, v in zip(groups, values, strict=False)],
+            rotation=0,
+            ha="center",
+        )
+    else:
+        ax.set_xticklabels([str(g) for g in groups], rotation=25, ha="right")
     ax.set_ylabel(ylabel or value_col)
     if title:
         ax.set_title(title)
+    if p_label:
+        _annotate_p_value(
+            ax,
+            positions=positions,
+            values=values,
+            p_value=p_value,
+            label=p_label,
+        )
     _style_axes(ax)
     fig.tight_layout()
 
@@ -237,6 +356,10 @@ def plot_group_distribution(
             "table_name": table_name,
             "value_col": value_col,
             "data_level": data_level,
+            "stats_test": stats_result.get("test") if stats_result else None,
+            "p_value": p_value,
+            "p_label": p_label,
+            "stats_error": stats_error,
         },
     )
     plt.close(fig)
@@ -267,6 +390,11 @@ def plot_group_distribution(
         "data_level": data_level,
         "n_points": int(sum(len(v) for v in values)),
         "plot_data_table": plot_table,
+        "stats_test": stats_result.get("test") if stats_result else None,
+        "p_value": p_value,
+        "p_label": p_label,
+        "stats_result_table": stats_result.get("result_table") if stats_result else None,
+        "stats_error": stats_error,
     }
 
 
@@ -329,6 +457,10 @@ def plot_timecourse(
     plt = _pyplot()
     fig, ax = plt.subplots(figsize=(float(width), float(height)))
     groups = [g for g in pd.unique(summary[group_col])]
+    group_ns = {
+        group: int(summary.loc[summary[group_col] == group, "n"].max())
+        for group in groups
+    }
     trace_id_cols = [c for c in unit_cols if c != tcol]
     if show_individual and trace_id_cols:
         traces = list(unit_df.groupby(trace_id_cols, dropna=False, sort=False))
@@ -350,7 +482,8 @@ def plot_timecourse(
         x = pd.to_numeric(part[tcol], errors="coerce").to_numpy(dtype=float)
         y = pd.to_numeric(part["mean"], errors="coerce").to_numpy(dtype=float)
         color = _PALETTE[i % len(_PALETTE)]
-        ax.plot(x, y, color=color, linewidth=1.6, label=str(group), zorder=3)
+        label = f"{group} (n={group_ns.get(group, 0)})"
+        ax.plot(x, y, color=color, linewidth=1.6, label=label, zorder=3)
         if interval != "none":
             err = pd.to_numeric(part[interval], errors="coerce").fillna(0).to_numpy(dtype=float)
             ax.fill_between(x, y - err, y + err, color=color, alpha=0.18, linewidth=0, zorder=2)
@@ -427,6 +560,7 @@ def plot_scatter(
     height: float = 2.8,
     dpi: int = 600,
     log10: bool = False,
+    fit_line: bool = True,
 ) -> dict[str, Any]:
     df = get_table(table_name).copy()
     for col in (x_col, y_col):
@@ -465,16 +599,40 @@ def plot_scatter(
         groups = []
         ax.scatter(plot_df[x_col], plot_df[y_col], s=12, alpha=0.65, color=_PALETTE[0], edgecolor="none")
 
+    slope = np.nan
+    intercept = np.nan
+    corr_p_value = np.nan
     if len(plot_df) >= 2:
-        r = float(np.corrcoef(plot_df[x_col], plot_df[y_col])[0, 1])
+        try:
+            from scipy import stats as scipy_stats
+
+            corr = scipy_stats.pearsonr(plot_df[x_col], plot_df[y_col])
+            r = float(corr.statistic)
+            corr_p_value = float(corr.pvalue)
+        except Exception:
+            r = float(np.corrcoef(plot_df[x_col], plot_df[y_col])[0, 1])
         ax.text(
             0.04,
             0.96,
-            f"r = {r:.3g}",
+            f"r = {r:.3g}" + (f"\n{_format_p_value(corr_p_value)}" if np.isfinite(corr_p_value) else ""),
             transform=ax.transAxes,
             va="top",
             ha="left",
         )
+        if fit_line and np.isfinite(r):
+            x = plot_df[x_col].to_numpy(dtype=float)
+            y = plot_df[y_col].to_numpy(dtype=float)
+            if np.nanmax(x) > np.nanmin(x):
+                slope, intercept = np.polyfit(x, y, deg=1)
+                xx = np.linspace(float(np.nanmin(x)), float(np.nanmax(x)), 100)
+                ax.plot(
+                    xx,
+                    slope * xx + intercept,
+                    color="#111111",
+                    linewidth=1.0,
+                    linestyle="--",
+                    zorder=2,
+                )
     else:
         r = np.nan
     ax.set_xlabel(xlabel or (f"log10 {x_col}" if log10 else x_col))
@@ -495,6 +653,9 @@ def plot_scatter(
             "x_col": x_col,
             "y_col": y_col,
             "log10": log10,
+            "fit_line": fit_line,
+            "pearson_r": r,
+            "pearson_p_value": corr_p_value,
         },
     )
     plt.close(fig)
@@ -507,5 +668,8 @@ def plot_scatter(
         "y_col": y_col,
         "n_points": int(len(plot_df)),
         "pearson_r": r,
+        "pearson_p_value": corr_p_value,
+        "fit_slope": float(slope) if np.isfinite(slope) else np.nan,
+        "fit_intercept": float(intercept) if np.isfinite(intercept) else np.nan,
         "groups": [str(g) for g in groups],
     }

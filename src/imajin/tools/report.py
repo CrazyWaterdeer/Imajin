@@ -332,6 +332,7 @@ def _render_report_html(
     methods_md: str,
     samples_md: str = "",
     channels_md: str = "",
+    stats_md: str = "",
     qc_md: str = "",
     neural_md: str = "",
 ) -> str:
@@ -352,6 +353,7 @@ def _render_report_html(
         f"<pre>{escape(methods_md)}</pre>"
         f"{'<pre>' + escape(samples_md) + '</pre>' if samples_md else ''}"
         f"{'<pre>' + escape(channels_md) + '</pre>' if channels_md else ''}"
+        f"{'<pre>' + escape(stats_md) + '</pre>' if stats_md else ''}"
         f"{'<pre>' + escape(neural_md) + '</pre>' if neural_md else ''}"
         f"{'<pre>' + escape(qc_md) + '</pre>' if qc_md else ''}"
         f"<h2>Operations</h2><table><tr><th>Tool</th><th>Inputs</th><th>Time</th></tr>"
@@ -411,6 +413,10 @@ def generate_report(
 
     records = provenance.read_session(session_id)
     methods = _render_methods_markdown(records)
+    from imajin.tools import stats as _stats
+
+    stats_generated = _stats.ensure_default_statistics(save_csv=True)
+    stats_md = _render_statistics_markdown()
     samples = list_samples()
     samples_md = _render_samples_markdown(samples)
     channels = list_channel_annotations()
@@ -428,6 +434,8 @@ def generate_report(
             extra += "\n" + samples_md
         if channels_md:
             extra += "\n" + channels_md
+        if stats_md:
+            extra += "\n" + stats_md
         if neural_md:
             extra += "\n" + neural_md
         if qc_md:
@@ -435,7 +443,15 @@ def generate_report(
         out.write_text(methods + extra, encoding="utf-8")
     else:
         out.write_text(
-            _render_report_html(records, methods, samples_md, channels_md, qc_md, neural_md),
+            _render_report_html(
+                records,
+                methods,
+                samples_md,
+                channels_md,
+                stats_md,
+                qc_md,
+                neural_md,
+            ),
             encoding="utf-8",
         )
 
@@ -448,6 +464,7 @@ def generate_report(
         "n_channels": len(channels),
         "n_qc_records": len(qc_records),
         "n_neural_traces": len(neural_traces),
+        "n_statistics_generated": len(stats_generated),
     }
 
 
@@ -538,7 +555,9 @@ def _markdown_table_from_df(df, *, max_rows: int = 12) -> str:
 def _render_statistics_markdown() -> str:
     from imajin.agent.state import get_table_entry, list_tables
 
-    stats_tables: list[tuple[str, object, dict[str, object]]] = []
+    summary_tables: list[tuple[str, object, dict[str, object]]] = []
+    comparison_tables: list[tuple[str, object, dict[str, object]]] = []
+    other_tables: list[tuple[str, object, dict[str, object]]] = []
     for name in list_tables():
         try:
             entry = get_table_entry(name)
@@ -548,17 +567,18 @@ def _render_statistics_markdown() -> str:
         tool_name = str(spec.get("tool") or "")
         if tool_name == "batch_auto_statistics_input":
             continue
-        if tool_name in {
-            "describe_table",
-            "compare_groups",
-            "summarize_experiment",
-        } or name.startswith(("stats_", "summary_")):
-            stats_tables.append((name, entry.df, spec))
-    if not stats_tables:
+        if tool_name == "describe_table" or name.startswith("stats_object__") or name.startswith("stats_sample__"):
+            summary_tables.append((name, entry.df, spec))
+        elif tool_name == "compare_groups" or name.startswith("stats_compare__"):
+            comparison_tables.append((name, entry.df, spec))
+        elif tool_name == "summarize_experiment" or name.startswith("summary_"):
+            other_tables.append((name, entry.df, spec))
+    if not summary_tables and not comparison_tables and not other_tables:
         return "## Statistics\n\n_No statistical analysis tables found._\n"
 
     parts = ["## Statistics", ""]
-    for name, df, spec in stats_tables:
+
+    def append_table(name: str, df, spec: dict[str, object]) -> None:
         tool_name = spec.get("tool") or "statistics"
         value_col = spec.get("value_col") or spec.get("measurement")
         level = spec.get("level") or spec.get("data_level")
@@ -572,6 +592,22 @@ def _render_statistics_markdown() -> str:
         parts.append("")
         parts.append(_markdown_table_from_df(df))
         parts.append("")
+
+    if summary_tables:
+        parts.append("### Measurement Summary")
+        parts.append("")
+        for name, df, spec in summary_tables:
+            append_table(name, df, spec)
+    if comparison_tables:
+        parts.append("### Statistical Tests")
+        parts.append("")
+        for name, df, spec in comparison_tables:
+            append_table(name, df, spec)
+    if other_tables:
+        parts.append("### Other Summaries")
+        parts.append("")
+        for name, df, spec in other_tables:
+            append_table(name, df, spec)
     return "\n".join(parts)
 
 
@@ -622,6 +658,9 @@ def generate_experiment_report(
 
     records = provenance.read_session(session_id)
     methods_md = _render_methods_markdown(records)
+    from imajin.tools import stats as _stats
+
+    stats_generated = _stats.ensure_default_statistics(save_csv=True)
 
     body = "\n".join(
         [
@@ -663,5 +702,6 @@ def generate_experiment_report(
         "n_qc_records": len(qc_records),
         "n_neural_traces": len(neural_traces),
         "n_failed": sum(1 for r in runs if r.get("status") == "failed"),
+        "n_statistics_generated": len(stats_generated),
         "session_id": session_id or provenance.current_session_id(),
     }

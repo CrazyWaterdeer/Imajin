@@ -788,7 +788,7 @@ class BatchRecipeRunner:
 
         outputs: list[dict[str, Any]] = []
         for tier, part in _statistics_partitions(combined):
-            value_cols = _default_statistics_value_columns(part)
+            value_cols = _stats.default_statistics_value_columns(part)
             if not value_cols:
                 continue
             for value_col in value_cols:

@@ -206,6 +206,34 @@ def test_generate_report_includes_qc_records(fake_session, tmp_path) -> None:
     assert res["n_qc_records"] == 1
 
 
+def test_generate_report_auto_adds_statistics_summary(fake_session, tmp_path) -> None:
+    import pandas as pd
+
+    from imajin.agent import state
+
+    state.put_table(
+        "measurements",
+        pd.DataFrame(
+            {
+                "sample_name": ["c1", "c2", "t1", "t2"],
+                "group": ["control", "control", "treated", "treated"],
+                "mean_intensity": [1.0, 1.2, 2.5, 2.8],
+            }
+        ),
+        spec={"tool": "measure_intensity"},
+    )
+
+    out = tmp_path / "report.md"
+    res = report.generate_report(str(out), format="md")
+    body = out.read_text(encoding="utf-8")
+
+    assert "## Statistics" in body
+    assert "### Measurement Summary" in body
+    assert "### Statistical Tests" in body
+    assert "p_value" in body
+    assert res["n_statistics_generated"] == 1
+
+
 def test_generate_report_rejects_bad_format(fake_session, tmp_path) -> None:
     with pytest.raises(ValueError, match="format must be"):
         report.generate_report(str(tmp_path / "x.pdf"), format="pdf")

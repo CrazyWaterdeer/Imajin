@@ -15,6 +15,80 @@ from imajin.tools.registry import tool
 SummaryLevel = Literal["auto", "sample", "object"]
 SampleAgg = Literal["mean", "median"]
 
+_STAT_TOOL_NAMES = {
+    "describe_table",
+    "compare_groups",
+    "summarize_experiment",
+}
+
+_NON_MEASUREMENT_TABLE_TOOLS = {
+    *_STAT_TOOL_NAMES,
+    "batch_auto_statistics_input",
+    "plot_group_distribution",
+    "plot_timecourse",
+    "plot_scatter",
+    "filter_table",
+}
+
+_EXCLUDED_VALUE_COLUMNS = {
+    "label",
+    "time",
+    "time_index",
+    "frame",
+    "area",
+    "area_px",
+    "volume_voxels",
+    "sample_id",
+    "file_id",
+}
+
+_PREFERRED_VALUE_TOKENS = (
+    "mean_intensity",
+    "max_intensity",
+    "min_intensity",
+    "response_mean",
+    "peak_amplitude",
+    "auc",
+    "duration_above_threshold",
+    "area_um2",
+    "volume_um3",
+)
+
+
+def default_statistics_value_columns(df: pd.DataFrame, *, limit: int = 6) -> list[str]:
+    """Pick measurement-like numeric columns for automatic summaries.
+
+    The selector is intentionally conservative: labels, time indices, raw pixel
+    area, centroids, and bookkeeping columns are skipped. Preferred microscopy
+    measurement columns are selected first, then any remaining non-bookkeeping
+    numeric columns are used as a fallback so reports do not silently omit a
+    custom measurement column.
+    """
+    numeric = list(df.select_dtypes(include="number").columns)
+
+    def usable(col: str) -> bool:
+        if col in _EXCLUDED_VALUE_COLUMNS:
+            return False
+        if col.startswith("centroid") or col.startswith("bbox"):
+            return False
+        if col.endswith("_baseline"):
+            return False
+        return True
+
+    out: list[str] = []
+    for token in _PREFERRED_VALUE_TOKENS:
+        for col in numeric:
+            if col not in out and usable(col) and token in col:
+                out.append(col)
+                if len(out) >= limit:
+                    return out
+    for col in numeric:
+        if col not in out and usable(col):
+            out.append(col)
+            if len(out) >= limit:
+                break
+    return out
+
 
 def _finite_numeric_frame(df: pd.DataFrame, value_col: str) -> tuple[pd.DataFrame, int]:
     if value_col not in df.columns:
@@ -25,6 +99,18 @@ def _finite_numeric_frame(df: pd.DataFrame, value_col: str) -> tuple[pd.DataFram
     dropped = int(len(out) - int(mask.sum()))
     out[value_col] = values
     return out.loc[mask].reset_index(drop=True), dropped
+
+
+def _finite_numeric_frame_for_report(
+    df: pd.DataFrame,
+    value_col: str,
+) -> pd.DataFrame:
+    if value_col not in df.columns:
+        return pd.DataFrame()
+    out = df.copy()
+    out[value_col] = pd.to_numeric(out[value_col], errors="coerce")
+    mask = np.isfinite(out[value_col].to_numpy(dtype=float, na_value=np.nan))
+    return out.loc[mask].reset_index(drop=True)
 
 
 def _time_column(df: pd.DataFrame, time_col: str | None = None) -> str:
@@ -436,14 +522,43 @@ def compare_groups(
         (name_a, a), (name_b, b) = grouped
         if len(a) < 2 or len(b) < 2:
             warnings.append("one or more groups have fewer than two analysis units")
+        zero_variance = (
+            (len(a) > 1 and float(np.var(a, ddof=1)) == 0.0)
+            or (len(b) > 1 and float(np.var(b, ddof=1)) == 0.0)
+        )
+        if zero_variance:
+            warnings.append(
+                "one or more groups have zero within-group variance; parametric "
+                "p-values should be interpreted cautiously"
+            )
         if test in {"ttest", "welch"}:
-            stat, pvalue = scipy_stats.ttest_ind(a, b, equal_var=False, nan_policy="omit")
+            import warnings as _warnings
+
+            with _warnings.catch_warnings():
+                _warnings.filterwarnings(
+                    "ignore",
+                    message="Precision loss occurred",
+                    category=RuntimeWarning,
+                )
+                stat, pvalue = scipy_stats.ttest_ind(
+                    a,
+                    b,
+                    equal_var=False,
+                    nan_policy="omit",
+                )
             test_name = "welch_ttest"
         elif test == "mannwhitney":
             stat, pvalue = scipy_stats.mannwhitneyu(a, b, alternative="two-sided")
             test_name = "mann_whitney_u"
         else:
             raise ValueError("two-group tests must be auto, ttest/welch, or mannwhitney")
+        if not np.isfinite(pvalue):
+            if len(a) and len(b) and np.all(a == a[0]) and np.all(b == b[0]) and np.isclose(a[0], b[0]):
+                stat = 0.0
+                pvalue = 1.0
+                warnings.append(
+                    "both groups were identical constants; p-value was set to 1.0"
+                )
         mean_diff = float(np.mean(b) - np.mean(a))
         median_diff = float(np.median(b) - np.median(a))
         ci_low, ci_high = _bootstrap_mean_difference(
@@ -554,6 +669,141 @@ def compare_groups(
         "dropped_nonfinite": dropped,
         "warnings": warnings,
     }
+
+
+def _existing_auto_statistics_keys() -> set[tuple[str, str, str]]:
+    from imajin.agent.state import get_table_entry, list_tables
+
+    keys: set[tuple[str, str, str]] = set()
+    covered_inputs: dict[str, tuple[list[str], str]] = {}
+    for name in list_tables():
+        try:
+            spec = dict(get_table_entry(name).spec or {})
+        except KeyError:
+            continue
+        if spec.get("tool") == "batch_auto_statistics_input":
+            sources = [str(s) for s in (spec.get("source_tables") or [])]
+            value_col = spec.get("value_col")
+            if value_col:
+                covered_inputs[name] = (sources, str(value_col))
+        source = spec.get("source_table")
+        value_col = spec.get("value_col")
+        tool_name = spec.get("tool")
+        if tool_name == "describe_table" and source and value_col:
+            keys.add((str(source), str(value_col), "describe"))
+        elif tool_name == "compare_groups" and source and value_col:
+            keys.add((str(source), str(value_col), "compare"))
+
+    # Batch stats operate on temporary stats_input tables. Treat those as
+    # covering their primary measurement tables to avoid duplicate report stats.
+    for stats_input_name, (sources, value_col) in covered_inputs.items():
+        for source in sources:
+            for kind in ("describe", "compare"):
+                if (stats_input_name, value_col, kind) in keys:
+                    keys.add((source, value_col, kind))
+    return keys
+
+
+def _is_report_measurement_table(name: str, spec: dict[str, Any]) -> bool:
+    tool_name = str(spec.get("tool") or "")
+    if name.startswith(("stats_", "summary_", "plotdata_")):
+        return False
+    if tool_name in _NON_MEASUREMENT_TABLE_TOOLS:
+        return False
+    return True
+
+
+def ensure_default_statistics(
+    *,
+    save_csv: bool = True,
+    max_value_columns: int = 6,
+    require_group_for_comparison: bool = True,
+) -> list[dict[str, Any]]:
+    """Create missing report-ready summary and comparison tables.
+
+    Reports are often generated after measurement but before the user explicitly
+    calls `describe_table` or `compare_groups`. This helper scans current
+    measurement-like tables, writes descriptive summaries for selected numeric
+    columns, and runs group comparisons when a table has at least two groups.
+    Existing stats tables are respected, so repeated report generation does not
+    keep duplicating outputs.
+    """
+    from imajin.agent.state import get_table_entry, list_tables
+
+    existing = _existing_auto_statistics_keys()
+    outputs: list[dict[str, Any]] = []
+    table_names = list(list_tables())
+    for table_name in table_names:
+        try:
+            entry = get_table_entry(table_name)
+        except KeyError:
+            continue
+        spec = dict(entry.spec or {})
+        if not _is_report_measurement_table(table_name, spec):
+            continue
+        df = entry.df
+        if df is None or df.empty:
+            continue
+        value_cols = default_statistics_value_columns(
+            df,
+            limit=int(max_value_columns),
+        )
+        for value_col in value_cols:
+            valid = _finite_numeric_frame_for_report(df, value_col)
+            if valid.empty:
+                continue
+            desc: dict[str, Any] = {}
+            created_any = False
+            if (table_name, value_col, "describe") not in existing:
+                desc = describe_table(table_name, value_col, save_csv=save_csv)
+                existing.add((table_name, value_col, "describe"))
+                created_any = True
+            compare: dict[str, Any] | None = None
+            compare_error: str | None = None
+            if (
+                "group" in valid.columns
+                and valid["group"].nunique(dropna=True) >= 2
+                and (table_name, value_col, "compare") not in existing
+            ):
+                try:
+                    compare = compare_groups(
+                        table_name,
+                        value_col,
+                        save_csv=save_csv,
+                    )
+                    existing.add((table_name, value_col, "compare"))
+                    created_any = True
+                except Exception as exc:  # noqa: BLE001
+                    compare_error = f"{type(exc).__name__}: {exc}"
+                    created_any = True
+            elif (
+                require_group_for_comparison
+                and (table_name, value_col, "compare") not in existing
+            ):
+                compare_error = "group comparison skipped: fewer than two groups"
+                created_any = True
+            if not created_any:
+                continue
+            outputs.append(
+                {
+                    "source_table": table_name,
+                    "value_col": value_col,
+                    "object_stats_table": desc.get("object_stats_table"),
+                    "sample_stats_table": desc.get("sample_stats_table"),
+                    "comparison_table": (
+                        compare.get("result_table")
+                        if isinstance(compare, dict)
+                        else None
+                    ),
+                    "comparison_p_value": (
+                        compare.get("p_value")
+                        if isinstance(compare, dict)
+                        else None
+                    ),
+                    "comparison_error": compare_error,
+                }
+            )
+    return outputs
 
 
 @tool(
