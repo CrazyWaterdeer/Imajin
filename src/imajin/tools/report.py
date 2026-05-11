@@ -371,6 +371,14 @@ def _short_inputs(inputs: dict[str, Any]) -> str:
     return ", ".join(pairs)
 
 
+def _append_optional_markdown(base: str, *sections: str) -> str:
+    out = base
+    for section in sections:
+        if section:
+            out += "\n" + section
+    return out
+
+
 @tool(
     description="Render a deterministic Methods paragraph (markdown) from the session "
     "provenance log. Lists each analytical step with parameters, suitable for pasting "
@@ -429,18 +437,17 @@ def generate_report(
     out.parent.mkdir(parents=True, exist_ok=True)
 
     if format == "md":
-        extra = ""
-        if samples_md:
-            extra += "\n" + samples_md
-        if channels_md:
-            extra += "\n" + channels_md
-        if stats_md:
-            extra += "\n" + stats_md
-        if neural_md:
-            extra += "\n" + neural_md
-        if qc_md:
-            extra += "\n" + qc_md
-        out.write_text(methods + extra, encoding="utf-8")
+        out.write_text(
+            _append_optional_markdown(
+                methods,
+                samples_md,
+                channels_md,
+                stats_md,
+                neural_md,
+                qc_md,
+            ),
+            encoding="utf-8",
+        )
     else:
         out.write_text(
             _render_report_html(
@@ -552,7 +559,11 @@ def _markdown_table_from_df(df, *, max_rows: int = 12) -> str:
     return "\n".join(lines)
 
 
-def _render_statistics_markdown() -> str:
+def _statistics_tables() -> tuple[
+    list[tuple[str, object, dict[str, object]]],
+    list[tuple[str, object, dict[str, object]]],
+    list[tuple[str, object, dict[str, object]]],
+]:
     from imajin.agent.state import get_table_entry, list_tables
 
     summary_tables: list[tuple[str, object, dict[str, object]]] = []
@@ -567,47 +578,63 @@ def _render_statistics_markdown() -> str:
         tool_name = str(spec.get("tool") or "")
         if tool_name == "batch_auto_statistics_input":
             continue
-        if tool_name == "describe_table" or name.startswith("stats_object__") or name.startswith("stats_sample__"):
-            summary_tables.append((name, entry.df, spec))
+        item = (name, entry.df, spec)
+        if (
+            tool_name == "describe_table"
+            or name.startswith("stats_object__")
+            or name.startswith("stats_sample__")
+        ):
+            summary_tables.append(item)
         elif tool_name == "compare_groups" or name.startswith("stats_compare__"):
-            comparison_tables.append((name, entry.df, spec))
+            comparison_tables.append(item)
         elif tool_name == "summarize_experiment" or name.startswith("summary_"):
-            other_tables.append((name, entry.df, spec))
+            other_tables.append(item)
+    return summary_tables, comparison_tables, other_tables
+
+
+def _append_statistics_table(
+    parts: list[str],
+    name: str,
+    df,
+    spec: dict[str, object],
+) -> None:
+    tool_name = spec.get("tool") or "statistics"
+    value_col = spec.get("value_col") or spec.get("measurement")
+    level = spec.get("level") or spec.get("data_level")
+    title_bits = [str(tool_name)]
+    if value_col:
+        title_bits.append(str(value_col))
+    if level:
+        title_bits.append(str(level))
+    parts.append(f"### {name}")
+    parts.append("- " + "; ".join(title_bits))
+    parts.append("")
+    parts.append(_markdown_table_from_df(df))
+    parts.append("")
+
+
+def _append_statistics_section(
+    parts: list[str],
+    heading: str,
+    tables: list[tuple[str, object, dict[str, object]]],
+) -> None:
+    if not tables:
+        return
+    parts.append(f"### {heading}")
+    parts.append("")
+    for name, df, spec in tables:
+        _append_statistics_table(parts, name, df, spec)
+
+
+def _render_statistics_markdown() -> str:
+    summary_tables, comparison_tables, other_tables = _statistics_tables()
     if not summary_tables and not comparison_tables and not other_tables:
         return "## Statistics\n\n_No statistical analysis tables found._\n"
 
     parts = ["## Statistics", ""]
-
-    def append_table(name: str, df, spec: dict[str, object]) -> None:
-        tool_name = spec.get("tool") or "statistics"
-        value_col = spec.get("value_col") or spec.get("measurement")
-        level = spec.get("level") or spec.get("data_level")
-        title_bits = [str(tool_name)]
-        if value_col:
-            title_bits.append(str(value_col))
-        if level:
-            title_bits.append(str(level))
-        parts.append(f"### {name}")
-        parts.append(f"- " + "; ".join(title_bits))
-        parts.append("")
-        parts.append(_markdown_table_from_df(df))
-        parts.append("")
-
-    if summary_tables:
-        parts.append("### Measurement Summary")
-        parts.append("")
-        for name, df, spec in summary_tables:
-            append_table(name, df, spec)
-    if comparison_tables:
-        parts.append("### Statistical Tests")
-        parts.append("")
-        for name, df, spec in comparison_tables:
-            append_table(name, df, spec)
-    if other_tables:
-        parts.append("### Other Summaries")
-        parts.append("")
-        for name, df, spec in other_tables:
-            append_table(name, df, spec)
+    _append_statistics_section(parts, "Measurement Summary", summary_tables)
+    _append_statistics_section(parts, "Statistical Tests", comparison_tables)
+    _append_statistics_section(parts, "Other Summaries", other_tables)
     return "\n".join(parts)
 
 

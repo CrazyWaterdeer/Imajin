@@ -9,6 +9,7 @@ import pandas as pd
 from imajin.agent.state import get_table, put_table
 from imajin.paths import normalize_user_path
 from imajin.results import record_result, slugify_result_name, unique_result_path
+from imajin.tools._dataframes import finite_numeric_frame, infer_time_column
 from imajin.tools.registry import tool
 
 
@@ -45,27 +46,6 @@ def _pyplot():
     import matplotlib.pyplot as plt
 
     return plt
-
-
-def _finite_numeric_frame(df: pd.DataFrame, value_col: str) -> pd.DataFrame:
-    if value_col not in df.columns:
-        raise ValueError(f"value_col {value_col!r} not found in columns: {list(df.columns)}")
-    out = df.copy()
-    vals = pd.to_numeric(out[value_col], errors="coerce")
-    mask = np.isfinite(vals.to_numpy(dtype=float, na_value=np.nan))
-    out[value_col] = vals
-    return out.loc[mask].reset_index(drop=True)
-
-
-def _time_column(df: pd.DataFrame, time_col: str | None = None) -> str:
-    if time_col:
-        if time_col not in df.columns:
-            raise ValueError(f"time_col {time_col!r} not found in columns: {list(df.columns)}")
-        return time_col
-    for candidate in ("time_s", "time_index", "time", "t", "frame"):
-        if candidate in df.columns:
-            return candidate
-    raise ValueError("could not infer a time column; pass time_col explicitly")
 
 
 def _figure_path(stem: str, output_path: str | None, fmt: str) -> Path:
@@ -207,6 +187,57 @@ def _annotate_p_value(
     ax.set_ylim(top=y + 3 * h)
 
 
+def _distribution_groups(
+    plot_df: pd.DataFrame,
+    *,
+    group_col: str,
+) -> tuple[list[Any], list[np.ndarray]]:
+    groups = [g for g in pd.unique(plot_df[group_col])]
+    values = [
+        pd.to_numeric(plot_df.loc[plot_df[group_col] == g, "plot_value"], errors="coerce")
+        .dropna()
+        .to_numpy(dtype=float)
+        for g in groups
+    ]
+    return groups, values
+
+
+def _distribution_statistics(
+    table_name: str,
+    value_col: str,
+    *,
+    group_col: str,
+    sample_col: str,
+    level: Literal["auto", "sample", "object"],
+    sample_agg: Literal["mean", "median"],
+    stats_test: Literal["auto", "ttest", "welch", "mannwhitney", "anova", "kruskal"],
+    show_stats: bool,
+    n_groups: int,
+) -> tuple[dict[str, Any] | None, float | None, str | None, str | None]:
+    if not show_stats or n_groups < 2:
+        return None, None, None, None
+    try:
+        from imajin.tools import stats as _stats
+
+        stats_result = _stats.compare_groups(
+            table_name,
+            value_col,
+            group_col=group_col,
+            sample_col=sample_col,
+            level=level,
+            sample_agg=sample_agg,
+            test=stats_test,
+            save_csv=True,
+        )
+        p_value = float(stats_result["p_value"])
+        test_name = str(stats_result.get("test") or stats_test)
+        p_text = _format_p_value(p_value)
+        p_label = f"{test_name}, {p_text}" if p_text else test_name
+        return stats_result, p_value, p_label, None
+    except Exception as exc:  # noqa: BLE001
+        return None, None, None, f"{type(exc).__name__}: {exc}"
+
+
 @tool(
     description="Export a publication-style group distribution figure from a numeric "
     "measurement table. Defaults to sample-level means when sample_name is present, "
@@ -233,7 +264,7 @@ def plot_group_distribution(
     stats_test: Literal["auto", "ttest", "welch", "mannwhitney", "anova", "kruskal"] = "auto",
     store_plot_data: bool = True,
 ) -> dict[str, Any]:
-    df = _finite_numeric_frame(get_table(table_name), value_col)
+    df, _dropped = finite_numeric_frame(get_table(table_name), value_col)
     if df.empty:
         raise ValueError(f"table {table_name!r} has no finite values in {value_col!r}")
     plot_df, data_level = _sample_or_object_values(
@@ -244,37 +275,18 @@ def plot_group_distribution(
         level=level,
         sample_agg=sample_agg,
     )
-    groups = [g for g in pd.unique(plot_df[group_col])]
-    values = [
-        pd.to_numeric(plot_df.loc[plot_df[group_col] == g, "plot_value"], errors="coerce")
-        .dropna()
-        .to_numpy(dtype=float)
-        for g in groups
-    ]
-    stats_result: dict[str, Any] | None = None
-    stats_error: str | None = None
-    p_label: str | None = None
-    p_value: float | None = None
-    if show_stats and len(groups) >= 2:
-        try:
-            from imajin.tools import stats as _stats
-
-            stats_result = _stats.compare_groups(
-                table_name,
-                value_col,
-                group_col=group_col,
-                sample_col=sample_col,
-                level=level,
-                sample_agg=sample_agg,
-                test=stats_test,
-                save_csv=True,
-            )
-            p_value = float(stats_result["p_value"])
-            test_name = str(stats_result.get("test") or stats_test)
-            p_text = _format_p_value(p_value)
-            p_label = f"{test_name}, {p_text}" if p_text else test_name
-        except Exception as exc:  # noqa: BLE001
-            stats_error = f"{type(exc).__name__}: {exc}"
+    groups, values = _distribution_groups(plot_df, group_col=group_col)
+    stats_result, p_value, p_label, stats_error = _distribution_statistics(
+        table_name,
+        value_col,
+        group_col=group_col,
+        sample_col=sample_col,
+        level=level,
+        sample_agg=sample_agg,
+        stats_test=stats_test,
+        show_stats=show_stats,
+        n_groups=len(groups),
+    )
 
     plt = _pyplot()
     fig, ax = plt.subplots(figsize=(float(width), float(height)))
@@ -424,10 +436,10 @@ def plot_timecourse(
     max_individual_traces: int = 150,
     store_plot_data: bool = True,
 ) -> dict[str, Any]:
-    df = _finite_numeric_frame(get_table(table_name), value_col)
+    df, _dropped = finite_numeric_frame(get_table(table_name), value_col)
     if df.empty:
         raise ValueError(f"table {table_name!r} has no finite values in {value_col!r}")
-    tcol = _time_column(df, time_col)
+    tcol = infer_time_column(df, time_col)
     if group_col not in df.columns:
         df[group_col] = "all"
 

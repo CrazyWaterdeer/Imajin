@@ -9,6 +9,7 @@ import pandas as pd
 from imajin.agent.state import get_table, put_table
 from imajin.paths import normalize_user_path
 from imajin.results import record_result, slugify_result_name, unique_result_path
+from imajin.tools._dataframes import finite_numeric_frame, infer_time_column
 from imajin.tools.registry import tool
 
 
@@ -88,40 +89,6 @@ def default_statistics_value_columns(df: pd.DataFrame, *, limit: int = 6) -> lis
             if len(out) >= limit:
                 break
     return out
-
-
-def _finite_numeric_frame(df: pd.DataFrame, value_col: str) -> tuple[pd.DataFrame, int]:
-    if value_col not in df.columns:
-        raise ValueError(f"value_col {value_col!r} not found in columns: {list(df.columns)}")
-    out = df.copy()
-    values = pd.to_numeric(out[value_col], errors="coerce")
-    mask = np.isfinite(values.to_numpy(dtype=float, na_value=np.nan))
-    dropped = int(len(out) - int(mask.sum()))
-    out[value_col] = values
-    return out.loc[mask].reset_index(drop=True), dropped
-
-
-def _finite_numeric_frame_for_report(
-    df: pd.DataFrame,
-    value_col: str,
-) -> pd.DataFrame:
-    if value_col not in df.columns:
-        return pd.DataFrame()
-    out = df.copy()
-    out[value_col] = pd.to_numeric(out[value_col], errors="coerce")
-    mask = np.isfinite(out[value_col].to_numpy(dtype=float, na_value=np.nan))
-    return out.loc[mask].reset_index(drop=True)
-
-
-def _time_column(df: pd.DataFrame, time_col: str | None = None) -> str:
-    if time_col:
-        if time_col not in df.columns:
-            raise ValueError(f"time_col {time_col!r} not found in columns: {list(df.columns)}")
-        return time_col
-    for candidate in ("time_s", "time_index", "time", "t", "frame"):
-        if candidate in df.columns:
-            return candidate
-    raise ValueError("could not infer a time column; pass time_col explicitly")
 
 
 def _trace_group_columns(
@@ -382,7 +349,7 @@ def describe_table(
     sample_col: str = "sample_name",
     save_csv: bool = True,
 ) -> dict[str, Any]:
-    df, dropped = _finite_numeric_frame(get_table(table_name), value_col)
+    df, dropped = finite_numeric_frame(get_table(table_name), value_col)
     if df.empty:
         raise ValueError(f"table {table_name!r} has no finite values in {value_col!r}")
 
@@ -492,7 +459,7 @@ def compare_groups(
 ) -> dict[str, Any]:
     from scipy import stats as scipy_stats
 
-    df, dropped = _finite_numeric_frame(get_table(table_name), value_col)
+    df, dropped = finite_numeric_frame(get_table(table_name), value_col)
     analysis, analysis_col, data_level, warnings = _analysis_frame(
         df,
         value_col,
@@ -713,6 +680,71 @@ def _is_report_measurement_table(name: str, spec: dict[str, Any]) -> bool:
     return True
 
 
+def _table_has_comparable_groups(
+    df: pd.DataFrame,
+    *,
+    group_col: str = "group",
+) -> bool:
+    return group_col in df.columns and df[group_col].nunique(dropna=True) >= 2
+
+
+def _ensure_statistics_for_column(
+    table_name: str,
+    value_col: str,
+    valid: pd.DataFrame,
+    existing: set[tuple[str, str, str]],
+    *,
+    save_csv: bool,
+    require_group_for_comparison: bool,
+) -> dict[str, Any] | None:
+    desc: dict[str, Any] = {}
+    created_any = False
+    if (table_name, value_col, "describe") not in existing:
+        desc = describe_table(table_name, value_col, save_csv=save_csv)
+        existing.add((table_name, value_col, "describe"))
+        created_any = True
+
+    compare: dict[str, Any] | None = None
+    compare_error: str | None = None
+    if (
+        _table_has_comparable_groups(valid)
+        and (table_name, value_col, "compare") not in existing
+    ):
+        try:
+            compare = compare_groups(table_name, value_col, save_csv=save_csv)
+            existing.add((table_name, value_col, "compare"))
+            created_any = True
+        except Exception as exc:  # noqa: BLE001
+            compare_error = f"{type(exc).__name__}: {exc}"
+            created_any = True
+    elif (
+        require_group_for_comparison
+        and (table_name, value_col, "compare") not in existing
+    ):
+        compare_error = "group comparison skipped: fewer than two groups"
+        created_any = True
+
+    if not created_any:
+        return None
+    return {
+        "source_table": table_name,
+        "value_col": value_col,
+        "object_stats_table": desc.get("object_stats_table"),
+        "sample_stats_table": desc.get("sample_stats_table"),
+        "comparison_table": (
+            compare.get("result_table")
+            if isinstance(compare, dict)
+            else None
+        ),
+        "comparison_p_value": (
+            compare.get("p_value")
+            if isinstance(compare, dict)
+            else None
+        ),
+        "comparison_error": compare_error,
+    }
+
+
 def ensure_default_statistics(
     *,
     save_csv: bool = True,
@@ -749,60 +781,19 @@ def ensure_default_statistics(
             limit=int(max_value_columns),
         )
         for value_col in value_cols:
-            valid = _finite_numeric_frame_for_report(df, value_col)
+            valid, _dropped = finite_numeric_frame(df, value_col, missing="empty")
             if valid.empty:
                 continue
-            desc: dict[str, Any] = {}
-            created_any = False
-            if (table_name, value_col, "describe") not in existing:
-                desc = describe_table(table_name, value_col, save_csv=save_csv)
-                existing.add((table_name, value_col, "describe"))
-                created_any = True
-            compare: dict[str, Any] | None = None
-            compare_error: str | None = None
-            if (
-                "group" in valid.columns
-                and valid["group"].nunique(dropna=True) >= 2
-                and (table_name, value_col, "compare") not in existing
-            ):
-                try:
-                    compare = compare_groups(
-                        table_name,
-                        value_col,
-                        save_csv=save_csv,
-                    )
-                    existing.add((table_name, value_col, "compare"))
-                    created_any = True
-                except Exception as exc:  # noqa: BLE001
-                    compare_error = f"{type(exc).__name__}: {exc}"
-                    created_any = True
-            elif (
-                require_group_for_comparison
-                and (table_name, value_col, "compare") not in existing
-            ):
-                compare_error = "group comparison skipped: fewer than two groups"
-                created_any = True
-            if not created_any:
-                continue
-            outputs.append(
-                {
-                    "source_table": table_name,
-                    "value_col": value_col,
-                    "object_stats_table": desc.get("object_stats_table"),
-                    "sample_stats_table": desc.get("sample_stats_table"),
-                    "comparison_table": (
-                        compare.get("result_table")
-                        if isinstance(compare, dict)
-                        else None
-                    ),
-                    "comparison_p_value": (
-                        compare.get("p_value")
-                        if isinstance(compare, dict)
-                        else None
-                    ),
-                    "comparison_error": compare_error,
-                }
+            output = _ensure_statistics_for_column(
+                table_name,
+                value_col,
+                valid,
+                existing,
+                save_csv=save_csv,
+                require_group_for_comparison=require_group_for_comparison,
             )
+            if output is not None:
+                outputs.append(output)
     return outputs
 
 
@@ -831,8 +822,8 @@ def normalize_timecourse(
     output_col: str | None = None,
     new_table_name: str | None = None,
 ) -> dict[str, Any]:
-    df, dropped = _finite_numeric_frame(get_table(table_name), value_col)
-    tcol = _time_column(df, time_col)
+    df, dropped = finite_numeric_frame(get_table(table_name), value_col)
+    tcol = infer_time_column(df, time_col)
     trace_cols = _trace_group_columns(df, label_col=label_col, group_cols=group_cols)
     out_col = output_col or {
         "raw": value_col,
@@ -943,8 +934,8 @@ def extract_timecourse_features(
     new_table_name: str | None = None,
     save_csv: bool = True,
 ) -> dict[str, Any]:
-    df, dropped = _finite_numeric_frame(get_table(table_name), value_col)
-    tcol = _time_column(df, time_col)
+    df, dropped = finite_numeric_frame(get_table(table_name), value_col)
+    tcol = infer_time_column(df, time_col)
     trace_cols = _trace_group_columns(df, label_col=label_col, group_cols=group_cols)
     rows: list[dict[str, Any]] = []
     for key, group in df.groupby(trace_cols, dropna=False, sort=False):

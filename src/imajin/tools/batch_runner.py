@@ -53,6 +53,105 @@ def _statistics_partitions(df: Any) -> list[tuple[str, Any]]:
     return partitions or [("all", df)]
 
 
+def _combined_primary_table(primary_tables: list[str]) -> Any | None:
+    import pandas as pd
+
+    from imajin.agent.state import get_table
+
+    frames = []
+    for name in primary_tables:
+        try:
+            frame = get_table(name)
+        except KeyError:
+            continue
+        if frame is not None and not frame.empty:
+            frames.append(frame.copy())
+    if not frames:
+        return None
+    return pd.concat(frames, ignore_index=True, sort=False)
+
+
+def _batch_stats_input_name(bundle_name: str, tier: str, value_col: str) -> str:
+    from imajin.results import slugify_result_name
+
+    return "__".join(
+        [
+            "stats_input",
+            slugify_result_name(bundle_name),
+            slugify_result_name(tier),
+            slugify_result_name(value_col),
+        ]
+    )
+
+
+def _finite_value_rows(part: Any, value_col: str) -> Any:
+    import pandas as pd
+
+    valid = part.copy()
+    valid[value_col] = pd.to_numeric(valid[value_col], errors="coerce")
+    return valid[valid[value_col].notna()].reset_index(drop=True)
+
+
+def _compare_batch_stats(
+    stats_input_name: str,
+    value_col: str,
+    *,
+    valid: Any,
+    tier: str,
+) -> dict[str, Any] | None:
+    from imajin.tools import stats as _stats
+
+    if valid["group"].nunique(dropna=True) < 2:
+        return None
+    try:
+        return _stats.compare_groups(
+            stats_input_name,
+            value_col,
+            level="auto",
+            save_csv=True,
+        )
+    except Exception as exc:  # noqa: BLE001
+        return {
+            "error": f"{type(exc).__name__}: {exc}",
+            "value_col": value_col,
+            "tier": tier,
+        }
+
+
+def _batch_statistics_output(
+    *,
+    tier: str,
+    value_col: str,
+    stats_input_name: str,
+    desc: dict[str, Any],
+    compare: dict[str, Any] | None,
+) -> dict[str, Any]:
+    return {
+        "tier": tier,
+        "value_col": value_col,
+        "input_table": stats_input_name,
+        "object_stats_table": desc.get("object_stats_table"),
+        "sample_stats_table": desc.get("sample_stats_table"),
+        "object_stats_csv": desc.get("object_stats_csv"),
+        "sample_stats_csv": desc.get("sample_stats_csv"),
+        "comparison_table": (
+            compare.get("result_table")
+            if isinstance(compare, dict)
+            else None
+        ),
+        "comparison_csv": (
+            compare.get("csv_path")
+            if isinstance(compare, dict)
+            else None
+        ),
+        "comparison_error": (
+            compare.get("error")
+            if isinstance(compare, dict)
+            else None
+        ),
+    }
+
+
 def loaded_layer_metadata_text(layer: Any) -> str:
     md = getattr(layer, "metadata", {}) or {}
     parts = [getattr(layer, "name", "")]
@@ -737,23 +836,13 @@ class BatchRecipeRunner:
     def _write_batch_statistics(self, primary_tables: list[str]) -> None:
         if not primary_tables:
             return
-        import pandas as pd
 
-        from imajin.agent.state import get_table, put_table
-        from imajin.results import slugify_result_name
+        from imajin.agent.state import put_table
         from imajin.tools import stats as _stats
 
-        frames = []
-        for name in primary_tables:
-            try:
-                frame = get_table(name)
-            except KeyError:
-                continue
-            if frame is not None and not frame.empty:
-                frames.append(frame.copy())
-        if not frames:
+        combined = _combined_primary_table(primary_tables)
+        if combined is None:
             return
-        combined = pd.concat(frames, ignore_index=True, sort=False)
         if not {"sample_name", "group"}.issubset(combined.columns):
             return
 
@@ -763,20 +852,16 @@ class BatchRecipeRunner:
             if not value_cols:
                 continue
             for value_col in value_cols:
-                valid = part.copy()
-                valid[value_col] = pd.to_numeric(valid[value_col], errors="coerce")
-                valid = valid[valid[value_col].notna()].reset_index(drop=True)
+                valid = _finite_value_rows(part, value_col)
                 if valid.empty:
                     continue
+                stats_input_name = _batch_stats_input_name(
+                    self.parent_bundle.name,
+                    tier,
+                    value_col,
+                )
                 stats_input_name = put_table(
-                    "__".join(
-                        [
-                            "stats_input",
-                            slugify_result_name(self.parent_bundle.name),
-                            slugify_result_name(tier),
-                            slugify_result_name(value_col),
-                        ]
-                    ),
+                    stats_input_name,
                     valid,
                     spec={
                         "tool": "batch_auto_statistics_input",
@@ -790,46 +875,20 @@ class BatchRecipeRunner:
                     value_col,
                     save_csv=True,
                 )
-                compare: dict[str, Any] | None = None
-                if valid["group"].nunique(dropna=True) >= 2:
-                    try:
-                        compare = _stats.compare_groups(
-                            stats_input_name,
-                            value_col,
-                            level="auto",
-                            save_csv=True,
-                        )
-                    except Exception as exc:  # noqa: BLE001
-                        compare = {
-                            "error": f"{type(exc).__name__}: {exc}",
-                            "value_col": value_col,
-                            "tier": tier,
-                        }
+                compare = _compare_batch_stats(
+                    stats_input_name,
+                    value_col,
+                    valid=valid,
+                    tier=tier,
+                )
                 outputs.append(
-                    {
-                        "tier": tier,
-                        "value_col": value_col,
-                        "input_table": stats_input_name,
-                        "object_stats_table": desc.get("object_stats_table"),
-                        "sample_stats_table": desc.get("sample_stats_table"),
-                        "object_stats_csv": desc.get("object_stats_csv"),
-                        "sample_stats_csv": desc.get("sample_stats_csv"),
-                        "comparison_table": (
-                            compare.get("result_table")
-                            if isinstance(compare, dict)
-                            else None
-                        ),
-                        "comparison_csv": (
-                            compare.get("csv_path")
-                            if isinstance(compare, dict)
-                            else None
-                        ),
-                        "comparison_error": (
-                            compare.get("error")
-                            if isinstance(compare, dict)
-                            else None
-                        ),
-                    }
+                    _batch_statistics_output(
+                        tier=tier,
+                        value_col=value_col,
+                        stats_input_name=stats_input_name,
+                        desc=desc,
+                        compare=compare,
+                    )
                 )
         self.statistics_outputs = outputs
 
