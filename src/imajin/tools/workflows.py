@@ -1,17 +1,13 @@
 from __future__ import annotations
 
-import inspect
 from pathlib import Path
 from typing import Any
 
-from imajin.analysis.arrays import metadata_axes_without_channel
 from imajin.analysis.workflow import (
-    build_sample_summary as _build_sample_summary,
     check_analysis_memory_budget as _check_analysis_memory_budget,
     decide_3d as _decide_3d,
     derive_size_params as _derive_size_params,
     normalize_domain_spec as _normalize_domain_spec,
-    normalize_preprocess as _normalize_preprocess,
     normalize_segmentation_method as _normalize_segmentation_method,
 )
 from imajin.agent.execution import raise_if_cancelled, report_progress
@@ -22,183 +18,19 @@ from imajin.agent.state import (
 )
 from imajin.tools.batch_runner import BatchRecipeRunner
 from imajin.tools import measure as _measure
-from imajin.tools import preprocess as _preprocess
-from imajin.tools import segment as _segment
+from imajin.tools._workflow_outputs import (
+    _bundle_qc_png_path,
+    _empty_bundle_outputs,
+    _write_analysis_bundle_outputs,
+)
+from imajin.tools._workflow_steps import (
+    _layer_axes,
+    _precompute_domain_layer,
+    _run_preprocess_step,
+    _run_segmentation_step,
+)
 from imajin.tools.napari_ops import snapshot_layer
 from imajin.tools.registry import tool
-
-
-def _layer_axes(snapshot: Any) -> str | None:
-    return metadata_axes_without_channel(
-        snapshot.metadata if isinstance(snapshot.metadata, dict) else None,
-        getattr(snapshot.data, "ndim", 0),
-    )
-
-
-def _filtered_kwargs(func: Any, options: dict[str, Any]) -> dict[str, Any]:
-    params = inspect.signature(func).parameters
-    return {key: value for key, value in options.items() if key in params}
-
-
-def _empty_bundle_outputs() -> dict[str, str | None]:
-    return {
-        "labels_cells": None,
-        "labels_domain": None,
-        "qc_png": None,
-    }
-
-
-def _bundle_qc_png_path(
-    bundle_path: Path | None,
-    bundle_outputs: dict[str, str | None],
-    fallback: str | None,
-) -> str | None:
-    rel = bundle_outputs.get("qc_png")
-    if bundle_path is not None and rel:
-        return str((bundle_path / rel).resolve())
-    return fallback
-
-
-def _remove_copied_standalone_qc(
-    qc_png: str | None,
-    *,
-    bundle_path: Path,
-    copied_rel: str | None,
-) -> None:
-    if not qc_png or not copied_rel:
-        return
-    from imajin.paths import normalize_user_path
-
-    src = normalize_user_path(qc_png).resolve()
-    dst = (bundle_path / copied_rel).resolve()
-    if src == dst or not src.exists():
-        return
-    if src.parent.name != "segmentation_qc":
-        return
-    src.unlink()
-    try:
-        src.parent.rmdir()
-    except OSError:
-        pass
-
-
-def _single_bundle_run_context_extras(anchor: Path | None) -> dict[str, Any]:
-    from imajin.agent.state import list_channel_annotations
-
-    channel_roles: dict[str, str] = {}
-    for entry in list_channel_annotations():
-        layer_name = entry.get("layer_name")
-        role = entry.get("role")
-        if layer_name and role:
-            channel_roles[str(layer_name)] = str(role)
-
-    return {
-        "folder_set": [str(anchor)] if anchor is not None else [],
-        "channel_roles": channel_roles,
-        "scope_filters": [],
-    }
-
-
-def _write_analysis_bundle_outputs(
-    *,
-    target_layer: str,
-    target_source: str,
-    segmentation_method: str,
-    analysis_dim: str,
-    tier: str,
-    bundle_suffix: str,
-    table_names: list[str],
-    labels_cells: str,
-    labels_domain: str | None = None,
-    qc_png: str | None = None,
-    sample_summary: dict[str, Any] | None = None,
-) -> tuple[Path, bool, dict[str, str | None], list[str]]:
-    from imajin.results import create_result_bundle, slugify_result_name
-    from imajin.result_bundles import (
-        current_bundle,
-        current_sample_slug,
-        finalize_bundle_metadata,
-        populate_sample_outputs,
-        write_combined_csv,
-    )
-
-    warnings: list[str] = []
-    sample_slug = current_sample_slug() or slugify_result_name(target_layer)
-    parent = current_bundle()
-    own_bundle = parent is None
-    anchor: Path | None = None
-    if own_bundle:
-        from imajin.anchor import resolve_session_anchor
-
-        file_path = None
-        try:
-            snap = snapshot_layer(target_layer)
-            md = snap.metadata if isinstance(snap.metadata, dict) else {}
-            file_path = md.get("path") or md.get("source_path")
-        except Exception:
-            file_path = None
-        anchor = resolve_session_anchor(extra_paths=[file_path] if file_path else None)
-
-        bundle_path = create_result_bundle(
-            name=f"{target_layer}__{bundle_suffix}",
-            kind="single",
-            tier=tier,
-            metadata={
-                "recipe": None,
-                "target_channel": target_layer,
-                "target_source": target_source,
-                "segmentation_method": segmentation_method,
-                "analysis_dim": analysis_dim,
-            },
-            root=anchor,
-        )
-    else:
-        bundle_path = parent
-
-    bundle_outputs = _empty_bundle_outputs()
-    try:
-        bundle_outputs = populate_sample_outputs(
-            bundle_path,
-            sample_slug=sample_slug,
-            labels_cells=labels_cells,
-            labels_domain=labels_domain,
-            qc_png=qc_png,
-        )
-    except Exception as exc:  # noqa: BLE001
-        warnings.append(
-            f"bundle outputs could not be written: {type(exc).__name__}: {exc}"
-        )
-    try:
-        _remove_copied_standalone_qc(
-            qc_png,
-            bundle_path=bundle_path,
-            copied_rel=bundle_outputs.get("qc_png"),
-        )
-    except Exception as exc:  # noqa: BLE001
-        warnings.append(
-            f"standalone QC cleanup failed: {type(exc).__name__}: {exc}"
-        )
-
-    if own_bundle:
-        summary = _build_sample_summary(
-            sample_name=target_layer,
-            status="complete",
-            outputs=bundle_outputs,
-            source_layer=target_layer,
-            **dict(sample_summary or {}),
-        )
-        try:
-            write_combined_csv(bundle_path, table_names)
-            finalize_bundle_metadata(
-                bundle_path,
-                samples=[summary],
-                status="complete",
-                extra={"run_context_extras": _single_bundle_run_context_extras(anchor)},
-            )
-        except Exception as exc:  # noqa: BLE001
-            warnings.append(f"bundle could not be finalized: {type(exc).__name__}: {exc}")
-
-    return bundle_path, own_bundle, bundle_outputs, warnings
 
 
 @tool(
@@ -244,24 +76,10 @@ def analyze_target_cells(
             "confirm by annotating the channel."
         )
 
-    seg_input_layer = target_layer
-    pre_step = _normalize_preprocess(preprocess)
-    pre_record: dict[str, Any] | None = None
-    if pre_step == "rolling_ball":
-        report_progress(stage="preprocess", message=f"Preprocessing {target_layer}.")
-        raise_if_cancelled()
-        pre_record = _preprocess.rolling_ball_background(layer=target_layer)
-        seg_input_layer = pre_record["new_layer"]
-    elif pre_step == "auto_contrast":
-        report_progress(stage="preprocess", message=f"Preprocessing {target_layer}.")
-        raise_if_cancelled()
-        pre_record = _preprocess.auto_contrast(layer=target_layer)
-        seg_input_layer = pre_record["new_layer"]
-    elif pre_step == "gaussian_denoise":
-        report_progress(stage="preprocess", message=f"Preprocessing {target_layer}.")
-        raise_if_cancelled()
-        pre_record = _preprocess.gaussian_denoise(layer=target_layer)
-        seg_input_layer = pre_record["new_layer"]
+    seg_input_layer, pre_step, pre_record = _run_preprocess_step(
+        target_layer,
+        preprocess,
+    )
 
     snapshot = call_on_main(snapshot_layer, seg_input_layer)
     axes = _layer_axes(snapshot)
@@ -270,42 +88,18 @@ def analyze_target_cells(
     # Tier-1: pre-compute expression domain before Tier-2 segmentation.
     pre_computed_domain_layer: str | None = None
     if domain_strategy is not None:
-        from imajin.tools import channels as _channels_pre
-        from imajin.tools.segment import segment_expression_domain as _seg_dom
-        cs_layer_pre = counterstain_layer
-        cs_is_nuclear_pre: bool | None = None
-        if cs_layer_pre is None:
-            cs_info_pre = _channels_pre.detect_counterstain_channel()
-            if cs_info_pre["confidence"] == "annotated":
-                cs_layer_pre = cs_info_pre["counterstain_layer"]
-                cs_is_nuclear_pre = cs_info_pre["is_nuclear"]
-        d_opts = dict(domain_options or {})
-        if cs_layer_pre:
-            d_opts.setdefault("counterstain_layer", cs_layer_pre)
-            d_opts.setdefault("is_nuclear", cs_is_nuclear_pre)
-        derived_pre = _derive_size_params(
-            cell_diameter_um,
-            _segment._voxel_spacing(tuple(snapshot.scale), getattr(snapshot.data, "ndim", 2)),
+        pre_computed_domain_layer = _precompute_domain_layer(
+            target_layer=target_layer,
+            snapshot=snapshot,
+            domain_options=domain_options,
+            counterstain_layer=counterstain_layer,
+            cell_diameter_um=cell_diameter_um,
         )
-        if "min_area_um2" not in d_opts and "min_area_um2" in derived_pre:
-            d_opts["min_area_um2"] = derived_pre["min_area_um2"]
-        d_opts.setdefault("k_mad", 6.25)
-        d_opts.setdefault("dark_percentile", 10.0)
-        d_opts.setdefault("smooth_sigma_um", 0.75)
-        d_opts.setdefault("max_components", 128)
-        d_opts.setdefault("save_qc_png", False)
-        domain_pre = _seg_dom(
-            image_layer=target_layer,
-            **_filtered_kwargs(_seg_dom, d_opts),
-        )
-        pre_computed_domain_layer = domain_pre["labels_layer"]
 
     method = _normalize_segmentation_method(segmentation_method)
 
     _check_analysis_memory_budget(seg_input_layer, data=snapshot.data, method=method)
 
-    report_progress(stage="segmentation", message=f"Segmenting {seg_input_layer}.")
-    raise_if_cancelled()
     seg_options = dict(segmentation_options or {})
     seg_options.pop("tool", None)
     seg_options.pop("do_3D", None)
@@ -314,26 +108,13 @@ def analyze_target_cells(
         seg_options.setdefault("boundary_mask", pre_computed_domain_layer)
         seg_options.setdefault("min_snr", 1.6)
         seg_options.setdefault("high_snr", 3.2)
-    if method == "target_objects":
-        seg_result = _segment.segment_target_objects(
-            image_layer=seg_input_layer,
-            **_filtered_kwargs(_segment.segment_target_objects, seg_options),
-        )
-    elif method == "intensity_regions":
-        seg_result = _segment.segment_intensity_regions(
-            image_layer=seg_input_layer,
-            **_filtered_kwargs(_segment.segment_intensity_regions, seg_options),
-        )
-    else:
-        cellpose_options = {
-            **seg_options,
-            "do_3D": use_3d,
-            "diameter": diameter,
-        }
-        seg_result = _segment.cellpose_sam(
-            image_layer=seg_input_layer,
-            **_filtered_kwargs(_segment.cellpose_sam, cellpose_options),
-        )
+    seg_result = _run_segmentation_step(
+        method=method,
+        seg_input_layer=seg_input_layer,
+        seg_options=seg_options,
+        use_3d=use_3d,
+        diameter=diameter,
+    )
     if seg_result.get("empty_mask", False):
         return {
             "ok": False,
