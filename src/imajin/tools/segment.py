@@ -430,6 +430,83 @@ def _save_qc_png(
     return str(path), None
 
 
+def _target_threshold_for_scope(
+    corrected: np.ndarray,
+    *,
+    threshold_method: str,
+    threshold_percentile: float,
+    min_snr: float,
+    boundary_mask: np.ndarray | None = None,
+) -> tuple[float, float, str, list[str]]:
+    full_noise_sigma = _robust_background_sigma(corrected)
+    warnings: list[str] = []
+    if boundary_mask is None:
+        return (
+            _target_object_threshold(
+                corrected,
+                method=threshold_method,
+                percentile=threshold_percentile,
+                min_snr=min_snr,
+                noise_sigma=full_noise_sigma,
+            ),
+            full_noise_sigma,
+            "full_image",
+            warnings,
+        )
+
+    scoped_mask = np.asarray(boundary_mask, dtype=bool) & np.isfinite(corrected)
+    if not np.any(scoped_mask):
+        warnings.append(
+            "boundary mask contains no finite target pixels; full-image threshold "
+            "was used before mask intersection"
+        )
+        return (
+            _target_object_threshold(
+                corrected,
+                method=threshold_method,
+                percentile=threshold_percentile,
+                min_snr=min_snr,
+                noise_sigma=full_noise_sigma,
+            ),
+            full_noise_sigma,
+            "full_image_fallback",
+            warnings,
+        )
+
+    scoped_values = np.asarray(corrected[scoped_mask], dtype=np.float32)
+    if float(np.max(scoped_values)) <= float(np.min(scoped_values)):
+        warnings.append(
+            "target intensities inside the boundary mask were constant; full-image "
+            "threshold was used before mask intersection"
+        )
+        return (
+            _target_object_threshold(
+                corrected,
+                method=threshold_method,
+                percentile=threshold_percentile,
+                min_snr=min_snr,
+                noise_sigma=full_noise_sigma,
+            ),
+            full_noise_sigma,
+            "full_image_fallback",
+            warnings,
+        )
+
+    scoped_noise_sigma = _robust_background_sigma(scoped_values)
+    return (
+        _target_object_threshold(
+            scoped_values,
+            method=threshold_method,
+            percentile=threshold_percentile,
+            min_snr=min_snr,
+            noise_sigma=scoped_noise_sigma,
+        ),
+        scoped_noise_sigma,
+        "boundary_mask",
+        warnings,
+    )
+
+
 @tool(
     description="Segment cells with Cellpose-SAM (generalist pretrained model). "
     "Works on 2D images (YX) and 3D z-stacks (ZYX). 4D (TZYX) and time-series (TYX) "
@@ -805,15 +882,6 @@ def segment_target_objects(
     else:
         corrected_for_threshold = corrected
 
-    noise_sigma = _robust_background_sigma(corrected_for_threshold)
-    threshold = _target_object_threshold(
-        corrected_for_threshold,
-        method=threshold_method,
-        percentile=threshold_percentile,
-        min_snr=min_snr,
-        noise_sigma=noise_sigma,
-    )
-
     # Load the boundary mask early so it can be used as the hysteresis grow region.
     boundary_data_bool: np.ndarray | None = None
     if boundary_mask is not None:
@@ -826,22 +894,34 @@ def segment_target_objects(
             )
         boundary_data_bool = _boundary_raw > 0
 
+    threshold, noise_sigma, threshold_scope, threshold_warnings = _target_threshold_for_scope(
+        corrected_for_threshold,
+        threshold_method=threshold_method,
+        threshold_percentile=threshold_percentile,
+        min_snr=min_snr,
+        boundary_mask=boundary_data_bool,
+    )
+
     high_threshold = max(float(threshold), float(high_snr) * float(noise_sigma))
     if boundary_data_bool is not None:
-        # Marker-grow: grow high-SNR seeds throughout the domain boundary.
-        # Seeds = pixels above the high_snr threshold and inside the domain.
-        # Grow region = all domain pixels.
-        # Result = domain pixels connected to at least one seed.
-        high_seeds = (corrected_for_threshold >= high_threshold) & boundary_data_bool
-        if np.any(high_seeds):
-            # Build a synthetic indicator: seeds get value 2.0, other domain pixels
-            # get 1.0, outside-domain pixels get 0.0.  Hysteresis with low=0.5,
-            # high=1.5 grows seeds (>= 1.5) into all domain pixels (>= 0.5).
-            _hyst_img = np.where(high_seeds, 2.0, np.where(boundary_data_bool, 1.0, 0.0)).astype(np.float32)
-            binary = filters.apply_hysteresis_threshold(_hyst_img, low=0.5, high=1.5)
+        scoped_threshold_image = np.where(
+            boundary_data_bool,
+            corrected_for_threshold,
+            -np.inf,
+        ).astype(np.float32, copy=False)
+        low_candidates = (scoped_threshold_image >= float(threshold)) & boundary_data_bool
+        high_seeds = (scoped_threshold_image >= high_threshold) & boundary_data_bool
+        if high_threshold > threshold and np.any(high_seeds):
+            binary = (
+                filters.apply_hysteresis_threshold(
+                    scoped_threshold_image,
+                    low=float(threshold),
+                    high=float(high_threshold),
+                )
+                & boundary_data_bool
+            )
         else:
-            # No high-SNR seeds inside domain — fall back to standard threshold.
-            binary = (corrected_for_threshold >= float(threshold)) & boundary_data_bool
+            binary = low_candidates
     elif high_threshold > threshold and np.any(corrected_for_threshold >= high_threshold):
         binary = filters.apply_hysteresis_threshold(
             corrected_for_threshold,
@@ -867,7 +947,7 @@ def segment_target_objects(
         masks,
         noise_sigma=noise_sigma,
     )
-    qc_warnings = saturation_warnings + qc_warnings
+    qc_warnings = saturation_warnings + threshold_warnings + qc_warnings
 
     if boundary_data_bool is not None:
         masks = _intersect_labels_with_mask(
@@ -880,7 +960,7 @@ def segment_target_objects(
             masks,
             noise_sigma=noise_sigma,
         )
-        qc_warnings = saturation_warnings + qc_warnings
+        qc_warnings = saturation_warnings + threshold_warnings + qc_warnings
 
     out_name = f"{L.name}_objects"
     layer = call_on_main(
@@ -903,6 +983,7 @@ def segment_target_objects(
             "min_snr": min_snr,
             "high_snr": high_snr,
             "noise_sigma": noise_sigma,
+            "threshold_scope": threshold_scope,
             "min_size": effective_min_size,
             "requested_min_size": min_size,
             "min_area_um2": min_area_um2,
@@ -972,6 +1053,7 @@ def segment_target_objects(
         "min_snr": min_snr,
         "high_snr": high_snr,
         "noise_sigma": noise_sigma,
+        "threshold_scope": threshold_scope,
         "min_size": effective_min_size,
         "requested_min_size": min_size,
         "min_area_um2": min_area_um2,
@@ -1009,7 +1091,7 @@ def segment_target_objects(
 def segment_expression_domain(
     image_layer: str,
     threshold_strategy: str = "noise_floor",
-    k_mad: float = 5.0,
+    k_mad: float = 5.25,
     dark_percentile: float = 10.0,
     counterstain_layer: str | None = None,
     counterstain_dilation_um: float = 0.0,

@@ -289,7 +289,7 @@ def analyze_target_cells(
         )
         if "min_area_um2" not in d_opts and "min_area_um2" in derived_pre:
             d_opts["min_area_um2"] = derived_pre["min_area_um2"]
-        d_opts.setdefault("k_mad", 6.0)
+        d_opts.setdefault("k_mad", 6.25)
         d_opts.setdefault("dark_percentile", 10.0)
         d_opts.setdefault("smooth_sigma_um", 0.75)
         d_opts.setdefault("max_components", 128)
@@ -312,8 +312,8 @@ def analyze_target_cells(
     seg_options.pop("diameter", None)
     if pre_computed_domain_layer is not None:
         seg_options.setdefault("boundary_mask", pre_computed_domain_layer)
-        seg_options.setdefault("min_snr", 1.5)
-        seg_options.setdefault("high_snr", 3.0)
+        seg_options.setdefault("min_snr", 1.6)
+        seg_options.setdefault("high_snr", 3.2)
     if method == "target_objects":
         seg_result = _segment.segment_target_objects(
             image_layer=seg_input_layer,
@@ -506,6 +506,7 @@ def analyze_target_cells(
             "domain_volume_um3": domain_result["domain_volume_um3"],
             "domain_voxels": domain_result["domain_voxels"],
             "n_cells": int(seg_result.get("n_objects", 0)),
+            "segmentation_threshold_scope": seg_result.get("threshold_scope"),
             "tier_table_name": tier_table_name,
             "primary_table_name": tier_table_name,
             "table_name": measure_result["table_name"],
@@ -547,6 +548,7 @@ def analyze_target_cells(
         "object_area_max": seg_result.get("object_area_max"),
         "top_bright_outside_fraction": seg_result.get("top_bright_outside_fraction"),
         "mask_fraction": seg_result.get("mask_fraction"),
+        "segmentation_threshold_scope": seg_result.get("threshold_scope"),
         "segmentation_warnings": seg_result.get("qc_warnings", []),
         "table_name": measure_result["table_name"],
         "primary_table_name": measure_result["table_name"],

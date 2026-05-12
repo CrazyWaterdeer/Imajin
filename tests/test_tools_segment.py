@@ -431,6 +431,32 @@ def test_segment_target_objects_boundary_mask_keeps_only_inside(viewer) -> None:
     assert (labels[60:80, 60:80] == 0).all(), "object outside boundary dropped"
 
 
+def test_segment_target_objects_boundary_mask_does_not_fill_domain(viewer) -> None:
+    img = np.zeros((100, 100), dtype=np.float32)
+    img[20:80, 20:80] = 20.0
+    img[42:54, 42:54] = 120.0
+    viewer.add_image(img, name="domain_relative")
+
+    boundary = np.zeros((100, 100), dtype=np.int32)
+    boundary[20:80, 20:80] = 1
+    viewer.add_labels(boundary, name="domain_mask")
+
+    res = segment.segment_target_objects(
+        "domain_relative",
+        boundary_mask="domain_mask",
+        background_radius=0,
+        min_size=20,
+        smoothing_sigma=0,
+        save_qc_png=False,
+    )
+
+    labels = np.asarray(viewer.layers[res["labels_layer"]].data)
+    assert res["threshold_scope"] == "boundary_mask"
+    assert labels[48, 48] > 0, "bright region inside domain should be kept"
+    assert labels[25, 25] == 0, "dim domain background must not become region"
+    assert res["object_area_max"] < int(np.count_nonzero(boundary))
+
+
 def test_segment_target_objects_default_unchanged(viewer) -> None:
     img = np.zeros((100, 100), dtype=np.float32)
     img[40:60, 40:60] = 200.0

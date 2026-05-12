@@ -471,7 +471,7 @@ def test_analyze_target_cells_single_tier_unchanged(viewer) -> None:
     assert "tier_table_name" not in res or res.get("tier_table_name") is None
 
 
-def test_two_tier_recovers_cluster_periphery_vs_single_tier(viewer) -> None:
+def test_two_tier_keeps_active_region_inside_larger_domain(viewer) -> None:
     from imajin.tools.workflows import analyze_target_cells
 
     rng = np.random.default_rng(7)
@@ -503,16 +503,15 @@ def test_two_tier_recovers_cluster_periphery_vs_single_tier(viewer) -> None:
         cell_diameter_um=10.0,
     )
     assert two_tier["ok"] is True
+    assert two_tier["segmentation_threshold_scope"] == "boundary_mask"
     cell_labels = np.asarray(viewer.layers[two_tier["cells_layer"]].data)
     cell_area = int((cell_labels > 0).sum())
 
-    assert cell_area > single_area, (
-        f"two-tier active-cell area ({cell_area}) should exceed single-tier "
-        f"area ({single_area}) when the cluster has a soft halo"
-    )
     domain_labels = np.asarray(viewer.layers[two_tier["domain_layer"]].data)
-    assert (domain_labels > 0).sum() > cell_area, (
-        "domain mask must be at least as large as active-cell mask"
+    domain_area = int((domain_labels > 0).sum())
+    assert domain_area > single_area, "domain should capture the soft halo"
+    assert 0 < cell_area < domain_area, (
+        "active region must be a thresholded subset of the expression domain"
     )
 
 
