@@ -212,6 +212,17 @@ def test_generate_report_auto_adds_statistics_summary(fake_session, tmp_path) ->
     from imajin.agent import state
 
     state.put_table(
+        "skel_0_nodes",
+        pd.DataFrame(
+            {
+                "node_id": [0, 1],
+                "degree": [1, 2],
+                "coord_0_scaled": [0.0, 1.0],
+            }
+        ),
+        spec={"op": "skeleton_nodes", "skeleton_id": "skel_0_test"},
+    )
+    state.put_table(
         "measurements",
         pd.DataFrame(
             {

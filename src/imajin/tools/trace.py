@@ -1,8 +1,5 @@
 from __future__ import annotations
 
-from collections import deque
-from dataclasses import asdict, dataclass, field
-from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -11,8 +8,41 @@ import pandas as pd
 from imajin.analysis.arrays import materialize_array
 from imajin.agent import state
 from imajin.agent.qt_dispatch import call_on_main
-from imajin.agent.state import get_layer, get_viewer, put_table
+from imajin.agent.state import get_layer
 from imajin.paths import normalize_user_path
+from imajin.tools._trace_export import _swc_coordinates, _write_swc
+from imajin.tools._trace_image import (
+    _binary_from_layer_data,
+    _component_labels,
+    _normalize_image,
+    _rolling_ball_subtract,
+)
+from imajin.tools._trace_store import (
+    _BRANCH_QC_STATUSES,
+    _SKELETON_REGISTRY,
+    _SkeletonEntry,
+    _TRACE_STATUSES,
+    _entry,
+    _register_skeleton,
+    _store_graph_tables,
+    NeuralTraceQC,
+    NeuralTraceRecord,
+    get_skeleton,
+    get_trace_record,
+    list_trace_records,
+    reset_skeletons,
+)
+from imajin.tools._trace_tables import (
+    _BRANCH_TYPES,
+    _branch_summary,
+    _component_table,
+    _edge_table,
+    _node_table,
+    _normalize_branch_df,
+    _put_table,
+    _scale_is_physical,
+    _scale_tuple,
+)
 from imajin.tools.napari_ops import (
     add_image_from_worker,
     add_labels_from_worker,
@@ -23,321 +53,6 @@ from imajin.tools.registry import tool
 
 def _materialize(arr) -> np.ndarray:
     return materialize_array(arr)
-
-
-_BRANCH_TYPES = {
-    0: "endpoint-endpoint",
-    1: "junction-endpoint",
-    2: "junction-junction",
-    3: "isolated-cycle",
-}
-
-_TRACE_STATUSES = {"raw", "reviewed", "pruned", "exported"}
-_BRANCH_QC_STATUSES = {"accepted", "rejected", "not_checked"}
-
-
-@dataclass
-class NeuralTraceRecord:
-    trace_id: str
-    source_layer: str
-    mask_layer: str | None
-    skeleton_layer: str
-    spacing: tuple[float, ...]
-    units: tuple[str, ...] | None = None
-    status: str = "raw"
-    parameters: dict[str, Any] = field(default_factory=dict)
-    n_paths: int = 0
-    n_components: int = 0
-    table_names: dict[str, str] = field(default_factory=dict)
-    parent_trace_id: str | None = None
-    soma: tuple[float, ...] | None = None
-    region: str | int | None = None
-
-
-@dataclass
-class NeuralTraceQC:
-    trace_id: str
-    accepted: bool | None = None
-    rejected_branch_ids: list[int] = field(default_factory=list)
-    notes: str | None = None
-    branch_statuses: dict[int, str] = field(default_factory=dict)
-    branch_reasons: dict[int, str] = field(default_factory=dict)
-
-
-@dataclass
-class _SkeletonEntry:
-    skel: Any
-    skeleton_image: np.ndarray
-    record: NeuralTraceRecord
-    qc: NeuralTraceQC
-
-
-_SKELETON_REGISTRY: dict[str, _SkeletonEntry] = {}
-
-
-def get_skeleton(skel_id: str):
-    return _entry(skel_id).skel
-
-
-def get_trace_record(skel_id: str) -> NeuralTraceRecord:
-    return _entry(skel_id).record
-
-
-def list_trace_records() -> list[dict[str, Any]]:
-    return [
-        {**asdict(entry.record), "qc": asdict(entry.qc)}
-        for entry in _SKELETON_REGISTRY.values()
-    ]
-
-
-def reset_skeletons() -> None:
-    _SKELETON_REGISTRY.clear()
-
-
-def _entry(skel_id: str) -> _SkeletonEntry:
-    if skel_id not in _SKELETON_REGISTRY:
-        raise KeyError(f"skeleton {skel_id!r} not found. Available: {list(_SKELETON_REGISTRY)}")
-    return _SKELETON_REGISTRY[skel_id]
-
-
-def _put_table(name: str, df: pd.DataFrame, spec: dict[str, Any]) -> str:
-    return call_on_main(put_table, name, df, spec=spec)
-
-
-def _scale_tuple(scale: tuple[float, ...] | None, ndim: int) -> tuple[float, ...]:
-    if not scale:
-        return (1.0,) * ndim
-    values = tuple(float(v) for v in scale[:ndim])
-    if len(values) < ndim:
-        values = values + (1.0,) * (ndim - len(values))
-    return values
-
-
-def _scale_is_physical(spacing: tuple[float, ...]) -> bool:
-    return any(abs(v - 1.0) > 1e-9 for v in spacing)
-
-
-def _component_labels(mask: np.ndarray) -> tuple[np.ndarray, int]:
-    from skimage.measure import label
-
-    labeled = label(mask.astype(bool), connectivity=1)
-    return labeled.astype(np.int32), int(labeled.max())
-
-
-def _layer_kind(layer_name: str) -> str:
-    try:
-        layer = call_on_main(get_layer, layer_name)
-    except Exception:
-        return ""
-    kind = getattr(layer, "kind", None)
-    if isinstance(kind, str):
-        return kind.lower()
-    return type(layer).__name__.lower()
-
-
-def _binary_from_layer_data(
-    data: np.ndarray,
-    *,
-    layer_name: str,
-    threshold: float | None,
-) -> np.ndarray:
-    kind = _layer_kind(layer_name)
-    if "label" in kind:
-        return data > 0
-    if threshold is not None:
-        return data > float(threshold)
-    finite = data[np.isfinite(data)]
-    unique = np.unique(finite)
-    if unique.size <= 2 and set(unique.tolist()).issubset({0, 1, False, True}):
-        return data.astype(bool)
-    raise ValueError(
-        "skeletonize expects a binary/Labels layer. For continuous image data, "
-        "run segment_neural_processes first or pass an explicit threshold."
-    )
-
-
-def _normalize_branch_df(df: pd.DataFrame, spacing: tuple[float, ...]) -> pd.DataFrame:
-    rename = {
-        "branch-distance": "branch_length",
-        "branch-type": "branch_type_code",
-        "euclidean-distance": "euclidean_distance",
-        "skeleton-id": "skeleton_component",
-    }
-    for old, new in rename.items():
-        if old in df.columns:
-            df = df.rename(columns={old: new})
-
-    if "branch_type_code" in df.columns:
-        df["branch_type"] = df["branch_type_code"].map(_BRANCH_TYPES).fillna("unknown")
-    if "branch_length" in df.columns:
-        df["branch_length_scaled"] = df["branch_length"].astype(float)
-        if _scale_is_physical(spacing):
-            df["branch_length_um"] = df["branch_length"].astype(float)
-    if "euclidean_distance" in df.columns:
-        df["euclidean_distance_scaled"] = df["euclidean_distance"].astype(float)
-        if _scale_is_physical(spacing):
-            df["euclidean_distance_um"] = df["euclidean_distance"].astype(float)
-    if "branch_length" in df.columns and "euclidean_distance" in df.columns:
-        ed = df["euclidean_distance"].replace(0, np.nan)
-        df["tortuosity"] = df["branch_length"] / ed
-    df.insert(0, "branch_id", np.arange(len(df), dtype=int))
-    return df
-
-
-def _branch_summary(skel: Any, spacing: tuple[float, ...]) -> pd.DataFrame:
-    from skan import summarize
-
-    return _normalize_branch_df(summarize(skel, separator="-"), spacing)
-
-
-def _node_table(skel: Any, spacing: tuple[float, ...]) -> pd.DataFrame:
-    from scipy.sparse.csgraph import connected_components
-
-    coords = np.asarray(skel.coordinates)
-    physical = coords.astype(float) * np.asarray(spacing, dtype=float)
-    n_components, labels = connected_components(skel.graph, directed=False)
-    data: dict[str, Any] = {
-        "node_id": np.arange(len(coords), dtype=int),
-        "degree": np.asarray(skel.degrees, dtype=int),
-        "component_id": labels.astype(int),
-    }
-    for axis in range(coords.shape[1]):
-        data[f"image_coord_{axis}"] = coords[:, axis].astype(int)
-        data[f"coord_{axis}_scaled"] = physical[:, axis].astype(float)
-        if _scale_is_physical(spacing):
-            data[f"coord_{axis}_um"] = physical[:, axis].astype(float)
-    df = pd.DataFrame(data)
-    df.attrs["n_components"] = int(n_components)
-    return df
-
-
-def _edge_table(skel: Any, spacing: tuple[float, ...]) -> pd.DataFrame:
-    graph = skel.graph.tocoo()
-    rows: list[dict[str, Any]] = []
-    for src, dst, dist in zip(graph.row, graph.col, graph.data, strict=False):
-        if int(src) >= int(dst):
-            continue
-        row = {
-            "edge_id": len(rows),
-            "node_id_src": int(src),
-            "node_id_dst": int(dst),
-            "edge_length_scaled": float(dist),
-        }
-        if _scale_is_physical(spacing):
-            row["edge_length_um"] = float(dist)
-        rows.append(row)
-    return pd.DataFrame(rows)
-
-
-def _component_table(nodes: pd.DataFrame, edges: pd.DataFrame) -> pd.DataFrame:
-    rows: list[dict[str, Any]] = []
-    if nodes.empty:
-        return pd.DataFrame(columns=["component_id", "n_nodes", "n_edges"])
-    for component_id, group in nodes.groupby("component_id"):
-        node_ids = set(int(v) for v in group["node_id"].tolist())
-        if edges.empty:
-            component_edges = edges
-        else:
-            component_edges = edges[
-                edges["node_id_src"].isin(node_ids) & edges["node_id_dst"].isin(node_ids)
-            ]
-        row: dict[str, Any] = {
-            "component_id": int(component_id),
-            "n_nodes": int(len(group)),
-            "n_edges": int(len(component_edges)),
-        }
-        for col in [c for c in group.columns if c.startswith("coord_") and c.endswith("_scaled")]:
-            row[f"{col}_min"] = float(group[col].min())
-            row[f"{col}_max"] = float(group[col].max())
-        rows.append(row)
-    return pd.DataFrame(rows)
-
-
-def _store_graph_tables(skeleton_id: str) -> dict[str, str]:
-    entry = _entry(skeleton_id)
-    nodes = _node_table(entry.skel, entry.record.spacing)
-    edges = _edge_table(entry.skel, entry.record.spacing)
-    components = _component_table(nodes, edges)
-    names = {
-        "nodes": _put_table(
-            f"{skeleton_id}_nodes",
-            nodes,
-            spec={"op": "skeleton_nodes", "skeleton_id": skeleton_id},
-        ),
-        "edges": _put_table(
-            f"{skeleton_id}_edges",
-            edges,
-            spec={"op": "skeleton_edges", "skeleton_id": skeleton_id},
-        ),
-        "components": _put_table(
-            f"{skeleton_id}_components",
-            components,
-            spec={"op": "skeleton_components", "skeleton_id": skeleton_id},
-        ),
-    }
-    entry.record.table_names.update(names)
-    entry.record.n_components = int(len(components))
-    return names
-
-
-def _register_skeleton(
-    *,
-    skel: Any,
-    skeleton_image: np.ndarray,
-    source_layer: str,
-    mask_layer: str | None,
-    skeleton_layer: str,
-    spacing: tuple[float, ...],
-    parameters: dict[str, Any],
-    status: str = "raw",
-    parent_trace_id: str | None = None,
-) -> str:
-    skel_id = f"skel_{len(_SKELETON_REGISTRY)}_{source_layer}"
-    record = NeuralTraceRecord(
-        trace_id=skel_id,
-        source_layer=source_layer,
-        mask_layer=mask_layer,
-        skeleton_layer=skeleton_layer,
-        spacing=spacing,
-        units=tuple("um" for _ in spacing) if _scale_is_physical(spacing) else None,
-        status=status,
-        parameters=dict(parameters),
-        n_paths=int(skel.n_paths),
-        parent_trace_id=parent_trace_id,
-    )
-    _SKELETON_REGISTRY[skel_id] = _SkeletonEntry(
-        skel=skel,
-        skeleton_image=skeleton_image.astype(bool),
-        record=record,
-        qc=NeuralTraceQC(trace_id=skel_id),
-    )
-    _store_graph_tables(skel_id)
-    return skel_id
-
-
-def _normalize_image(data: np.ndarray) -> np.ndarray:
-    from skimage.exposure import rescale_intensity
-
-    finite = data[np.isfinite(data)]
-    if finite.size == 0:
-        return np.zeros_like(data, dtype=np.float32)
-    lo, hi = np.percentile(finite, (1.0, 99.5))
-    if not np.isfinite(lo) or not np.isfinite(hi) or hi <= lo:
-        return np.zeros_like(data, dtype=np.float32)
-    return rescale_intensity(data, in_range=(lo, hi), out_range=(0.0, 1.0)).astype(np.float32)
-
-
-def _rolling_ball_subtract(data: np.ndarray, radius: float = 50.0) -> np.ndarray:
-    from skimage.restoration import rolling_ball
-
-    if data.ndim == 2:
-        return data - rolling_ball(data, radius=radius)
-    if data.ndim == 3:
-        out = np.empty_like(data)
-        for z in range(data.shape[0]):
-            out[z] = data[z] - rolling_ball(data[z], radius=radius)
-        return out
-    raise ValueError(f"Expected 2D or 3D layer, got shape {data.shape}")
 
 
 @tool(
@@ -959,64 +674,6 @@ def compute_morphology_descriptors(skeleton_id: str) -> dict[str, Any]:
         metrics={"kind": "neural_morphology", **result},
     )
     return result
-
-
-def _swc_coordinates(coords: np.ndarray) -> np.ndarray:
-    if coords.shape[1] == 2:
-        y = coords[:, 0]
-        x = coords[:, 1]
-        z = np.zeros(len(coords), dtype=float)
-        return np.column_stack([x, y, z])
-    z = coords[:, 0]
-    y = coords[:, 1]
-    x = coords[:, 2]
-    return np.column_stack([x, y, z])
-
-
-def _write_swc(entry: _SkeletonEntry, path: Path) -> None:
-    graph = entry.skel.graph.tocsr()
-    n = graph.shape[0]
-    coords = np.asarray(entry.skel.coordinates, dtype=float) * np.asarray(entry.record.spacing)
-    swc_coords = _swc_coordinates(coords)
-
-    degrees = np.asarray(entry.skel.degrees)
-    endpoints = np.where(degrees == 1)[0]
-    if entry.record.soma is not None:
-        soma = np.asarray(entry.record.soma, dtype=float)
-        root = int(np.argmin(np.linalg.norm(coords - soma, axis=1)))
-    elif len(endpoints):
-        root = int(endpoints[0])
-    else:
-        root = 0
-
-    parent = np.full(n, -2, dtype=int)
-    parent[root] = -1
-    queue: deque[int] = deque([root])
-    while queue:
-        node = queue.popleft()
-        start, end = graph.indptr[node], graph.indptr[node + 1]
-        for nb in graph.indices[start:end]:
-            nb = int(nb)
-            if parent[nb] != -2:
-                continue
-            parent[nb] = node
-            queue.append(nb)
-    disconnected = np.where(parent == -2)[0]
-    for node in disconnected:
-        parent[node] = -1
-
-    lines = [
-        "# imajin SWC export",
-        "# type 3 is used for all process nodes; radius is a placeholder.",
-        "# If no soma was annotated, the root is the first endpoint or node.",
-    ]
-    for node_id in range(n):
-        x, y, z = swc_coords[node_id]
-        lines.append(
-            f"{node_id + 1} 3 {x:.6f} {y:.6f} {z:.6f} 0.5 "
-            f"{-1 if parent[node_id] < 0 else parent[node_id] + 1}"
-        )
-    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 @tool(

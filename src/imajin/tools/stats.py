@@ -31,6 +31,15 @@ _NON_MEASUREMENT_TABLE_TOOLS = {
     "filter_table",
 }
 
+_NON_MEASUREMENT_TABLE_OPS = {
+    "skeleton_nodes",
+    "skeleton_edges",
+    "skeleton_components",
+    "extract_branch_metrics",
+    "compute_sholl_analysis",
+    "track_cells",
+}
+
 _EXCLUDED_VALUE_COLUMNS = {
     "label",
     "time",
@@ -673,9 +682,12 @@ def _existing_auto_statistics_keys() -> set[tuple[str, str, str]]:
 
 def _is_report_measurement_table(name: str, spec: dict[str, Any]) -> bool:
     tool_name = str(spec.get("tool") or "")
+    op_name = str(spec.get("op") or "")
     if name.startswith(("stats_", "summary_", "plotdata_")):
         return False
     if tool_name in _NON_MEASUREMENT_TABLE_TOOLS:
+        return False
+    if op_name in _NON_MEASUREMENT_TABLE_OPS:
         return False
     return True
 
