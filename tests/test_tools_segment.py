@@ -6,6 +6,7 @@ from PIL import Image
 
 from imajin.analysis.segmentation_auto3d import (
     SegmentationCandidate,
+    filter_labels_by_z_extent,
     rank_segmentation_labels,
     selection_confidence,
     stitch_plane_labels,
@@ -223,6 +224,35 @@ def test_stitch_plane_labels_links_overlapping_rois() -> None:
     assert stitched[2, 4, 18] != stitched[0, 8, 8]
 
 
+def test_stitch_plane_labels_uses_one_to_one_ambiguous_links() -> None:
+    labels = np.zeros((2, 24, 24), dtype=np.int32)
+    labels[0, 5:15, 5:15] = 1
+    labels[1, 5:13, 5:13] = 1
+    labels[1, 5:13, 13:21] = 2
+
+    stitched, record = stitch_plane_labels(labels, min_overlap_fraction=0.1)
+
+    assert record["ambiguous_stitch_pairs"] > 0
+    assert record["stitched_cell_count"] == 2
+    assert stitched[0, 8, 8] == stitched[1, 8, 8] != 0
+    assert stitched[1, 8, 16] != stitched[0, 8, 8]
+
+
+def test_filter_labels_by_z_extent_removes_single_plane_objects() -> None:
+    labels = np.zeros((3, 24, 24), dtype=np.int32)
+    labels[0, 2:6, 2:6] = 1
+    labels[0, 10:16, 10:16] = 2
+    labels[1, 11:17, 11:17] = 2
+
+    filtered, record = filter_labels_by_z_extent(labels, min_z_planes=2)
+
+    assert record["removed_count"] == 1
+    assert record["kept_count"] == 1
+    assert filtered.max() == 1
+    assert filtered[0, 3, 3] == 0
+    assert filtered[0, 12, 12] == filtered[1, 13, 13] == 1
+
+
 def test_auto3d_scoring_penalizes_extreme_merged_object() -> None:
     image = np.zeros((3, 64, 64), dtype=np.float32)
     labels = np.zeros_like(image, dtype=np.int32)
@@ -253,6 +283,40 @@ def test_auto3d_confidence_accepts_stable_same_strategy_scores() -> None:
     assert selection_confidence(candidates) == "high"
 
 
+def test_auto3d_confidence_rejects_region_level_merged_labels() -> None:
+    labels = np.zeros((2, 4, 4), dtype=np.int32)
+    candidates = [
+        SegmentationCandidate(
+            "merged",
+            "direct_3d",
+            labels,
+            {},
+            {
+                "n_objects": 12,
+                "mask_fraction": 0.2,
+                "largest_to_median_object_ratio": 20.0,
+            },
+            [],
+            85.0,
+        ),
+        SegmentationCandidate(
+            "merged_alt",
+            "direct_3d",
+            labels,
+            {},
+            {
+                "n_objects": 10,
+                "mask_fraction": 0.18,
+                "largest_to_median_object_ratio": 18.0,
+            },
+            [],
+            84.0,
+        ),
+    ]
+
+    assert selection_confidence(candidates) == "low"
+
+
 def test_segment_3d_cells_auto_plane_stitch_outputs_3d_labels(viewer) -> None:
     img = np.zeros((3, 64, 64), dtype=np.float32)
     img[0, 20:32, 20:32] = 80.0
@@ -276,6 +340,36 @@ def test_segment_3d_cells_auto_plane_stitch_outputs_3d_labels(viewer) -> None:
     assert res["n_objects"] == 1
     assert labels[0, 25, 25] == labels[1, 26, 26] == labels[2, 27, 27] != 0
     assert res["single_plane_object_fraction"] == pytest.approx(0.0)
+
+
+def test_segment_3d_cells_auto_filters_single_plane_noise(viewer) -> None:
+    img = np.zeros((3, 64, 64), dtype=np.float32)
+    img[0, 20:32, 20:32] = 80.0
+    img[1, 21:33, 21:33] = 100.0
+    img[2, 22:34, 22:34] = 90.0
+    img[0, 48:54, 48:54] = 120.0
+    viewer.add_image(
+        img,
+        name="stack_with_noise",
+        scale=(0.8, 0.3, 0.3),
+        metadata={"axes": "ZYX"},
+    )
+
+    res = segment.segment_3d_cells_auto(
+        "stack_with_noise",
+        candidate_modes=["plane_stitch"],
+        background_radius=8,
+        min_size=10,
+        smoothing_sigma=0,
+        fill_holes=False,
+        save_qc_png=False,
+    )
+
+    labels = np.asarray(viewer.layers[res["labels_layer"]].data)
+    best = res["candidate_summaries"][0]
+    assert res["n_objects"] == 1
+    assert labels[:, 50, 50].max() == 0
+    assert best["params"]["z_extent_filter"]["removed_count"] >= 1
 
 
 def test_segment_target_objects_keeps_cluster_without_split(viewer) -> None:

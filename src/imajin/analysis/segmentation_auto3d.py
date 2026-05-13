@@ -340,15 +340,28 @@ def stitch_plane_labels(
                 )
             )
 
+        deduped_links: list[tuple[tuple[int, int], tuple[int, int], str, float]] = []
         seen_links: set[tuple[tuple[int, int], tuple[int, int]]] = set()
+        potential_current: dict[tuple[int, int], int] = {}
+        potential_next: dict[tuple[int, int], int] = {}
         for a_key, b_key, reason, metric in candidate_links:
             link_key = (a_key, b_key)
             if link_key in seen_links:
                 continue
             seen_links.add(link_key)
+            deduped_links.append((a_key, b_key, reason, metric))
+            potential_current[a_key] = potential_current.get(a_key, 0) + 1
+            potential_next[b_key] = potential_next.get(b_key, 0) + 1
+
+        ambiguous_pairs += sum(1 for count in potential_current.values() if count > 1)
+        ambiguous_pairs += sum(1 for count in potential_next.values() if count > 1)
+
+        for a_key, b_key, reason, metric in sorted(deduped_links, key=_link_sort_key):
+            if a_key in linked_current or b_key in linked_next:
+                continue
+            linked_current[a_key] = 1
+            linked_next[b_key] = 1
             if union(nodes[a_key], nodes[b_key]):
-                linked_current[a_key] = linked_current.get(a_key, 0) + 1
-                linked_next[b_key] = linked_next.get(b_key, 0) + 1
                 edges.append(
                     {
                         "z": int(z),
@@ -358,9 +371,6 @@ def stitch_plane_labels(
                         "metric": float(metric),
                     }
                 )
-
-        ambiguous_pairs += sum(1 for count in linked_current.values() if count > 1)
-        ambiguous_pairs += sum(1 for count in linked_next.values() if count > 1)
 
     root_to_label: dict[int, int] = {}
     out = np.zeros(arr.shape, dtype=np.int32)
@@ -394,6 +404,7 @@ def build_auto3d_candidates(
     stitch_min_overlap: float = 0.2,
     stitch_max_centroid_distance: float | None = None,
     stitch_max_area_ratio: float = 3.0,
+    min_z_planes: int | None = 2,
 ) -> list[SegmentationCandidate]:
     modes = candidate_modes or ["direct_3d", "plane_stitch"]
     variants = _candidate_variants(base_options)
@@ -408,13 +419,17 @@ def build_auto3d_candidates(
                 boundary_mask=boundary_mask,
                 **params,
             )
+            labels, z_filter = filter_labels_by_z_extent(
+                labels,
+                min_z_planes=min_z_planes,
+            )
             candidates.append(
                 _candidate_from_labels(
                     "direct_3d",
                     "direct_3d",
                     labels,
                     image,
-                    params={**params, **_compact_record(record)},
+                    params={**params, **_compact_record(record), "z_extent_filter": z_filter},
                 )
             )
         if len(candidates) >= max_candidates:
@@ -429,17 +444,70 @@ def build_auto3d_candidates(
                 stitch_max_area_ratio=stitch_max_area_ratio,
                 **params,
             )
+            labels, z_filter = filter_labels_by_z_extent(
+                labels,
+                min_z_planes=min_z_planes,
+            )
             candidates.append(
                 _candidate_from_labels(
                     "plane_stitch",
                     "plane_stitch",
                     labels,
                     image,
-                    params={**params, **_compact_record(record)},
+                    params={**params, **_compact_record(record), "z_extent_filter": z_filter},
                     stitch_record=record.get("stitch"),
                 )
             )
     return sorted(candidates, key=lambda c: c.score, reverse=True)
+
+
+def filter_labels_by_z_extent(
+    labels: np.ndarray,
+    *,
+    min_z_planes: int | None = 2,
+) -> tuple[np.ndarray, dict[str, Any]]:
+    """Remove labels that are present in too few z planes, then relabel."""
+
+    arr = np.asarray(labels, dtype=np.int32)
+    threshold = 1 if min_z_planes is None else max(1, int(min_z_planes))
+    if arr.ndim != 3 or threshold <= 1:
+        return arr, {
+            "min_z_planes": threshold,
+            "removed_count": 0,
+            "kept_count": int(arr.max()) if arr.size else 0,
+        }
+
+    n = int(arr.max()) if arr.size else 0
+    if n == 0:
+        return arr, {
+            "min_z_planes": threshold,
+            "removed_count": 0,
+            "kept_count": 0,
+        }
+
+    presence = np.zeros((n + 1, arr.shape[0]), dtype=bool)
+    for z in range(arr.shape[0]):
+        ids = np.unique(arr[z])
+        ids = ids[(ids > 0) & (ids <= n)]
+        presence[ids, z] = True
+
+    z_plane_counts = presence[1:].sum(axis=1)
+    keep_ids = np.flatnonzero(z_plane_counts >= threshold) + 1
+    removed_ids = np.flatnonzero(z_plane_counts < threshold) + 1
+    if removed_ids.size == 0:
+        return arr, {
+            "min_z_planes": threshold,
+            "removed_count": 0,
+            "kept_count": int(keep_ids.size),
+        }
+
+    filtered = np.where(np.isin(arr, keep_ids), arr, 0).astype(np.int32, copy=False)
+    filtered = _relabel_sequential(filtered)
+    return filtered, {
+        "min_z_planes": threshold,
+        "removed_count": int(removed_ids.size),
+        "kept_count": int(keep_ids.size),
+    }
 
 
 def rank_segmentation_labels(
@@ -519,10 +587,19 @@ def rank_segmentation_labels(
     elif largest_ratio > 100:
         score -= 55.0
         warnings.append("candidate has a very large merged object compared with the median")
+    elif largest_ratio > 50:
+        score -= 45.0
+        warnings.append("candidate has a large merged object compared with the median")
     elif largest_ratio > 20:
-        score -= 25.0
+        score -= 40.0
     elif largest_ratio > 6:
         score -= 15.0
+    if largest_ratio > 15 and mask_fraction > 0.08:
+        score -= 25.0
+        warnings.append(
+            "segmentation looks region-level rather than cell-level; do not use "
+            "object counts without manual QC"
+        )
 
     gap_fraction = float(metrics.get("z_gap_object_fraction", 0.0))
     score -= 20.0 * gap_fraction
@@ -540,6 +617,11 @@ def selection_confidence(candidates: list[SegmentationCandidate]) -> str:
         return "fail"
     best = candidates[0]
     if best.score < 35 or int(best.metrics.get("n_objects", 0)) == 0:
+        return "low"
+    if (
+        float(best.metrics.get("largest_to_median_object_ratio", 1.0)) > 15
+        and float(best.metrics.get("mask_fraction", 0.0)) > 0.08
+    ):
         return "low"
     if len(candidates) == 1:
         return "medium" if best.score >= 60 else "low"
@@ -585,6 +667,21 @@ def _candidate_from_labels(
 def _candidate_variants(base_options: dict[str, Any]) -> list[dict[str, Any]]:
     base = dict(base_options)
     variants = [base]
+
+    strict_threshold = dict(base)
+    strict_threshold["threshold_percentile"] = min(
+        99.8,
+        max(
+            float(base["threshold_percentile"]) + 0.5,
+            float(base["threshold_percentile"]) * 1.003,
+        ),
+    )
+    strict_threshold["min_snr"] = float(base["min_snr"]) * 1.2
+    strict_threshold["high_snr"] = float(base["high_snr"]) * 1.15
+    if base.get("min_size") is not None:
+        strict_threshold["min_size"] = max(1, int(round(float(base["min_size"]) * 1.25)))
+    variants.append(strict_threshold)
+
     permissive = dict(base)
     permissive["min_snr"] = max(0.5, float(base["min_snr"]) * 0.75)
     permissive["high_snr"] = max(permissive["min_snr"], float(base["high_snr"]) * 0.8)
@@ -656,6 +753,15 @@ def _centroid_links(
             if distance <= max_centroid_distance:
                 links.append((a_key, b_key, "centroid", distance))
     return links
+
+
+def _link_sort_key(
+    link: tuple[tuple[int, int], tuple[int, int], str, float],
+) -> tuple[int, float]:
+    _a_key, _b_key, reason, metric = link
+    if reason == "overlap":
+        return (0, -float(metric))
+    return (1, float(metric))
 
 
 def _single_plane_object_fraction(labels: np.ndarray) -> float:

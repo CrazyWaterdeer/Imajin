@@ -31,6 +31,7 @@ from imajin.analysis.target_segmentation import (
 from imajin.analysis.segmentation_auto3d import (
     SegmentationCandidate as _SegmentationCandidate,
     build_auto3d_candidates as _build_auto3d_candidates,
+    filter_labels_by_z_extent as _filter_labels_by_z_extent,
     rank_segmentation_labels as _rank_segmentation_labels,
     selection_confidence as _selection_confidence,
 )
@@ -264,6 +265,7 @@ def segment_3d_cells_auto(
     stitch_min_overlap: float = 0.2,
     stitch_max_centroid_distance: float | None = None,
     stitch_max_area_ratio: float = 3.0,
+    min_z_planes: int | None = 2,
     include_cellpose_sam: bool = False,
     cellpose_model: str = "cpsam",
     cellpose_diameter: float | None = None,
@@ -330,6 +332,7 @@ def segment_3d_cells_auto(
         stitch_min_overlap=stitch_min_overlap,
         stitch_max_centroid_distance=stitch_max_centroid_distance,
         stitch_max_area_ratio=stitch_max_area_ratio,
+        min_z_planes=min_z_planes,
     )
 
     if include_cellpose_sam:
@@ -350,6 +353,10 @@ def segment_3d_cells_auto(
             max_size_fraction=cellpose_max_size_fraction,
         )
         cellpose_labels = np.asarray(masks, dtype=np.int32)
+        cellpose_labels, z_filter = _filter_labels_by_z_extent(
+            cellpose_labels,
+            min_z_planes=min_z_planes,
+        )
         cp_metrics, cp_warnings, cp_score = _rank_segmentation_labels(raw, cellpose_labels)
         candidates.append(
             _SegmentationCandidate(
@@ -362,6 +369,7 @@ def segment_3d_cells_auto(
                     "flow_threshold": cellpose_flow_threshold,
                     "cellprob_threshold": cellpose_cellprob_threshold,
                     "anisotropy": anisotropy,
+                    "z_extent_filter": z_filter,
                 },
                 metrics=cp_metrics,
                 warnings=cp_warnings,
@@ -402,6 +410,7 @@ def segment_3d_cells_auto(
             "candidate_modes": candidate_modes or ["direct_3d", "plane_stitch"],
             "include_cellpose_sam": include_cellpose_sam,
             "boundary_mask": boundary_mask,
+            "min_z_planes": min_z_planes,
             "voxel_spacing": list(spacing) if spacing is not None else None,
             "axes": "ZYX",
             "qc_warnings": qc_warnings,
@@ -457,6 +466,7 @@ def segment_3d_cells_auto(
         "single_plane_object_fraction": best.metrics.get("single_plane_object_fraction"),
         "z_gap_object_fraction": best.metrics.get("z_gap_object_fraction"),
         "boundary_mask": boundary_mask,
+        "min_z_planes": min_z_planes,
         "voxel_spacing": list(spacing) if spacing is not None else None,
         "axes": axes,
         "qc_warnings": qc_warnings,
