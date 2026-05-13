@@ -110,6 +110,11 @@ def _run_segmentation_step(
             image_layer=seg_input_layer,
             **_filtered_kwargs(_segment.segment_intensity_regions, seg_options),
         )
+    if method == "auto_3d_cells":
+        return _segment.segment_3d_cells_auto(
+            image_layer=seg_input_layer,
+            **_filtered_kwargs(_segment.segment_3d_cells_auto, seg_options),
+        )
     cellpose_options = {
         **seg_options,
         "do_3D": use_3d,

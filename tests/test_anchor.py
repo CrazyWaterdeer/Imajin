@@ -57,6 +57,13 @@ def test_windows_style_path_is_normalized_under_wsl():
     ).absolute()
 
 
+def test_wsl_unc_path_is_normalized_for_anchor():
+    anchor = resolve_anchor_folder(
+        [r"\\wsl.localhost\Ubuntu\home\jin\New Folder\img.lsm"]
+    )
+    assert anchor == Path("/home/jin/New Folder").absolute()
+
+
 def test_session_anchor_uses_registered_files(tmp_path):
     a = tmp_path / "alpha"
     a.mkdir()

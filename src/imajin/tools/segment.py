@@ -28,6 +28,12 @@ from imajin.analysis.segmentation import (
 from imajin.analysis.target_segmentation import (
     target_threshold_for_scope as _target_threshold_for_scope,
 )
+from imajin.analysis.segmentation_auto3d import (
+    SegmentationCandidate as _SegmentationCandidate,
+    build_auto3d_candidates as _build_auto3d_candidates,
+    rank_segmentation_labels as _rank_segmentation_labels,
+    selection_confidence as _selection_confidence,
+)
 from imajin.agent.qt_dispatch import call_on_main
 from imajin.paths import normalize_user_path
 from imajin.tools._segmentation_outputs import (
@@ -58,6 +64,33 @@ def _get_cellpose_model(model_name: str = "cpsam"):
 def _layer_axes_for_seg(layer: Any, ndim: int) -> str:
     md = getattr(layer, "metadata", None) or {}
     return layer_axes_from_metadata(md, ndim, default_3d="ZYX")
+
+
+def _json_ready(value: Any) -> Any:
+    if isinstance(value, np.generic):
+        return value.item()
+    if isinstance(value, np.ndarray):
+        return [_json_ready(v) for v in value.tolist()]
+    if isinstance(value, dict):
+        return {str(k): _json_ready(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_ready(v) for v in value]
+    if isinstance(value, float) and not np.isfinite(value):
+        return None
+    return value
+
+
+def _candidate_summary(candidate: _SegmentationCandidate) -> dict[str, Any]:
+    return _json_ready(
+        {
+            "name": candidate.name,
+            "strategy": candidate.strategy,
+            "score": candidate.score,
+            "params": candidate.params,
+            "metrics": candidate.metrics,
+            "warnings": candidate.warnings,
+        }
+    )
 
 
 @tool(
@@ -191,6 +224,241 @@ def cellpose_sam(
         "object_area_min": qc["object_area_min"],
         "object_area_median": qc["object_area_median"],
         "object_area_max": qc["object_area_max"],
+        "qc_warnings": qc_warnings,
+        "qc_png_path": saved_qc_png,
+        "qc_png_error": qc_png_error,
+        "qc_png_skipped_reason": qc_png_skipped_reason,
+    }
+
+
+@tool(
+    description="Automatically choose a 3D cell/ROI segmentation for a Z-stack. "
+    "Runs direct 3D target-object segmentation and plane-wise 2D segmentation with "
+    "z-stitching, ranks candidates with deterministic QC metrics, and returns one "
+    "ZYX Labels layer for 3D voxel-only measurement. Projection is not used for "
+    "quantification. Cellpose-SAM can be included as an optional candidate.",
+    phase="2",
+    vision_hint=True,
+    worker=True,
+)
+def segment_3d_cells_auto(
+    image_layer: str,
+    background_radius: int = 48,
+    background_method: str = "opening",
+    background_percentile: float = 20.0,
+    threshold_method: str = "auto",
+    threshold_percentile: float = 99.0,
+    min_snr: float = 2.0,
+    high_snr: float = 4.0,
+    min_size: int | None = None,
+    min_area_um2: float | None = None,
+    min_volume_um3: float | None = None,
+    smoothing_sigma: float = 1.0,
+    fill_holes: bool = True,
+    split_touching: bool = False,
+    min_distance: int = 20,
+    min_distance_um: float | None = None,
+    boundary_mask: str | None = None,
+    candidate_modes: list[str] | None = None,
+    max_candidates: int = 8,
+    stitch_min_overlap: float = 0.2,
+    stitch_max_centroid_distance: float | None = None,
+    stitch_max_area_ratio: float = 3.0,
+    include_cellpose_sam: bool = False,
+    cellpose_model: str = "cpsam",
+    cellpose_diameter: float | None = None,
+    cellpose_flow_threshold: float = 0.4,
+    cellpose_cellprob_threshold: float = 0.0,
+    cellpose_max_size_fraction: float = 0.4,
+    save_qc_png: bool = True,
+    qc_png_path: str | None = None,
+) -> dict[str, Any]:
+    L = call_on_main(snapshot_layer, image_layer)
+    data = materialize_array(L.data)
+    saturation_warnings = _saturation_warnings(data, layer_name=L.name)
+
+    axes = _layer_axes_for_seg(L, data.ndim)
+    if "T" in axes:
+        raise ValueError(
+            f"segment_3d_cells_auto refuses to run on a time-series layer "
+            f"({axes}, shape {data.shape}). Extract a timepoint or run a "
+            "per-frame workflow first."
+        )
+    if data.ndim != 3 or "Z" not in axes:
+        raise ValueError(
+            f"segment_3d_cells_auto expects a 3D ZYX layer, got shape "
+            f"{data.shape} with axes {axes!r}."
+        )
+
+    raw = np.asarray(data, dtype=np.float32)
+    spacing = _voxel_spacing(tuple(L.scale), raw.ndim)
+    boundary_data_bool: np.ndarray | None = None
+    if boundary_mask is not None:
+        boundary_layer_snapshot = call_on_main(snapshot_layer, boundary_mask)
+        boundary_raw = materialize_array(boundary_layer_snapshot.data)
+        if boundary_raw.shape != raw.shape:
+            raise ValueError(
+                f"boundary_mask shape {boundary_raw.shape} does not match "
+                f"target image shape {raw.shape}"
+            )
+        boundary_data_bool = boundary_raw > 0
+
+    base_options = {
+        "background_radius": background_radius,
+        "background_method": background_method,
+        "background_percentile": background_percentile,
+        "threshold_method": threshold_method,
+        "threshold_percentile": threshold_percentile,
+        "min_snr": min_snr,
+        "high_snr": high_snr,
+        "min_size": min_size,
+        "min_area_um2": min_area_um2,
+        "min_volume_um3": min_volume_um3,
+        "smoothing_sigma": smoothing_sigma,
+        "fill_holes": fill_holes,
+        "split_touching": split_touching,
+        "min_distance": min_distance,
+        "min_distance_um": min_distance_um,
+    }
+    candidates = _build_auto3d_candidates(
+        raw,
+        spacing=spacing,
+        base_options=base_options,
+        candidate_modes=candidate_modes,
+        boundary_mask=boundary_data_bool,
+        max_candidates=max(1, int(max_candidates)),
+        stitch_min_overlap=stitch_min_overlap,
+        stitch_max_centroid_distance=stitch_max_centroid_distance,
+        stitch_max_area_ratio=stitch_max_area_ratio,
+    )
+
+    if include_cellpose_sam:
+        cp = _get_cellpose_model(cellpose_model)
+        anisotropy = None
+        scale = tuple(float(s) for s in getattr(L, "scale", ()) or ())
+        if len(scale) >= 3 and scale[1] > 0:
+            anisotropy = float(scale[0] / scale[1])
+        masks, _flows, _styles = cp.eval(
+            raw,
+            diameter=cellpose_diameter,
+            do_3D=True,
+            z_axis=0,
+            anisotropy=anisotropy,
+            flow_threshold=cellpose_flow_threshold,
+            cellprob_threshold=cellpose_cellprob_threshold,
+            min_size=max(1, int(min_size or 15)),
+            max_size_fraction=cellpose_max_size_fraction,
+        )
+        cellpose_labels = np.asarray(masks, dtype=np.int32)
+        cp_metrics, cp_warnings, cp_score = _rank_segmentation_labels(raw, cellpose_labels)
+        candidates.append(
+            _SegmentationCandidate(
+                name="cellpose_sam_3d",
+                strategy="cellpose_sam_3d",
+                labels=cellpose_labels,
+                params={
+                    "model": cellpose_model,
+                    "diameter": cellpose_diameter,
+                    "flow_threshold": cellpose_flow_threshold,
+                    "cellprob_threshold": cellpose_cellprob_threshold,
+                    "anisotropy": anisotropy,
+                },
+                metrics=cp_metrics,
+                warnings=cp_warnings,
+                score=cp_score,
+            )
+        )
+        candidates = sorted(candidates, key=lambda c: c.score, reverse=True)[
+            : max(1, int(max_candidates))
+        ]
+
+    if not candidates:
+        raise ValueError("no segmentation candidates were generated")
+
+    best = candidates[0]
+    qc = _label_qc(best.labels)
+    confidence = _selection_confidence(candidates)
+    qc_warnings = saturation_warnings + list(best.warnings)
+    if confidence == "low":
+        qc_warnings.append(
+            "automatic candidate selection confidence is low; inspect the QC image "
+            "or compare candidate summaries before batch use"
+        )
+
+    out_name = f"{L.name}_auto3d_cells"
+    layer = call_on_main(
+        add_labels_from_worker,
+        best.labels,
+        name=out_name,
+        scale=tuple(L.scale),
+        metadata={
+            "source_layer": L.name,
+            **_source_metadata_from_layer(L),
+            "segmentation_method": "auto_3d_cells",
+            "selected_strategy": best.strategy,
+            "selection_confidence": confidence,
+            "selected_score": best.score,
+            "candidate_summaries": [_candidate_summary(c) for c in candidates],
+            "candidate_modes": candidate_modes or ["direct_3d", "plane_stitch"],
+            "include_cellpose_sam": include_cellpose_sam,
+            "boundary_mask": boundary_mask,
+            "voxel_spacing": list(spacing) if spacing is not None else None,
+            "axes": "ZYX",
+            "qc_warnings": qc_warnings,
+            **qc,
+            **best.metrics,
+        },
+    )
+
+    saved_qc_png: str | None = None
+    qc_png_error: str | None = None
+    qc_png_skipped_reason: str | None = None
+    if save_qc_png:
+        try:
+            out_path = (
+                normalize_user_path(qc_png_path).resolve()
+                if qc_png_path
+                else _default_qc_png_path(layer.name, L)
+            )
+            saved_qc_png, qc_png_skipped_reason = _save_qc_png(
+                raw,
+                best.labels,
+                out_path,
+                labels_layer=layer.name,
+                source_layer=L.name,
+                method="auto_3d_cells",
+                force=qc_png_path is not None,
+            )
+            if saved_qc_png:
+                try:
+                    layer.metadata["qc_png_path"] = saved_qc_png
+                except Exception:
+                    pass
+        except Exception as exc:  # noqa: BLE001
+            qc_png_error = f"{type(exc).__name__}: {exc}"
+
+    return {
+        "labels_layer": layer.name,
+        "segmentation_method": "auto_3d_cells",
+        "selected_strategy": best.strategy,
+        "selection_confidence": confidence,
+        "selected_score": float(best.score),
+        "candidate_summaries": [_candidate_summary(c) for c in candidates],
+        "n_objects": qc["n_objects"],
+        "n_cells": qc["n_objects"],
+        "shape": qc["shape"],
+        "dtype": qc["dtype"],
+        "empty_mask": qc["empty_mask"],
+        "object_area_min": qc["object_area_min"],
+        "object_area_median": qc["object_area_median"],
+        "object_area_max": qc["object_area_max"],
+        "mask_fraction": best.metrics.get("mask_fraction"),
+        "top_bright_outside_fraction": best.metrics.get("top_bright_outside_fraction"),
+        "single_plane_object_fraction": best.metrics.get("single_plane_object_fraction"),
+        "z_gap_object_fraction": best.metrics.get("z_gap_object_fraction"),
+        "boundary_mask": boundary_mask,
+        "voxel_spacing": list(spacing) if spacing is not None else None,
+        "axes": axes,
         "qc_warnings": qc_warnings,
         "qc_png_path": saved_qc_png,
         "qc_png_error": qc_png_error,

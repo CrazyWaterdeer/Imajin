@@ -7,6 +7,10 @@ from urllib.parse import unquote, urlparse
 
 
 _WINDOWS_DRIVE_RE = re.compile(r"^([A-Za-z]):[\\/]*(.*)$")
+_WSL_UNC_RE = re.compile(
+    r"^[\\/]{2}wsl(?:\.localhost|\$)?[\\/]+([^\\/]+)(?:[\\/]+(.*))?$",
+    re.IGNORECASE,
+)
 
 
 def is_wsl() -> bool:
@@ -40,6 +44,8 @@ def _file_uri_to_path(text: str) -> str:
         return text
     parsed = urlparse(text)
     local = unquote(parsed.path or "")
+    if parsed.netloc.lower() in {"wsl.localhost", "wsl$"}:
+        return f"//{parsed.netloc}{local}"
     if re.match(r"^/[A-Za-z]:[\\/]", local):
         return local[1:]
     if parsed.netloc and _WINDOWS_DRIVE_RE.match(parsed.netloc):
@@ -47,9 +53,20 @@ def _file_uri_to_path(text: str) -> str:
     return local or text
 
 
+def _wsl_unc_to_path(text: str) -> Path | None:
+    match = _WSL_UNC_RE.match(text)
+    if not match or os.name == "nt":
+        return None
+    rest = (match.group(2) or "").replace("\\", "/").strip("/")
+    return Path("/") / rest if rest else Path("/")
+
+
 def normalize_user_path(path: str | os.PathLike[str]) -> Path:
     """Resolve user-provided paths from either Linux/WSL or Windows syntax."""
     text = _file_uri_to_path(_strip_wrapping(os.fspath(path)))
+    wsl_path = _wsl_unc_to_path(text)
+    if wsl_path is not None:
+        return wsl_path
     match = _WINDOWS_DRIVE_RE.match(text)
     if match and os.name != "nt":
         drive = match.group(1).lower()

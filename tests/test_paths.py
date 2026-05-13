@@ -28,3 +28,20 @@ def test_normalize_quoted_windows_directory() -> None:
 def test_normalize_windows_file_uri() -> None:
     path = normalize_user_path("file:///C:/Users/Jin/Downloads/sample%201.lsm")
     assert path == Path("/mnt/c/Users/Jin/Downloads/sample 1.lsm")
+
+
+def test_normalize_wsl_localhost_unc_path() -> None:
+    path = normalize_user_path(
+        r"\\wsl.localhost\Ubuntu\home\jin\New Folder\sample.lsm"
+    )
+    assert path == Path("/home/jin/New Folder/sample.lsm")
+
+
+def test_normalize_wsl_dollar_unc_path() -> None:
+    path = normalize_user_path(r"\\wsl$\Ubuntu\home\jin\New Folder\sample.lsm")
+    assert path == Path("/home/jin/New Folder/sample.lsm")
+
+
+def test_normalize_wsl_file_uri() -> None:
+    path = normalize_user_path("file://wsl.localhost/Ubuntu/home/jin/sample%201.lsm")
+    assert path == Path("/home/jin/sample 1.lsm")

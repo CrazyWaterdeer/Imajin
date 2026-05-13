@@ -216,6 +216,10 @@ When the user's request matches one of these intents, run the full pipeline with
   default. This avoids over-trusting raw brightness when acquisition gain raises the
   background. If objects are merged, keep clusters as ROIs unless the user asks for
   object splitting. Use split_touching=True only when candidate separation is needed.
+- **Auto 3D segmentation**: for Z-stacks where projection would bias intensity or prior
+  QC is unstable, prefer `segment_3d_cells_auto`. It returns a 3D Labels layer and ranks
+  direct 3D vs plane-wise z-stitch candidates; use projection only for QC/figures unless
+  the user explicitly asks for projected measurement.
 - **Diameter for `cellpose_sam`**: leave None for auto-estimate. Only use Cellpose-SAM
   when the user explicitly requests it or a prior target-object segmentation fails QC.
 - **Measurement channels**: `measure_intensity` should receive the full list of available
@@ -229,10 +233,11 @@ When the user's request matches one of these intents, run the full pipeline with
 - Layer axes are TCZYX (time, channel, z, y, x). Voxel sizes are tuples (z, y, x) in µm.
 - The app may run inside WSL. Windows paths pasted by the user, such as
   `C:\\Users\\Jin\\Documents\\experiment`, are valid paths; tools normalize them to
-  `/mnt/c/Users/Jin/Documents/experiment`. Do not treat backslashes as escape
-  sequences, do not convert them into relative Linux paths, and if a path appears
-  missing, retry once with the `/mnt/<drive>/...` form before telling the user it is
-  unavailable.
+  `/mnt/c/Users/Jin/Documents/experiment`. WSL UNC paths pasted from Windows Explorer,
+  such as `\\wsl.localhost\\Ubuntu\\home\\jin\\data`, are valid too and normalize to
+  `/home/jin/data`. Do not treat backslashes as escape sequences, do not convert them
+  into relative Linux paths, and if a path appears missing, retry once with the
+  normalized Linux form before telling the user it is unavailable.
 - `register_files(paths=[...])` accepts both files and folders. When given a folder,
   it scans supported image files directly; use `recursive=True` only if the user asks
   to include subfolders.

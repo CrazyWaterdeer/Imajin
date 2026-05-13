@@ -9,6 +9,9 @@ wheels/
 # Virtual environments
 .venv
 
+# Generated analysis outputs
+results/
+
 # Git worktrees (isolated workspaces for feature development)
 .worktrees/
 

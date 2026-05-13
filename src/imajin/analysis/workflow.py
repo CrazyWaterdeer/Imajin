@@ -30,6 +30,13 @@ _TARGET_OBJECT_ALIASES = {
     "rois",
 }
 _CELLPOSE_SAM_ALIASES = {"cellpose", "cpsam", "cellpose_sam"}
+_AUTO_3D_CELL_ALIASES = {
+    "auto_3d",
+    "auto3d",
+    "auto_3d_cells",
+    "segment_3d_cells_auto",
+    "3d_auto",
+}
 _INTENSITY_REGION_ALIASES = {
     "intensity",
     "intensity_region",
@@ -69,11 +76,13 @@ def normalize_segmentation_method(method: str) -> str:
         return "target_objects"
     if key in _CELLPOSE_SAM_ALIASES:
         return "cellpose_sam"
+    if key in _AUTO_3D_CELL_ALIASES:
+        return "auto_3d_cells"
     if key in _INTENSITY_REGION_ALIASES:
         return "intensity_regions"
     raise ValueError(
         "segmentation_method must be 'target_objects', 'cellpose_sam', "
-        f"or 'intensity_regions' (got {method!r}). "
+        f"'auto_3d_cells', or 'intensity_regions' (got {method!r}). "
         "Tier-1 domain steps like 'expression_domain' belong in the "
         "`domain` slot, not `segmentation`."
     )
@@ -174,6 +183,7 @@ def check_analysis_memory_budget(
         "target_objects": 4.0,
         "intensity_regions": 2.5,
         "cellpose_sam": 4.0,
+        "auto_3d_cells": 6.0,
     }.get(method, 4.0)
     minimal_required = int(nbytes * minimal_multiplier) + 256 * 1024**2
     if minimal_required <= available:

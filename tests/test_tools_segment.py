@@ -4,6 +4,12 @@ import numpy as np
 import pytest
 from PIL import Image
 
+from imajin.analysis.segmentation_auto3d import (
+    SegmentationCandidate,
+    rank_segmentation_labels,
+    selection_confidence,
+    stitch_plane_labels,
+)
 from imajin.tools import segment
 
 
@@ -201,6 +207,75 @@ def test_segment_target_objects_treats_unannotated_3d_as_z_stack(viewer) -> None
     assert res["axes"] == "ZYX"
     assert labels.shape == image.shape
     assert res["n_objects"] >= 1
+
+
+def test_stitch_plane_labels_links_overlapping_rois() -> None:
+    labels = np.zeros((3, 24, 24), dtype=np.int32)
+    labels[0, 5:14, 5:14] = 1
+    labels[1, 6:15, 6:15] = 1
+    labels[2, 2:8, 16:22] = 1
+
+    stitched, record = stitch_plane_labels(labels, min_overlap_fraction=0.2)
+
+    assert record["plane_roi_count"] == 3
+    assert record["stitched_cell_count"] == 2
+    assert stitched[0, 8, 8] == stitched[1, 9, 9] != 0
+    assert stitched[2, 4, 18] != stitched[0, 8, 8]
+
+
+def test_auto3d_scoring_penalizes_extreme_merged_object() -> None:
+    image = np.zeros((3, 64, 64), dtype=np.float32)
+    labels = np.zeros_like(image, dtype=np.int32)
+    labels[:, 5:55, 5:55] = 1
+    label_id = 2
+    for y in range(0, 64, 8):
+        for x in range(0, 64, 8):
+            if labels[0, y : y + 2, x : x + 2].any():
+                continue
+            labels[0, y : y + 2, x : x + 2] = label_id
+            label_id += 1
+    image[labels > 0] = 100.0
+
+    metrics, warnings, score = rank_segmentation_labels(image, labels)
+
+    assert metrics["largest_to_median_object_ratio"] > 1000
+    assert score < 60
+    assert any("extreme merged object" in w for w in warnings)
+
+
+def test_auto3d_confidence_accepts_stable_same_strategy_scores() -> None:
+    labels = np.zeros((2, 4, 4), dtype=np.int32)
+    candidates = [
+        SegmentationCandidate("a", "direct_3d", labels, {}, {"n_objects": 1}, [], 80.0),
+        SegmentationCandidate("b", "direct_3d", labels, {}, {"n_objects": 1}, [], 79.8),
+    ]
+
+    assert selection_confidence(candidates) == "high"
+
+
+def test_segment_3d_cells_auto_plane_stitch_outputs_3d_labels(viewer) -> None:
+    img = np.zeros((3, 64, 64), dtype=np.float32)
+    img[0, 20:32, 20:32] = 80.0
+    img[1, 21:33, 21:33] = 100.0
+    img[2, 22:34, 22:34] = 90.0
+    viewer.add_image(img, name="stack_target", scale=(0.8, 0.3, 0.3), metadata={"axes": "ZYX"})
+
+    res = segment.segment_3d_cells_auto(
+        "stack_target",
+        candidate_modes=["plane_stitch"],
+        background_radius=8,
+        min_size=20,
+        smoothing_sigma=0,
+        fill_holes=False,
+        save_qc_png=False,
+    )
+
+    labels = np.asarray(viewer.layers[res["labels_layer"]].data)
+    assert labels.shape == img.shape
+    assert res["selected_strategy"] == "plane_stitch"
+    assert res["n_objects"] == 1
+    assert labels[0, 25, 25] == labels[1, 26, 26] == labels[2, 27, 27] != 0
+    assert res["single_plane_object_fraction"] == pytest.approx(0.0)
 
 
 def test_segment_target_objects_keeps_cluster_without_split(viewer) -> None:

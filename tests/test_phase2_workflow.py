@@ -258,6 +258,38 @@ def test_analyze_target_cells_keeps_z_stack_measurement_3d(viewer) -> None:
     assert df["volume_um3"].iloc[0] > 0
 
 
+def test_analyze_target_cells_accepts_auto_3d_cells_alias(viewer) -> None:
+    img = np.zeros((3, 64, 64), dtype=np.float32)
+    img[0, 20:32, 20:32] = 80.0
+    img[1, 21:33, 21:33] = 100.0
+    img[2, 22:34, 22:34] = 90.0
+    viewer.add_image(
+        img,
+        name="auto3d_target",
+        scale=(0.8, 0.3, 0.3),
+        metadata={"axes": "ZYX"},
+    )
+
+    res = workflows.analyze_target_cells(
+        target="auto3d_target",
+        segmentation_method="auto_3d_cells",
+        segmentation_options={
+            "candidate_modes": ["plane_stitch"],
+            "background_radius": 8,
+            "min_size": 20,
+            "smoothing_sigma": 0,
+            "fill_holes": False,
+            "save_qc_png": False,
+        },
+    )
+
+    assert res["ok"] is True
+    assert res["segmentation_method"] == "auto_3d_cells"
+    assert res["analysis_dim"] == "3d"
+    assert res["n_objects"] == 1
+    assert "volume_um3" in res["table_columns"]
+
+
 def test_analyze_target_cells_accepts_segment_intensity_regions_alias(viewer) -> None:
     img = np.zeros((20, 20), dtype=np.float32)
     img[2:8, 2:8] = 100.0
