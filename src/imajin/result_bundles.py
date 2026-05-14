@@ -203,9 +203,10 @@ def _environment_from_flat_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
 
 
 def _normalize_bundle_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
-    if metadata.get("schema_version") == 2:
+    sv = metadata.get("schema_version")
+    if sv in (2, 3):
         return {
-            "schema_version": 2,
+            "schema_version": sv,
             "recipe_params": dict(metadata.get("recipe_params") or {}),
             "run_context": dict(metadata.get("run_context") or {}),
             "environment": dict(metadata.get("environment") or {}),

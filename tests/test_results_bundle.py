@@ -366,3 +366,20 @@ def test_finalize_analysis_writes_status_and_strips_redacted_fields(
     assert "qc_warnings" not in sample.get("summary", {})
     assert "outputs" not in sample
     assert "tables" not in rc  # `run_context.tables` shorthand removed.
+
+
+def test_finalize_after_start_preserves_kind_tier_name(tmp_path, monkeypatch):
+    """start_analysis -> finalize_analysis must retain bundle provenance fields."""
+    monkeypatch.setenv("IMAJIN_RESULTS_DIR", str(tmp_path))
+    from imajin.result_bundles import finalize_analysis, start_analysis
+    from imajin.results import read_bundle_metadata
+
+    bundle = start_analysis(name="provenance_demo", kind="single", tier="two_tier")
+    finalize_analysis(status="complete", samples=[{"sample_name": "s1", "status": "complete"}])
+
+    meta = read_bundle_metadata(bundle)
+    rc = meta["run_context"]
+    assert rc["kind"] == "single"
+    assert rc["tier"] == "two_tier"
+    assert rc["name"] == "provenance_demo"
+    assert rc["created_at"]  # ISO timestamp preserved
