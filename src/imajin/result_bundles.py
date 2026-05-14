@@ -53,6 +53,14 @@ def ensure_active_bundle() -> Path:
         return _process_bundle
 
 
+def bundle_output_path(category: str, filename: str) -> Path:
+    """Resolve <bundle>/<category>/<filename>, lazily creating the bundle and parent."""
+    bundle = ensure_active_bundle()
+    out = bundle / category / filename
+    out.parent.mkdir(parents=True, exist_ok=True)
+    return out
+
+
 def current_bundle() -> Path | None:
     ctx = _active_bundle.get()
     if ctx is not None:

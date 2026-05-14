@@ -292,3 +292,24 @@ def test_read_bundle_metadata_normalizes_v1(tmp_path) -> None:
     assert norm["run_context"]["kind"] == "batch"
     assert norm["run_context"]["tier"] == "two_tier"
     assert norm["run_context"]["status"] == "complete"
+
+
+def test_bundle_output_path_creates_parent(tmp_path, monkeypatch):
+    monkeypatch.setenv("IMAJIN_RESULTS_DIR", str(tmp_path))
+    from imajin.result_bundles import bundle_output_path, ensure_active_bundle
+
+    out = bundle_output_path("figures", "demo.png")
+    bundle = ensure_active_bundle()
+    assert out == bundle / "figures" / "demo.png"
+    assert out.parent.is_dir()
+
+
+def test_bundle_output_path_uses_active_named_bundle(tmp_path, monkeypatch):
+    monkeypatch.setenv("IMAJIN_RESULTS_DIR", str(tmp_path))
+    from imajin.results import create_result_bundle
+    from imajin.result_bundles import bundle_output_path, with_active_bundle
+
+    named = create_result_bundle("named", kind="single")
+    with with_active_bundle(named):
+        out = bundle_output_path("stats", "stuff.csv")
+    assert out == named / "stats" / "stuff.csv"
