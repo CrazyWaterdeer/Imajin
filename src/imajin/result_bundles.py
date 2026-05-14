@@ -3,6 +3,7 @@ from __future__ import annotations
 import contextlib
 import contextvars
 import shutil
+import threading
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -22,9 +23,41 @@ _active_sample_slug: contextvars.ContextVar[str | None] = contextvars.ContextVar
     "imajin_active_sample_slug", default=None
 )
 
+_process_bundle_lock = threading.Lock()
+_process_bundle: Path | None = None
+
+
+def reset_process_bundle() -> None:
+    """Drop the process-global ad-hoc bundle slot. Intended for tests."""
+    global _process_bundle
+    with _process_bundle_lock:
+        _process_bundle = None
+
+
+def ensure_active_bundle() -> Path:
+    """Return the active bundle, creating a process-wide ad-hoc one if needed."""
+    global _process_bundle
+    ctx_bundle = _active_bundle.get()
+    if ctx_bundle is not None:
+        return ctx_bundle
+    with _process_bundle_lock:
+        if _process_bundle is None:
+            from imajin.results import create_result_bundle, user_results_root
+
+            _process_bundle = create_result_bundle(
+                name="adhoc",
+                kind="adhoc",
+                root=user_results_root(),
+            )
+        return _process_bundle
+
 
 def current_bundle() -> Path | None:
-    return _active_bundle.get()
+    ctx = _active_bundle.get()
+    if ctx is not None:
+        return ctx
+    with _process_bundle_lock:
+        return _process_bundle
 
 
 def current_sample_slug() -> str | None:

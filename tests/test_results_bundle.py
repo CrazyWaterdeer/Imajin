@@ -26,6 +26,15 @@ from imajin.tools.results import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _reset_process_bundle():
+    from imajin.result_bundles import reset_process_bundle
+
+    reset_process_bundle()
+    yield
+    reset_process_bundle()
+
+
 def test_kst_now_returns_aware_datetime_with_plus_nine_offset() -> None:
     now = _kst_now()
     assert now.tzinfo is not None
@@ -224,6 +233,49 @@ def test_finalize_writes_schema_v2(tmp_path) -> None:
     assert meta["run_context"]["channel_roles"] == {"Ch1": "target"}
     assert meta["run_context"]["folder_set"] == [str(tmp_path)]
     assert "deps" in meta["environment"]
+
+
+def test_ensure_active_bundle_lazy_creates_adhoc(tmp_path, monkeypatch):
+    monkeypatch.setenv("IMAJIN_RESULTS_DIR", str(tmp_path))
+    from imajin.result_bundles import (
+        ensure_active_bundle,
+        reset_process_bundle,
+        current_bundle,
+    )
+
+    reset_process_bundle()
+    assert current_bundle() is None
+
+    bundle = ensure_active_bundle()
+    assert bundle.parent == tmp_path
+    assert bundle.name.endswith("_adhoc")
+    assert (bundle / "metadata.json").exists()
+    assert current_bundle() == bundle
+
+    # Second call returns the same bundle.
+    assert ensure_active_bundle() == bundle
+
+    reset_process_bundle()
+
+
+def test_ensure_active_bundle_respects_explicit_active_bundle(tmp_path, monkeypatch):
+    monkeypatch.setenv("IMAJIN_RESULTS_DIR", str(tmp_path))
+    from imajin.results import create_result_bundle
+    from imajin.result_bundles import (
+        ensure_active_bundle,
+        reset_process_bundle,
+        with_active_bundle,
+    )
+
+    reset_process_bundle()
+    explicit = create_result_bundle("named", kind="single")
+    with with_active_bundle(explicit):
+        assert ensure_active_bundle() == explicit
+    # After leaving the context, ad-hoc takes over.
+    bundle = ensure_active_bundle()
+    assert bundle != explicit
+    assert bundle.name.endswith("_adhoc")
+    reset_process_bundle()
 
 
 def test_read_bundle_metadata_normalizes_v1(tmp_path) -> None:
