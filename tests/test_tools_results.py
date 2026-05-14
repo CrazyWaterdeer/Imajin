@@ -73,7 +73,7 @@ def test_save_result_bundle_collects_labels_tables_and_qc(
         metadata={"sample": "sample_1"},
     )
 
-    bundle = tmp_path / "results" / "bundles"
+    bundle = tmp_path / "results"
     assert res["bundle_path"].startswith(str(bundle))
     metadata = json.loads((Path(res["bundle_path"]) / "metadata.json").read_text())
     assert metadata["sample"] == "sample_1"

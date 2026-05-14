@@ -511,3 +511,12 @@ def test_register_stats_rows_compare_separate_file(tmp_path, monkeypatch):
     )
     df = pd.read_csv(bundle / "stats" / "compare__measurements.csv")
     assert df.iloc[0]["test"] == "welch_ttest"
+
+
+def test_create_result_bundle_writes_directly_under_root(tmp_path, monkeypatch):
+    monkeypatch.setenv("IMAJIN_RESULTS_DIR", str(tmp_path))
+    from imajin.results import create_result_bundle
+
+    bundle = create_result_bundle("demo", kind="single")
+    assert bundle.parent == tmp_path
+    assert not (tmp_path / "bundles").exists()

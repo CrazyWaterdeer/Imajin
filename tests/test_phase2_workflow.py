@@ -322,7 +322,7 @@ def test_analyze_target_cells_saves_result_bundle(
 
     assert res["ok"] is True
     assert res["result_bundle_path"].startswith(
-        str(tmp_path / "results" / "bundles")
+        str(tmp_path / "results")
     )
     assert res["result_files"]["labels_cells"] == "labels/cells/green_target.tif"
     assert res["result_files"]["labels_domain"] is None

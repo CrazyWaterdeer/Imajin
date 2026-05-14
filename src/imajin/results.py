@@ -189,10 +189,9 @@ def create_result_bundle(
     """
     now = _kst_now()
     timestamp = now.strftime("%Y%m%d_%H%M%S")
-    if root is not None:
-        bundle = _unique_subdir(Path(root), f"{timestamp}_{slugify_result_name(name)}")
-    else:
-        bundle = unique_result_dir("bundles", f"{timestamp}_{slugify_result_name(name)}")
+    if root is None:
+        root = user_results_root()
+    bundle = _unique_subdir(Path(root), f"{timestamp}_{slugify_result_name(name)}")
     env = _collect_env_info()
     payload: dict[str, Any] = dict(metadata or {})
     payload.update({
