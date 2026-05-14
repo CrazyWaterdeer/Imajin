@@ -572,16 +572,13 @@ def test_analyze_target_cells_single_tier_writes_new_layout_bundle(
 
     meta = json.loads((bundle / "metadata.json").read_text())
     run_context = meta["run_context"]
-    assert meta["schema_version"] == 2
+    assert meta["schema_version"] == 3
     assert run_context["kind"] == "single"
     assert run_context["tier"] == "single_tier"
     assert run_context["status"] == "complete"
     assert len(run_context["samples"]) == 1
     assert run_context["samples"][0]["status"] == "complete"
-    assert (
-        run_context["samples"][0]["outputs"]["labels_cells"]
-        == "labels/cells/reporter.tif"
-    )
+    assert "outputs" not in run_context["samples"][0]
 
 
 def test_analyze_target_cells_two_tier_writes_bundle(
@@ -614,15 +611,12 @@ def test_analyze_target_cells_two_tier_writes_bundle(
 
     meta = json.loads((bundle / "metadata.json").read_text())
     run_context = meta["run_context"]
-    assert meta["schema_version"] == 2
+    assert meta["schema_version"] == 3
     assert run_context["kind"] == "single"
     assert run_context["tier"] == "two_tier"
     assert run_context["status"] == "complete"
     assert len(run_context["samples"]) == 1
-    assert (
-        run_context["samples"][0]["outputs"]["labels_domain"]
-        == "labels/domain/reporter.tif"
-    )
+    assert "outputs" not in run_context["samples"][0]
 
 
 def test_analyze_target_cells_writes_into_active_parent_bundle(
