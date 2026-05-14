@@ -383,3 +383,38 @@ def test_finalize_after_start_preserves_kind_tier_name(tmp_path, monkeypatch):
     assert rc["tier"] == "two_tier"
     assert rc["name"] == "provenance_demo"
     assert rc["created_at"]  # ISO timestamp preserved
+
+
+def test_register_output_appends_to_metadata(tmp_path, monkeypatch):
+    monkeypatch.setenv("IMAJIN_RESULTS_DIR", str(tmp_path))
+    from imajin.result_bundles import (
+        bundle_output_path,
+        register_output,
+        start_analysis,
+    )
+    from imajin.results import read_bundle_metadata
+
+    bundle = start_analysis(name="demo")
+    p = bundle_output_path("figures", "x.png")
+    p.write_bytes(b"\x89PNG\r\n")
+    register_output("figure", p, {"source": "test"})
+
+    meta = read_bundle_metadata(bundle)
+    outputs = meta["outputs"]
+    assert len(outputs) == 1
+    entry = outputs[0]
+    assert entry["kind"] == "figure"
+    assert entry["path"] == "figures/x.png"
+    assert entry["metadata"] == {"source": "test"}
+    assert entry["created_at"]
+
+
+def test_register_output_rejects_path_outside_bundle(tmp_path, monkeypatch):
+    monkeypatch.setenv("IMAJIN_RESULTS_DIR", str(tmp_path))
+    from imajin.result_bundles import register_output, start_analysis
+
+    start_analysis(name="demo")
+    outside = tmp_path / "elsewhere.png"
+    outside.write_bytes(b"")
+    with pytest.raises(ValueError, match="outside the active bundle"):
+        register_output("figure", outside, None)

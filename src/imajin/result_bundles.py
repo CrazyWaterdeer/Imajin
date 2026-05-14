@@ -61,6 +61,44 @@ def bundle_output_path(category: str, filename: str) -> Path:
     return out
 
 
+def register_output(
+    kind: str,
+    path: Path | str,
+    metadata: dict[str, Any] | None = None,
+) -> None:
+    """Append an entry to the active bundle's metadata.json `outputs` index.
+
+    `path` must already live inside the active bundle; it is recorded as a
+    POSIX-relative path. Writes are flushed immediately so consumers can read
+    a partial bundle.
+    """
+    from datetime import UTC, datetime as _datetime
+
+    bundle = ensure_active_bundle()
+    target = Path(path).resolve()
+    bundle_resolved = bundle.resolve()
+    try:
+        rel = target.relative_to(bundle_resolved)
+    except ValueError as exc:
+        raise ValueError(
+            f"output {target} is outside the active bundle {bundle_resolved}"
+        ) from exc
+
+    record = {
+        "kind": kind,
+        "path": rel.as_posix(),
+        "created_at": _datetime.now(UTC).isoformat(),
+        "metadata": dict(metadata or {}),
+    }
+    seed = read_bundle_metadata(bundle)
+    outputs = list(seed.get("outputs") or [])
+    outputs.append(record)
+    seed["outputs"] = outputs
+    if "schema_version" not in seed:
+        seed["schema_version"] = 3
+    write_bundle_metadata(bundle, seed)
+
+
 def current_bundle() -> Path | None:
     ctx = _active_bundle.get()
     if ctx is not None:
