@@ -8,7 +8,8 @@ import pandas as pd
 
 from imajin.agent.state import get_table, put_table
 from imajin.paths import normalize_user_path
-from imajin.results import record_result, slugify_result_name, unique_result_path
+from imajin.result_bundles import bundle_output_path, register_output
+from imajin.results import slugify_result_name
 from imajin.tools._dataframes import finite_numeric_frame, infer_time_column
 from imajin.tools.registry import tool
 
@@ -55,22 +56,18 @@ def _figure_path(stem: str, output_path: str | None, fmt: str) -> Path:
         if not out.suffix:
             out = out.with_suffix(f".{suffix}")
         return out
-    try:
-        from imajin.result_bundles import current_bundle
-
-        bundle = current_bundle()
-    except Exception:
-        bundle = None
     filename = f"{slugify_result_name(stem)}.{suffix}"
-    if bundle is not None:
-        return Path(bundle) / "figures" / filename
-    return unique_result_path("figures", filename)
+    return bundle_output_path("figures", filename)
 
 
 def _save_figure(fig: Any, out: Path, *, dpi: int, metadata: dict[str, Any]) -> str:
     out.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out, dpi=int(dpi), bbox_inches="tight", transparent=False)
-    record_result("figure", out, metadata)
+    try:
+        register_output("figure", out, metadata)
+    except ValueError:
+        # Explicit user-supplied path outside the active bundle: save but skip index.
+        pass
     return str(out)
 
 
