@@ -418,3 +418,17 @@ def test_register_output_rejects_path_outside_bundle(tmp_path, monkeypatch):
     outside.write_bytes(b"")
     with pytest.raises(ValueError, match="outside the active bundle"):
         register_output("figure", outside, None)
+
+
+def test_register_table_spec_merges_into_metadata(tmp_path, monkeypatch):
+    monkeypatch.setenv("IMAJIN_RESULTS_DIR", str(tmp_path))
+    from imajin.result_bundles import register_table_spec, start_analysis
+    from imajin.results import read_bundle_metadata
+
+    bundle = start_analysis(name="demo")
+    register_table_spec("measurements", {"tool": "measure_table", "value_cols": ["mean_intensity"]})
+    register_table_spec("ratios", {"tool": "derive_ratio", "source": "measurements"})
+
+    meta = read_bundle_metadata(bundle)
+    assert meta["table_specs"]["measurements"]["tool"] == "measure_table"
+    assert meta["table_specs"]["ratios"]["source"] == "measurements"

@@ -99,6 +99,17 @@ def register_output(
     write_bundle_metadata(bundle, seed)
 
 
+def register_table_spec(table_name: str, spec: dict[str, Any]) -> None:
+    bundle = ensure_active_bundle()
+    seed = read_bundle_metadata(bundle)
+    table_specs = dict(seed.get("table_specs") or {})
+    table_specs[str(table_name)] = dict(spec)
+    seed["table_specs"] = table_specs
+    if "schema_version" not in seed:
+        seed["schema_version"] = 3
+    write_bundle_metadata(bundle, seed)
+
+
 def current_bundle() -> Path | None:
     ctx = _active_bundle.get()
     if ctx is not None:
