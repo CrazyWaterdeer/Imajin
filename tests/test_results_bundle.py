@@ -432,3 +432,82 @@ def test_register_table_spec_merges_into_metadata(tmp_path, monkeypatch):
     meta = read_bundle_metadata(bundle)
     assert meta["table_specs"]["measurements"]["tool"] == "measure_table"
     assert meta["table_specs"]["ratios"]["source"] == "measurements"
+
+
+def test_register_stats_rows_describe_long_format(tmp_path, monkeypatch):
+    import pandas as pd
+
+    monkeypatch.setenv("IMAJIN_RESULTS_DIR", str(tmp_path))
+    from imajin.result_bundles import register_stats_rows, start_analysis
+
+    bundle = start_analysis(name="demo")
+    register_stats_rows(
+        kind="describe",
+        table="measurements",
+        rows=[
+            {"value_col": "mean_intensity", "level": "object",
+             "sample_aggregation": "", "group": "control",
+             "n": 200, "mean": 1.1, "median": 1.05},
+        ],
+    )
+    register_stats_rows(
+        kind="describe",
+        table="measurements",
+        rows=[
+            {"value_col": "max_intensity", "level": "object",
+             "sample_aggregation": "", "group": "control",
+             "n": 200, "mean": 5.2, "median": 5.0},
+        ],
+    )
+
+    df = pd.read_csv(bundle / "stats" / "describe__measurements.csv")
+    assert set(df["value_col"]) == {"mean_intensity", "max_intensity"}
+    assert len(df) == 2
+
+
+def test_register_stats_rows_overwrites_same_key(tmp_path, monkeypatch):
+    import pandas as pd
+
+    monkeypatch.setenv("IMAJIN_RESULTS_DIR", str(tmp_path))
+    from imajin.result_bundles import register_stats_rows, start_analysis
+
+    bundle = start_analysis(name="demo")
+    register_stats_rows(
+        kind="describe",
+        table="measurements",
+        rows=[
+            {"value_col": "mean_intensity", "level": "object",
+             "sample_aggregation": "", "group": "control", "n": 200, "mean": 1.0},
+        ],
+    )
+    register_stats_rows(
+        kind="describe",
+        table="measurements",
+        rows=[
+            {"value_col": "mean_intensity", "level": "object",
+             "sample_aggregation": "", "group": "control", "n": 200, "mean": 1.5},
+        ],
+    )
+
+    df = pd.read_csv(bundle / "stats" / "describe__measurements.csv")
+    assert len(df) == 1
+    assert df.iloc[0]["mean"] == 1.5
+
+
+def test_register_stats_rows_compare_separate_file(tmp_path, monkeypatch):
+    import pandas as pd
+
+    monkeypatch.setenv("IMAJIN_RESULTS_DIR", str(tmp_path))
+    from imajin.result_bundles import register_stats_rows, start_analysis
+
+    bundle = start_analysis(name="demo")
+    register_stats_rows(
+        kind="compare",
+        table="measurements",
+        rows=[
+            {"value_col": "mean_intensity", "test": "welch_ttest",
+             "data_level": "sample", "p_value": 0.02},
+        ],
+    )
+    df = pd.read_csv(bundle / "stats" / "compare__measurements.csv")
+    assert df.iloc[0]["test"] == "welch_ttest"

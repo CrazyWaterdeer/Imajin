@@ -402,6 +402,65 @@ def start_analysis(
     return bundle
 
 
+# Per-kind dedup keys; rows with the same key replace earlier rows.
+_STATS_KEY_FIELDS = {
+    "describe": ("value_col", "level", "sample_aggregation", "group"),
+    "compare": ("value_col", "test", "data_level", "group_a", "group_b"),
+    "timecourse_features": ("value_col", "sample_name", "label"),
+}
+
+
+def register_stats_rows(
+    *,
+    kind: str,
+    table: str,
+    rows: list[dict[str, Any]],
+) -> None:
+    """Merge stats rows into `<bundle>/stats/<kind>__<table>.csv` (long format).
+
+    Rows are deduplicated by the kind-specific key fields; later rows replace
+    earlier ones with the same key. The destination CSV is rewritten on every
+    call so partial bundles are readable.
+    """
+    if kind not in _STATS_KEY_FIELDS:
+        raise ValueError(f"unsupported stats kind {kind!r}")
+    if not rows:
+        return
+
+    import pandas as pd
+
+    from imajin.results import slugify_result_name
+
+    bundle = ensure_active_bundle()
+    target = bundle / "stats" / f"{kind}__{slugify_result_name(table)}.csv"
+    target.parent.mkdir(parents=True, exist_ok=True)
+
+    new_df = pd.DataFrame(rows)
+    # Normalize empty strings to NaN in key columns so they round-trip through
+    # CSV identically (pandas read_csv reads empty fields as NaN).
+    key_fields = _STATS_KEY_FIELDS[kind]
+    for col in key_fields:
+        if col in new_df.columns:
+            new_df[col] = new_df[col].replace("", float("nan"))
+
+    if target.exists():
+        existing = pd.read_csv(target)
+        combined = pd.concat([existing, new_df], ignore_index=True, sort=False)
+    else:
+        combined = new_df
+
+    key_cols = [c for c in key_fields if c in combined.columns]
+    if key_cols:
+        combined = combined.drop_duplicates(subset=key_cols, keep="last").reset_index(drop=True)
+
+    combined.to_csv(target, index=False)
+    register_output(
+        f"stats_{kind}",
+        target,
+        {"table": table, "n_rows": int(len(combined))},
+    )
+
+
 def finalize_analysis(
     *,
     status: str = "complete",
