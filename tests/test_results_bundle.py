@@ -239,11 +239,9 @@ def test_ensure_active_bundle_lazy_creates_adhoc(tmp_path, monkeypatch):
     monkeypatch.setenv("IMAJIN_RESULTS_DIR", str(tmp_path))
     from imajin.result_bundles import (
         ensure_active_bundle,
-        reset_process_bundle,
         current_bundle,
     )
 
-    reset_process_bundle()
     assert current_bundle() is None
 
     bundle = ensure_active_bundle()
@@ -255,19 +253,15 @@ def test_ensure_active_bundle_lazy_creates_adhoc(tmp_path, monkeypatch):
     # Second call returns the same bundle.
     assert ensure_active_bundle() == bundle
 
-    reset_process_bundle()
-
 
 def test_ensure_active_bundle_respects_explicit_active_bundle(tmp_path, monkeypatch):
     monkeypatch.setenv("IMAJIN_RESULTS_DIR", str(tmp_path))
     from imajin.results import create_result_bundle
     from imajin.result_bundles import (
         ensure_active_bundle,
-        reset_process_bundle,
         with_active_bundle,
     )
 
-    reset_process_bundle()
     explicit = create_result_bundle("named", kind="single")
     with with_active_bundle(explicit):
         assert ensure_active_bundle() == explicit
@@ -275,7 +269,6 @@ def test_ensure_active_bundle_respects_explicit_active_bundle(tmp_path, monkeypa
     bundle = ensure_active_bundle()
     assert bundle != explicit
     assert bundle.name.endswith("_adhoc")
-    reset_process_bundle()
 
 
 def test_read_bundle_metadata_normalizes_v1(tmp_path) -> None:

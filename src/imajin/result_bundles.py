@@ -40,14 +40,15 @@ def ensure_active_bundle() -> Path:
     ctx_bundle = _active_bundle.get()
     if ctx_bundle is not None:
         return ctx_bundle
+    from imajin.results import create_result_bundle, user_results_root
+
+    root = user_results_root()
     with _process_bundle_lock:
         if _process_bundle is None:
-            from imajin.results import create_result_bundle, user_results_root
-
             _process_bundle = create_result_bundle(
                 name="adhoc",
                 kind="adhoc",
-                root=user_results_root(),
+                root=root,
             )
         return _process_bundle
 
