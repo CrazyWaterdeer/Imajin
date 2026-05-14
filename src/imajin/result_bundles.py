@@ -266,24 +266,106 @@ def finalize_bundle_metadata(
         **dict(normalized.get("environment") or {}),
         **dict(extra.pop("environment", {}) or {}),
     }
-    samples_list = list(samples)
+    samples_list = [_redact_sample(s) for s in samples]
     run_context = {
         **dict(normalized.get("run_context") or {}),
         "status": status,
+        "finalized_at": _kst_now_iso(),
         "samples": samples_list,
         "n_samples": len(samples_list),
         "n_complete": sum(1 for s in samples_list if s.get("status") == "complete"),
         "n_failed": sum(1 for s in samples_list if s.get("status") == "failed"),
-        "tables": {"combined": "tables/combined.csv"},
         **run_context_extras,
         **extra,
     }
+    # Drop fields that schema_v3 no longer carries.
+    run_context.pop("tables", None)
+
     write_bundle_metadata(
         bundle,
         {
-            "schema_version": 2,
+            "schema_version": 3,
             "recipe_params": dict(recipe_params),
             "run_context": run_context,
             "environment": environment,
+            "table_specs": dict(seed.get("table_specs") or {}),
+            "outputs": list(seed.get("outputs") or []),
         },
     )
+
+
+def _redact_sample(sample: dict[str, Any]) -> dict[str, Any]:
+    out = dict(sample)
+    out.pop("outputs", None)  # filesystem mirror removed
+    summary = dict(out.get("summary") or {})
+    summary.pop("qc_warnings", None)
+    out["summary"] = summary
+    return out
+
+
+def _kst_now_iso() -> str:
+    from imajin.results import _kst_now
+
+    return _kst_now().isoformat()
+
+
+def start_analysis(
+    name: str,
+    *,
+    kind: str = "single",
+    tier: str | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> Path:
+    """Create a named bundle, write seed metadata.json (schema_v3, status='in_progress'),
+    and set it as the active bundle for the calling context."""
+    from imajin.results import create_result_bundle, user_results_root
+
+    root = user_results_root()
+    bundle = create_result_bundle(
+        name=name,
+        kind=kind,
+        tier=tier,
+        metadata=metadata,
+        root=root,
+    )
+    # Rewrite as schema_v3 seed so all downstream readers see schema_version=3.
+    seed = read_bundle_metadata(bundle)
+    normalized = _normalize_bundle_metadata(seed)
+    run_context = dict(normalized.get("run_context") or {})
+    environment = dict(normalized.get("environment") or {})
+    write_bundle_metadata(
+        bundle,
+        {
+            "schema_version": 3,
+            "recipe_params": dict(normalized.get("recipe_params") or {}),
+            "run_context": run_context,
+            "environment": environment,
+            "table_specs": {},
+            "outputs": [],
+        },
+    )
+    # Promote the bundle into the process-global slot so cross-call tool writes
+    # share it without a containing with-block.
+    global _process_bundle
+    with _process_bundle_lock:
+        _process_bundle = bundle
+    return bundle
+
+
+def finalize_analysis(
+    *,
+    status: str = "complete",
+    samples: list[dict[str, Any]] | None = None,
+    extra: dict[str, Any] | None = None,
+) -> Path:
+    """Finalize the currently active bundle. Writes schema_v3 metadata.json with the
+    final status and clears the process slot."""
+    bundle = ensure_active_bundle()
+    finalize_bundle_metadata(
+        bundle,
+        samples=list(samples or []),
+        status=status,
+        extra=dict(extra or {}),
+    )
+    reset_process_bundle()
+    return bundle

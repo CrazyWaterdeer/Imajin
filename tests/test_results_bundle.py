@@ -204,7 +204,7 @@ def test_populate_sample_outputs_rejects_collision(tmp_path, viewer, monkeypatch
         )
 
 
-def test_finalize_writes_schema_v2(tmp_path) -> None:
+def test_finalize_writes_schema_v3(tmp_path) -> None:
     bundle = create_result_bundle("demo", root=tmp_path, kind="batch", tier="two_tier")
 
     finalize_bundle_metadata(
@@ -225,7 +225,7 @@ def test_finalize_writes_schema_v2(tmp_path) -> None:
     )
 
     meta = json.loads((bundle / "metadata.json").read_text())
-    assert meta["schema_version"] == 2
+    assert meta["schema_version"] == 3
     assert meta["recipe_params"]["segmentation"]["method"] == "target_objects"
     assert meta["run_context"]["kind"] == "batch"
     assert meta["run_context"]["tier"] == "two_tier"
@@ -233,6 +233,7 @@ def test_finalize_writes_schema_v2(tmp_path) -> None:
     assert meta["run_context"]["channel_roles"] == {"Ch1": "target"}
     assert meta["run_context"]["folder_set"] == [str(tmp_path)]
     assert "deps" in meta["environment"]
+    assert "tables" not in meta["run_context"]
 
 
 def test_ensure_active_bundle_lazy_creates_adhoc(tmp_path, monkeypatch):
@@ -313,3 +314,55 @@ def test_bundle_output_path_uses_active_named_bundle(tmp_path, monkeypatch):
     with with_active_bundle(named):
         out = bundle_output_path("stats", "stuff.csv")
     assert out == named / "stats" / "stuff.csv"
+
+
+def test_start_analysis_creates_named_bundle_in_progress(tmp_path, monkeypatch):
+    monkeypatch.setenv("IMAJIN_RESULTS_DIR", str(tmp_path))
+    from imajin.result_bundles import start_analysis, current_bundle
+    from imajin.results import read_bundle_metadata
+
+    bundle = start_analysis(name="J20_component1", kind="single")
+    assert re.match(r"^\d{8}_\d{6}_J20_component1$", bundle.name)
+    meta = read_bundle_metadata(bundle)
+    assert meta["schema_version"] == 3
+    assert meta["run_context"]["status"] == "in_progress"
+    assert meta["run_context"]["name"] == "J20_component1"
+    assert meta["run_context"]["kind"] == "single"
+    assert current_bundle() == bundle
+
+
+def test_finalize_analysis_writes_status_and_strips_redacted_fields(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("IMAJIN_RESULTS_DIR", str(tmp_path))
+    from imajin.result_bundles import (
+        finalize_analysis,
+        start_analysis,
+    )
+    from imajin.results import read_bundle_metadata
+
+    bundle = start_analysis(name="demo", kind="single")
+    samples = [
+        {
+            "sample_name": "s1",
+            "status": "complete",
+            "summary": {
+                "n_cells": 5,
+                "qc_warnings": ["should be dropped"],
+            },
+            "outputs": {"labels_cells": "labels/cells/s1.tif"},
+        }
+    ]
+    finalize_analysis(status="complete", samples=samples)
+
+    meta = read_bundle_metadata(bundle)
+    assert meta["schema_version"] == 3
+    rc = meta["run_context"]
+    assert rc["status"] == "complete"
+    assert rc["finalized_at"] is not None
+    assert rc["n_samples"] == 1
+    assert rc["n_complete"] == 1
+    sample = rc["samples"][0]
+    assert "qc_warnings" not in sample.get("summary", {})
+    assert "outputs" not in sample
+    assert "tables" not in rc  # `run_context.tables` shorthand removed.
