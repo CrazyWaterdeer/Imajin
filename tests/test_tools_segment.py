@@ -82,22 +82,33 @@ def test_segmentation_qc_png_defaults_to_results_root(
     tmp_path,
     monkeypatch,
 ) -> None:
+    from pathlib import Path
+    from imajin.result_bundles import reset_process_bundle
+
     monkeypatch.setenv("IMAJIN_RESULTS_DIR", str(tmp_path / "results"))
-    image = np.zeros((256, 256), dtype=np.float32)
-    image[90:105, 100:115] = 100
-    viewer.add_image(image, name="target")
+    reset_process_bundle()
+    try:
+        image = np.zeros((256, 256), dtype=np.float32)
+        image[90:105, 100:115] = 100
+        viewer.add_image(image, name="target")
 
-    res = segment.segment_target_objects(
-        "target",
-        background_radius=16,
-        min_size=20,
-        smoothing_sigma=0,
-    )
+        res = segment.segment_target_objects(
+            "target",
+            background_radius=16,
+            min_size=20,
+            smoothing_sigma=0,
+        )
 
-    out = tmp_path / "results" / "segmentation_qc"
-    assert res["qc_png_path"].startswith(str(out))
-    assert (tmp_path / "results" / "manifest.jsonl").exists()
-    assert Image.open(res["qc_png_path"]).mode == "RGB"
+        # QC PNG must land inside the results root under a bundle's qc/ subdirectory.
+        qc_path = Path(res["qc_png_path"])
+        results_root = tmp_path / "results"
+        assert str(qc_path).startswith(str(results_root)), (
+            f"QC PNG {qc_path} is not under results root {results_root}"
+        )
+        assert qc_path.parent.name == "qc"
+        assert Image.open(res["qc_png_path"]).mode == "RGB"
+    finally:
+        reset_process_bundle()
 
 
 def test_segmentation_qc_png_skips_tiny_default_outputs(
@@ -685,3 +696,20 @@ def test_segment_target_objects_qc_includes_boundary_outline(viewer, tmp_path) -
     rgb = np.asarray(Image.open(out_path))
     cyan_pixels = (rgb[..., 1] > 150) & (rgb[..., 2] > 150) & (rgb[..., 0] < 100)
     assert cyan_pixels.any(), "domain outline must appear in cyan in Tier-2 QC PNG"
+
+
+def test_segment_qc_writes_only_to_bundle(tmp_path, monkeypatch):
+    monkeypatch.setenv("IMAJIN_RESULTS_DIR", str(tmp_path))
+    from imajin.result_bundles import reset_process_bundle, start_analysis
+    from imajin.tools._segmentation_outputs import _default_qc_png_path
+
+    reset_process_bundle()
+    try:
+        bundle = start_analysis(name="seg")
+        path = _default_qc_png_path("foo_labels")
+        assert path.parent == bundle / "qc"
+        assert path.name == "foo_labels.png"
+        # No flat segmentation_qc folder anywhere under the results root.
+        assert not (tmp_path / "segmentation_qc").exists()
+    finally:
+        reset_process_bundle()

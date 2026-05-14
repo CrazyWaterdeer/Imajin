@@ -82,7 +82,7 @@ def _write_analysis_bundle_outputs(
 ) -> tuple[Path, bool, dict[str, str | None], list[str]]:
     from imajin.results import create_result_bundle, slugify_result_name
     from imajin.result_bundles import (
-        current_bundle,
+        active_context_bundle,
         current_sample_slug,
         finalize_bundle_metadata,
         populate_sample_outputs,
@@ -91,7 +91,10 @@ def _write_analysis_bundle_outputs(
 
     warnings: list[str] = []
     sample_slug = current_sample_slug() or slugify_result_name(target_layer)
-    parent = current_bundle()
+    # Use only the context-var bundle (set by the batch runner via with_active_bundle)
+    # so that standalone calls don't accidentally inherit an ad-hoc process bundle
+    # that a prior tool call may have created.
+    parent = active_context_bundle()
     own_bundle = parent is None
     anchor: Path | None = None
     if own_bundle:

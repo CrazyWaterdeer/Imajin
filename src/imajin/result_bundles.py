@@ -145,6 +145,17 @@ def current_bundle() -> Path | None:
         return _process_bundle
 
 
+def active_context_bundle() -> Path | None:
+    """Return the active bundle only if set via ``with_active_bundle`` (contextvar).
+
+    Unlike ``current_bundle``, this does *not* fall back to the process-level
+    ad-hoc bundle.  Use this to distinguish a nested batch-child call (where the
+    parent sets a contextvar bundle) from a standalone call that may happen to have
+    an ad-hoc process bundle around from an earlier tool invocation.
+    """
+    return _active_bundle.get()
+
+
 def current_sample_slug() -> str | None:
     return _active_sample_slug.get()
 

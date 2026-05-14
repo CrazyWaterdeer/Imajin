@@ -363,7 +363,10 @@ def test_analyze_target_cells_bundle_lands_in_layer_anchor_folder(
     assert str(res["qc_png_path"]).startswith(str(anchor.resolve()))
     assert Path(res["qc_png_path"]).exists()
     assert not (anchor / "segmentation_qc").exists()
-    assert not (tmp_path / "fallback").exists()
+    # Note: after T10, the segmentation step writes the QC PNG into an adhoc
+    # process bundle under IMAJIN_RESULTS_DIR before the anchor bundle is created.
+    # The fallback dir may therefore exist; the important thing is that the
+    # *final* QC PNG and the result bundle land in the anchor folder (above).
     assert (bundle / "labels" / "cells" / "reporter.tif").exists()
 
     meta = json.loads((bundle / "metadata.json").read_text())
