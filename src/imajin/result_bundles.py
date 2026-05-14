@@ -226,10 +226,19 @@ def copy_qc_png(bundle: Path, qc_png: str, sample_slug: str) -> str | None:
     if not src.exists():
         return None
     rel = Path("qc") / f"{sample_slug}.png"
-    dst = bundle / rel
+    dst = (bundle / rel).resolve()
     dst.parent.mkdir(parents=True, exist_ok=True)
-    if src.resolve() != dst.resolve():
-        shutil.copy2(src, dst)
+    if src == dst:
+        return rel.as_posix()
+    bundle_resolved = bundle.resolve()
+    try:
+        if src.is_relative_to(bundle_resolved):
+            src.rename(dst)
+            return rel.as_posix()
+    except AttributeError:
+        # Python < 3.9 fallback — not relevant on this project.
+        pass
+    shutil.copy2(src, dst)
     return rel.as_posix()
 
 

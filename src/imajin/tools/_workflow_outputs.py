@@ -26,29 +26,6 @@ def _bundle_qc_png_path(
     return fallback
 
 
-def _remove_copied_standalone_qc(
-    qc_png: str | None,
-    *,
-    bundle_path: Path,
-    copied_rel: str | None,
-) -> None:
-    if not qc_png or not copied_rel:
-        return
-    from imajin.paths import normalize_user_path
-
-    src = normalize_user_path(qc_png).resolve()
-    dst = (bundle_path / copied_rel).resolve()
-    if src == dst or not src.exists():
-        return
-    if src.parent.name != "segmentation_qc":
-        return
-    src.unlink()
-    try:
-        src.parent.rmdir()
-    except OSError:
-        pass
-
-
 def _single_bundle_run_context_extras(anchor: Path | None) -> dict[str, Any]:
     from imajin.agent.state import list_channel_annotations
 
@@ -138,17 +115,6 @@ def _write_analysis_bundle_outputs(
         warnings.append(
             f"bundle outputs could not be written: {type(exc).__name__}: {exc}"
         )
-    try:
-        _remove_copied_standalone_qc(
-            qc_png,
-            bundle_path=bundle_path,
-            copied_rel=bundle_outputs.get("qc_png"),
-        )
-    except Exception as exc:  # noqa: BLE001
-        warnings.append(
-            f"standalone QC cleanup failed: {type(exc).__name__}: {exc}"
-        )
-
     if own_bundle:
         summary = build_sample_summary(
             sample_name=target_layer,
