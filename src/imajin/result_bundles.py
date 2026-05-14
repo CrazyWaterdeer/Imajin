@@ -93,20 +93,47 @@ def register_output(
     seed = read_bundle_metadata(bundle)
     outputs = list(seed.get("outputs") or [])
     outputs.append(record)
-    seed["outputs"] = outputs
-    if "schema_version" not in seed:
-        seed["schema_version"] = 3
-    write_bundle_metadata(bundle, seed)
+    # Normalise flat (schema_v1) metadata to schema_v3 before appending, so
+    # that run_context keys such as `kind` and `tier` are not lost when
+    # finalize_bundle_metadata later reads and re-normalises this file.
+    sv = seed.get("schema_version")
+    if sv in (2, 3):
+        seed["outputs"] = outputs
+        write_bundle_metadata(bundle, seed)
+    else:
+        normalized = _normalize_bundle_metadata(seed)
+        write_bundle_metadata(
+            bundle,
+            {
+                "schema_version": 3,
+                "recipe_params": dict(normalized.get("recipe_params") or {}),
+                "run_context": dict(normalized.get("run_context") or {}),
+                "environment": dict(normalized.get("environment") or {}),
+                "table_specs": dict(seed.get("table_specs") or {}),
+                "outputs": outputs,
+            },
+        )
 
 
 def register_table_spec(table_name: str, spec: dict[str, Any]) -> None:
     bundle = ensure_active_bundle()
     seed = read_bundle_metadata(bundle)
+    sv = seed.get("schema_version")
+    if sv not in (2, 3):
+        # Normalise flat (schema_v1) metadata before modifying, same as
+        # register_output, so run_context keys are preserved for finalisation.
+        normalized = _normalize_bundle_metadata(seed)
+        seed = {
+            "schema_version": 3,
+            "recipe_params": dict(normalized.get("recipe_params") or {}),
+            "run_context": dict(normalized.get("run_context") or {}),
+            "environment": dict(normalized.get("environment") or {}),
+            "table_specs": {},
+            "outputs": list(seed.get("outputs") or []),
+        }
     table_specs = dict(seed.get("table_specs") or {})
     table_specs[str(table_name)] = dict(spec)
     seed["table_specs"] = table_specs
-    if "schema_version" not in seed:
-        seed["schema_version"] = 3
     write_bundle_metadata(bundle, seed)
 
 

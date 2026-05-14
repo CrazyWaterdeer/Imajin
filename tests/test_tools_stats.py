@@ -103,6 +103,69 @@ def test_ensure_default_statistics_adds_missing_comparison_after_summary() -> No
     assert outputs[0]["comparison_table"] in state.list_tables()
 
 
+def test_describe_table_writes_long_format(tmp_path, monkeypatch):
+    monkeypatch.setenv("IMAJIN_RESULTS_DIR", str(tmp_path))
+    import pandas as pd
+    from imajin.agent import state
+    from imajin.result_bundles import reset_process_bundle, start_analysis
+    from imajin.tools import stats
+
+    reset_process_bundle()
+    bundle = start_analysis(name="stattest")
+    state.put_table(
+        "measurements",
+        pd.DataFrame(
+            {
+                "sample_name": ["c1", "c2", "t1", "t2"],
+                "group": ["control", "control", "treated", "treated"],
+                "mean_intensity": [1.0, 1.2, 2.5, 2.8],
+                "max_intensity": [3.0, 3.1, 4.5, 4.6],
+            }
+        ),
+        spec={"tool": "test"},
+    )
+
+    stats.describe_table("measurements", "mean_intensity")
+    stats.describe_table("measurements", "max_intensity")
+
+    df = pd.read_csv(bundle / "stats" / "describe__measurements.csv")
+    assert {"mean_intensity", "max_intensity"} <= set(df["value_col"])
+    # Object-level rows for both groups, both value_cols → 4 rows minimum.
+    object_rows = df[df["level"] == "object"]
+    assert len(object_rows) >= 4
+    # No flat per-value_col stats files.
+    assert not any(p.name.startswith("stats_object__") for p in (bundle / "stats").iterdir())
+    reset_process_bundle()
+
+
+def test_compare_groups_writes_long_format(tmp_path, monkeypatch):
+    monkeypatch.setenv("IMAJIN_RESULTS_DIR", str(tmp_path))
+    import pandas as pd
+    from imajin.agent import state
+    from imajin.result_bundles import reset_process_bundle, start_analysis
+    from imajin.tools import stats
+
+    reset_process_bundle()
+    bundle = start_analysis(name="cmptest")
+    state.put_table(
+        "measurements",
+        pd.DataFrame(
+            {
+                "sample_name": ["c1", "c2", "t1", "t2"],
+                "group": ["control", "control", "treated", "treated"],
+                "mean_intensity": [1.0, 1.2, 2.5, 2.8],
+            }
+        ),
+        spec={"tool": "test"},
+    )
+
+    stats.compare_groups("measurements", "mean_intensity")
+    df = pd.read_csv(bundle / "stats" / "compare__measurements.csv")
+    assert df.iloc[0]["value_col"] == "mean_intensity"
+    assert df.iloc[0]["p_value"] < 0.05
+    reset_process_bundle()
+
+
 def test_normalize_timecourse_and_extract_features() -> None:
     df = pd.DataFrame(
         {

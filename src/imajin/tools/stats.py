@@ -1,14 +1,13 @@
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Any, Literal
 
 import numpy as np
 import pandas as pd
 
 from imajin.agent.state import get_table, put_table
-from imajin.paths import normalize_user_path
-from imajin.results import record_result, slugify_result_name, unique_result_path
+from imajin.result_bundles import register_stats_rows
+from imajin.results import slugify_result_name
 from imajin.tools._dataframes import finite_numeric_frame, infer_time_column
 from imajin.tools.registry import tool
 
@@ -249,34 +248,6 @@ def _analysis_frame(
     return out, "analysis_value", "object", warnings
 
 
-def _stats_csv_path(stem: str, output_path: str | None = None) -> Path:
-    if output_path:
-        return normalize_user_path(output_path).resolve()
-    try:
-        from imajin.result_bundles import current_bundle
-
-        bundle = current_bundle()
-    except Exception:
-        bundle = None
-    filename = f"{slugify_result_name(stem)}.csv"
-    if bundle is not None:
-        return Path(bundle) / "stats" / filename
-    return unique_result_path("stats", filename)
-
-
-def _write_stats_csv(
-    df: pd.DataFrame,
-    stem: str,
-    *,
-    output_path: str | None = None,
-    metadata: dict[str, Any] | None = None,
-) -> str:
-    out = _stats_csv_path(stem, output_path)
-    out.parent.mkdir(parents=True, exist_ok=True)
-    df.to_csv(out, index=False)
-    record_result("stats_csv", out, metadata or {})
-    return str(out)
-
 
 def _ordered_group_values(
     df: pd.DataFrame,
@@ -374,15 +345,16 @@ def describe_table(
             "level": "object",
         },
     )
-    object_csv = (
-        _write_stats_csv(
-            object_desc,
-            f"stats_object__{table_name}__{value_col}",
-            metadata={"source_table": table_name, "value_col": value_col, "level": "object"},
-        )
-        if save_csv
-        else None
-    )
+    object_rows = object_desc.to_dict(orient="records")
+    for row in object_rows:
+        row.update({
+            "value_col": value_col,
+            "level": "object",
+            "sample_aggregation": "",
+        })
+    if save_csv:
+        register_stats_rows(kind="describe", table=table_name, rows=object_rows)
+    object_csv = None  # legacy field; long-format file lives in bundle/stats.
 
     sample_table: str | None = None
     sample_csv: str | None = None
@@ -417,20 +389,16 @@ def describe_table(
             },
         )
         sample_rows = int(len(sample_df))
-        sample_csv = (
-            _write_stats_csv(
-                sample_desc,
-                f"stats_sample__{table_name}__{value_col}",
-                metadata={
-                    "source_table": table_name,
-                    "value_col": value_col,
-                    "level": "sample",
-                    "sample_aggregation": "mean",
-                },
-            )
-            if save_csv
-            else None
-        )
+        sample_csv = None
+        sample_rows_for_csv = sample_desc.to_dict(orient="records")
+        for row in sample_rows_for_csv:
+            row.update({
+                "value_col": value_col,
+                "level": "sample",
+                "sample_aggregation": "mean",
+            })
+        if save_csv:
+            register_stats_rows(kind="describe", table=table_name, rows=sample_rows_for_csv)
 
     return {
         "source_table": table_name,
@@ -622,15 +590,12 @@ def compare_groups(
             "dropped_nonfinite": dropped,
         },
     )
-    csv_path = (
-        _write_stats_csv(
-            result_df,
-            f"stats_compare__{table_name}__{value_col}",
-            metadata={"source_table": table_name, "value_col": value_col, "tool": "compare_groups"},
-        )
-        if save_csv
-        else None
-    )
+    rows = result_df.to_dict(orient="records")
+    for row in rows:
+        row["value_col"] = value_col
+    if save_csv:
+        register_stats_rows(kind="compare", table=table_name, rows=rows)
+    csv_path = None  # legacy field
     return {
         "source_table": table_name,
         "value_col": value_col,
@@ -1006,15 +971,12 @@ def extract_timecourse_features(
             "group_cols": trace_cols,
         },
     )
-    csv_path = (
-        _write_stats_csv(
-            features,
-            f"timecourse_features__{table_name}__{value_col}",
-            metadata={"source_table": table_name, "value_col": value_col},
-        )
-        if save_csv
-        else None
-    )
+    tc_rows = features.to_dict(orient="records")
+    for row in tc_rows:
+        row["value_col"] = value_col
+    if save_csv:
+        register_stats_rows(kind="timecourse_features", table=table_name, rows=tc_rows)
+    csv_path = None
     return {
         "source_table": table_name,
         "table_name": result_table,
