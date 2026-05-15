@@ -211,3 +211,22 @@ def test_save_result_bundle_does_not_write_manifest(tmp_path, monkeypatch):
     save_result_bundle(name="b2")
     assert not (tmp_path / "manifest.jsonl").exists()
     reset_process_bundle()
+
+
+def test_start_and_finalize_analysis_tools(tmp_path, monkeypatch):
+    monkeypatch.setenv("IMAJIN_RESULTS_DIR", str(tmp_path))
+    from pathlib import Path
+    from imajin.result_bundles import reset_process_bundle
+    from imajin.results import read_bundle_metadata
+    from imajin.tools.bundle import finalize_analysis, start_analysis
+
+    reset_process_bundle()
+    res = start_analysis(name="J20_component1")
+    bundle = Path(res["bundle_path"])
+    assert (bundle / "metadata.json").exists()
+    assert read_bundle_metadata(bundle)["run_context"]["status"] == "in_progress"
+
+    finalize = finalize_analysis()
+    assert finalize["status"] == "complete"
+    assert read_bundle_metadata(bundle)["run_context"]["status"] == "complete"
+    reset_process_bundle()
