@@ -191,6 +191,6 @@ def _save_qc_png(
                 "method": method,
             },
         )
-    except Exception:
+    except ValueError:
         pass
     return str(path), None

@@ -202,6 +202,39 @@ def test_save_result_bundle_writes_table_spec_into_metadata(tmp_path, monkeypatc
     state.reset_tables()
 
 
+def test_save_result_bundle_outputs_index_is_list_of_records(tmp_path, monkeypatch):
+    monkeypatch.setenv("IMAJIN_RESULTS_DIR", str(tmp_path))
+    import pandas as pd
+    from pathlib import Path
+    from imajin.agent import state
+    from imajin.result_bundles import reset_process_bundle
+    from imajin.results import read_bundle_metadata
+    from imajin.tools.results import save_result_bundle
+
+    reset_process_bundle()
+    state.reset_tables()
+    state.put_table(
+        "measurements",
+        pd.DataFrame({"label": [1, 2], "mean_intensity": [0.1, 0.2]}),
+        spec={"tool": "measure_test", "layer": "cells"},
+    )
+    out = save_result_bundle(name="idx", table_names=["measurements"])
+    bundle = Path(out["bundle_path"])
+
+    meta = read_bundle_metadata(bundle)
+    outputs_index = meta["outputs"]
+    assert isinstance(outputs_index, list)
+    for entry in outputs_index:
+        assert isinstance(entry, dict)
+        assert "kind" in entry and "path" in entry
+    # Table CSV and the result_bundle record should both be indexed.
+    kinds = {e["kind"] for e in outputs_index}
+    assert "table_csv" in kinds
+    assert "result_bundle" in kinds
+    reset_process_bundle()
+    state.reset_tables()
+
+
 def test_save_result_bundle_does_not_write_manifest(tmp_path, monkeypatch):
     monkeypatch.setenv("IMAJIN_RESULTS_DIR", str(tmp_path))
     from imajin.result_bundles import reset_process_bundle

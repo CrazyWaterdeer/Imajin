@@ -109,7 +109,14 @@ def register_output(
     }
     seed = read_bundle_metadata(bundle)
     outputs = list(seed.get("outputs") or [])
-    outputs.append(record)
+    # Upsert by path: replace existing entry with same path, else append.
+    rel_str = rel.as_posix()
+    for i, existing in enumerate(outputs):
+        if isinstance(existing, dict) and existing.get("path") == rel_str:
+            outputs[i] = record
+            break
+    else:
+        outputs.append(record)
     # Normalise flat (schema_v1) metadata to schema_v3 before appending, so
     # that run_context keys such as `kind` and `tier` are not lost when
     # finalize_bundle_metadata later reads and re-normalises this file.

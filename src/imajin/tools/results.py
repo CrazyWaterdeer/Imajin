@@ -15,9 +15,7 @@ from imajin.result_bundles import (
 )
 from imajin.results import (
     create_result_bundle,
-    read_bundle_metadata,
     slugify_result_name,
-    write_bundle_metadata,
 )
 from imajin.tools.napari_ops import snapshot_layer
 from imajin.tools.registry import tool
@@ -155,6 +153,15 @@ def save_result_bundle(
             out = bundle / "labels" / "cells" / f"{slugify_result_name(labels_layer)}.tif"
             _write_label_tiff(out, labels)
             outputs["labels"].append(str(out))
+            register_output(
+                "labels_tiff",
+                out,
+                {
+                    "labels_layer": labels_layer,
+                    "shape": tuple(int(s) for s in labels.shape),
+                    "dtype": str(labels.dtype),
+                },
+            )
 
         for table_name in table_names or []:
             df = get_table(table_name)
@@ -163,6 +170,7 @@ def save_result_bundle(
             df.to_csv(out, index=False)
             outputs["tables"].append(str(out))
             register_table_spec(table_name, get_table_entry(table_name).spec)
+            register_output("table_csv", out, {"table_name": table_name})
 
         for raw in qc_png_paths or []:
             if not raw:
@@ -175,6 +183,7 @@ def save_result_bundle(
             if src.resolve() != dst.resolve():
                 shutil.copy2(src, dst)
             outputs["qc"].append(str(dst))
+            register_output("qc_png", dst, {"source": str(src)})
 
         for raw in figures or []:
             if not raw:
@@ -187,10 +196,8 @@ def save_result_bundle(
             if src.resolve() != dst.resolve():
                 shutil.copy2(src, dst)
             outputs["figures"].append(str(dst))
+            register_output("figure", dst, {"source": str(src)})
 
-        bundle_meta = read_bundle_metadata(bundle)
-        bundle_meta["outputs"] = outputs
-        write_bundle_metadata(bundle, bundle_meta)
         register_output(
             "result_bundle",
             bundle / "metadata.json",
