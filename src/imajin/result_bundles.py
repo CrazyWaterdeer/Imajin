@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import atexit
 import contextlib
 import contextvars
 import shutil
@@ -45,11 +46,27 @@ def ensure_active_bundle() -> Path:
     root = user_results_root()
     with _process_bundle_lock:
         if _process_bundle is None:
-            _process_bundle = create_result_bundle(
+            bundle = create_result_bundle(
                 name="adhoc",
                 kind="adhoc",
                 root=root,
             )
+            # Normalize v1 seed to schema_v3 immediately so all readers
+            # (including _run_atexit_finalize) see a consistent structure.
+            seed = read_bundle_metadata(bundle)
+            normalized = _normalize_bundle_metadata(seed)
+            write_bundle_metadata(
+                bundle,
+                {
+                    "schema_version": 3,
+                    "recipe_params": dict(normalized.get("recipe_params") or {}),
+                    "run_context": dict(normalized.get("run_context") or {}),
+                    "environment": dict(normalized.get("environment") or {}),
+                    "table_specs": {},
+                    "outputs": [],
+                },
+            )
+            _process_bundle = bundle
         return _process_bundle
 
 
@@ -525,3 +542,24 @@ def finalize_analysis(
     )
     reset_process_bundle()
     return bundle
+
+
+def _run_atexit_finalize() -> None:
+    """Finalize the process-global ad-hoc bundle at interpreter exit.
+
+    Safe to call multiple times (idempotent): clears the process slot after
+    writing so subsequent calls are no-ops.
+    """
+    global _process_bundle
+    with _process_bundle_lock:
+        bundle = _process_bundle
+    if bundle is None:
+        return
+    try:
+        finalize_bundle_metadata(bundle, samples=[], status="complete")
+    finally:
+        with _process_bundle_lock:
+            _process_bundle = None
+
+
+atexit.register(_run_atexit_finalize)

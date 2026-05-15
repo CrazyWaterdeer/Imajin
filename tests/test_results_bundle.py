@@ -520,3 +520,21 @@ def test_create_result_bundle_writes_directly_under_root(tmp_path, monkeypatch):
     bundle = create_result_bundle("demo", kind="single")
     assert bundle.parent == tmp_path
     assert not (tmp_path / "bundles").exists()
+
+
+def test_atexit_finalizes_adhoc_bundle(tmp_path, monkeypatch):
+    monkeypatch.setenv("IMAJIN_RESULTS_DIR", str(tmp_path))
+    from imajin.result_bundles import (
+        _run_atexit_finalize,
+        ensure_active_bundle,
+        reset_process_bundle,
+    )
+    from imajin.results import read_bundle_metadata
+
+    reset_process_bundle()
+    bundle = ensure_active_bundle()
+    assert read_bundle_metadata(bundle)["run_context"]["status"] == "in_progress"
+
+    _run_atexit_finalize()  # simulate process exit
+    assert read_bundle_metadata(bundle)["run_context"]["status"] == "complete"
+    reset_process_bundle()
