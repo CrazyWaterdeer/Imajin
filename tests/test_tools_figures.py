@@ -97,3 +97,37 @@ def test_plot_scatter_writes_svg(tmp_path) -> None:
     assert res["pearson_r"] == pytest.approx(1.0)
     assert res["pearson_p_value"] == pytest.approx(0.0)
     assert res["fit_slope"] == pytest.approx(2.0)
+
+
+def test_figure_writes_into_active_bundle(tmp_path, monkeypatch):
+    monkeypatch.setenv("IMAJIN_RESULTS_DIR", str(tmp_path))
+    import pandas as pd
+    from pathlib import Path
+    from imajin.agent import state
+    from imajin.result_bundles import reset_process_bundle, start_analysis
+    from imajin.results import read_bundle_metadata
+    from imajin.tools import figures
+
+    reset_process_bundle()
+    bundle = start_analysis(name="figtest")
+    state.put_table(
+        "measurements",
+        pd.DataFrame(
+            {
+                "sample_name": ["c1", "c2", "t1", "t2"],
+                "group": ["control", "control", "treated", "treated"],
+                "mean_intensity": [1.0, 1.2, 2.5, 2.8],
+            }
+        ),
+        spec={"tool": "test"},
+    )
+
+    res = figures.plot_group_distribution("measurements", "mean_intensity")
+
+    out = Path(res["path"])
+    assert out.parent == bundle / "figures"
+    assert out.exists()
+    outputs = read_bundle_metadata(bundle)["outputs"]
+    assert any(o["kind"] == "figure" and o["path"] == f"figures/{out.name}" for o in outputs)
+
+    reset_process_bundle()

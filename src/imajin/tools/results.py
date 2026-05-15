@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import shutil
-import json
 from pathlib import Path
 from typing import Any
 
@@ -9,13 +8,14 @@ from imajin import result_bundles as _bundle_io
 from imajin.agent.qt_dispatch import call_on_main
 from imajin.agent.state import get_table, get_table_entry
 from imajin.paths import normalize_user_path
+from imajin.result_bundles import (
+    bundle_output_path,
+    register_output,
+    register_table_spec,
+)
 from imajin.results import (
     create_result_bundle,
-    read_bundle_metadata,
-    record_result,
     slugify_result_name,
-    unique_result_path,
-    write_bundle_metadata,
 )
 from imajin.tools.napari_ops import snapshot_layer
 from imajin.tools.registry import tool
@@ -37,26 +37,10 @@ def _resolve_output_path(
     *,
     category: str,
     filename: str,
-    bundle: Path | None = None,
-    root: Path | None = None,
 ) -> Path:
     if path:
         return normalize_user_path(path).resolve()
-    if bundle is not None:
-        return bundle / category / filename
-    if root is not None:
-        out = root / category / filename
-        if not out.exists():
-            return out
-        stem = out.stem
-        suffix = out.suffix
-        i = 2
-        while True:
-            candidate = root / category / f"{stem}_{i}{suffix}"
-            if not candidate.exists():
-                return candidate
-            i += 1
-    return unique_result_path(category, filename)
+    return bundle_output_path(category, filename)
 
 
 def _source_paths_for_layers(layer_names: list[str] | None) -> list[str]:
@@ -114,10 +98,9 @@ def save_labels(
         path,
         category="labels",
         filename=f"{slugify_result_name(labels_layer)}.tif",
-        root=_anchor_for_layers([labels_layer]),
     )
     _write_label_tiff(out, labels)
-    record_result(
+    register_output(
         "labels_tiff",
         out,
         {
@@ -162,69 +145,70 @@ def save_result_bundle(
         "figures": [],
     }
 
-    for labels_layer in labels_layers or []:
-        layer = call_on_main(snapshot_layer, labels_layer)
-        data = _materialize(layer.data)
-        labels = data.astype(_label_output_dtype(data), copy=False)
-        out = bundle / "labels" / "cells" / f"{slugify_result_name(labels_layer)}.tif"
-        _write_label_tiff(out, labels)
-        outputs["labels"].append(str(out))
+    with with_active_bundle(bundle):
+        for labels_layer in labels_layers or []:
+            layer = call_on_main(snapshot_layer, labels_layer)
+            data = _materialize(layer.data)
+            labels = data.astype(_label_output_dtype(data), copy=False)
+            out = bundle / "labels" / "cells" / f"{slugify_result_name(labels_layer)}.tif"
+            _write_label_tiff(out, labels)
+            outputs["labels"].append(str(out))
+            register_output(
+                "labels_tiff",
+                out,
+                {
+                    "labels_layer": labels_layer,
+                    "shape": tuple(int(s) for s in labels.shape),
+                    "dtype": str(labels.dtype),
+                },
+            )
 
-    for table_name in table_names or []:
-        df = get_table(table_name)
-        out = bundle / "tables" / f"{slugify_result_name(table_name)}.csv"
-        out.parent.mkdir(parents=True, exist_ok=True)
-        df.to_csv(out, index=False)
-        outputs["tables"].append(str(out))
+        for table_name in table_names or []:
+            df = get_table(table_name)
+            out = bundle / "tables" / f"{slugify_result_name(table_name)}.csv"
+            out.parent.mkdir(parents=True, exist_ok=True)
+            df.to_csv(out, index=False)
+            outputs["tables"].append(str(out))
+            register_table_spec(table_name, get_table_entry(table_name).spec)
+            register_output("table_csv", out, {"table_name": table_name})
 
-        spec_path = bundle / "tables" / f"{slugify_result_name(table_name)}.spec.json"
-        spec_path.write_text(
-            json.dumps(
-                get_table_entry(table_name).spec,
-                indent=2,
-                default=str,
-            ),
-            encoding="utf-8",
+        for raw in qc_png_paths or []:
+            if not raw:
+                continue
+            src = normalize_user_path(raw).resolve()
+            if not src.exists():
+                continue
+            dst = bundle / "qc" / src.name
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            if src.resolve() != dst.resolve():
+                shutil.copy2(src, dst)
+            outputs["qc"].append(str(dst))
+            register_output("qc_png", dst, {"source": str(src)})
+
+        for raw in figures or []:
+            if not raw:
+                continue
+            src = normalize_user_path(raw).resolve()
+            if not src.exists():
+                continue
+            dst = bundle / "figures" / src.name
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            if src.resolve() != dst.resolve():
+                shutil.copy2(src, dst)
+            outputs["figures"].append(str(dst))
+            register_output("figure", dst, {"source": str(src)})
+
+        register_output(
+            "result_bundle",
+            bundle / "metadata.json",
+            {
+                "name": name,
+                "n_labels": len(outputs["labels"]),
+                "n_tables": len(outputs["tables"]),
+                "n_qc": len(outputs["qc"]),
+                "n_figures": len(outputs["figures"]),
+            },
         )
-
-    for raw in qc_png_paths or []:
-        if not raw:
-            continue
-        src = normalize_user_path(raw).resolve()
-        if not src.exists():
-            continue
-        dst = bundle / "qc" / src.name
-        dst.parent.mkdir(parents=True, exist_ok=True)
-        if src.resolve() != dst.resolve():
-            shutil.copy2(src, dst)
-        outputs["qc"].append(str(dst))
-
-    for raw in figures or []:
-        if not raw:
-            continue
-        src = normalize_user_path(raw).resolve()
-        if not src.exists():
-            continue
-        dst = bundle / "figures" / src.name
-        dst.parent.mkdir(parents=True, exist_ok=True)
-        if src.resolve() != dst.resolve():
-            shutil.copy2(src, dst)
-        outputs["figures"].append(str(dst))
-
-    bundle_meta = read_bundle_metadata(bundle)
-    bundle_meta["outputs"] = outputs
-    write_bundle_metadata(bundle, bundle_meta)
-    record_result(
-        "result_bundle",
-        bundle,
-        {
-            "name": name,
-            "n_labels": len(outputs["labels"]),
-            "n_tables": len(outputs["tables"]),
-            "n_qc": len(outputs["qc"]),
-            "n_figures": len(outputs["figures"]),
-        },
-    )
 
     return {
         "bundle_path": str(bundle),

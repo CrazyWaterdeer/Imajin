@@ -791,7 +791,7 @@ def test_run_recipe_on_samples_propagates_cancellation(
     ]
     assert len(bundles) == 1
     meta = json.loads((bundles[0] / "metadata.json").read_text())
-    assert meta["schema_version"] == 2
+    assert meta["schema_version"] == 3
     assert meta["run_context"]["status"] == "cancelled"
 
 
@@ -1343,7 +1343,7 @@ def test_run_recipe_on_samples_finalizes_metadata_with_samples(
     meta = json.loads((bundle / "metadata.json").read_text())
     run_context = meta["run_context"]
 
-    assert meta["schema_version"] == 2
+    assert meta["schema_version"] == 3
     assert run_context["kind"] == "batch"
     assert run_context["tier"] == "single_tier"
     assert run_context["status"] == "complete"
@@ -1356,7 +1356,7 @@ def test_run_recipe_on_samples_finalizes_metadata_with_samples(
     assert s["group"] == "control"
     assert s["file_id"] == "ctrl_1"
     assert s["status"] == "complete"
-    assert s["outputs"]["labels_cells"] == "labels/cells/ctrl_1.tif"
+    assert "outputs" not in s
 
 
 def test_run_recipe_on_samples_records_folder_set_and_channel_roles(
@@ -1556,7 +1556,7 @@ def test_run_recipe_on_samples_cancellation_finalizes_metadata(
     assert len(bundles) == 1
     bundle = bundles[0]
     meta = json.loads((bundle / "metadata.json").read_text())
-    assert meta["schema_version"] == 2
+    assert meta["schema_version"] == 3
     assert meta["run_context"]["status"] == "cancelled"
     statuses = [s["status"] for s in meta["run_context"]["samples"]]
     assert statuses == ["complete", "skipped"]

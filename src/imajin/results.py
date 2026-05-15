@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import os
 import re
-from datetime import UTC, datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -114,42 +114,9 @@ def results_root() -> Path:
     return user_results_root()
 
 
-def results_dir(category: str) -> Path:
-    return results_root() / category
-
-
 def slugify_result_name(value: str) -> str:
     text = re.sub(r"[^A-Za-z0-9_.-]+", "_", str(value)).strip("_")
     return text or "result"
-
-
-def unique_result_path(category: str, filename: str) -> Path:
-    root = results_dir(category)
-    path = root / filename
-    if not path.exists():
-        return path
-    stem = path.stem
-    suffix = path.suffix
-    i = 2
-    while True:
-        candidate = root / f"{stem}_{i}{suffix}"
-        if not candidate.exists():
-            return candidate
-        i += 1
-
-
-def unique_result_dir(category: str, dirname: str) -> Path:
-    root = results_dir(category)
-    base = slugify_result_name(dirname)
-    path = root / base
-    if not path.exists():
-        return path
-    i = 2
-    while True:
-        candidate = root / f"{base}_{i}"
-        if not candidate.exists():
-            return candidate
-        i += 1
 
 
 def _unique_subdir(root: Path, dirname: str) -> Path:
@@ -189,10 +156,9 @@ def create_result_bundle(
     """
     now = _kst_now()
     timestamp = now.strftime("%Y%m%d_%H%M%S")
-    if root is not None:
-        bundle = _unique_subdir(Path(root), f"{timestamp}_{slugify_result_name(name)}")
-    else:
-        bundle = unique_result_dir("bundles", f"{timestamp}_{slugify_result_name(name)}")
+    if root is None:
+        root = user_results_root()
+    bundle = _unique_subdir(Path(root), f"{timestamp}_{slugify_result_name(name)}")
     env = _collect_env_info()
     payload: dict[str, Any] = dict(metadata or {})
     payload.update({
@@ -223,53 +189,3 @@ def read_bundle_metadata(bundle: str | Path) -> dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-_RESULT_CATEGORY_DIRS = {
-    "bundles",
-    "figures",
-    "labels",
-    "qc",
-    "segmentation_qc",
-    "stats",
-    "tables",
-}
-
-
-def _manifest_root(path: str | Path | None = None) -> Path:
-    """Where manifest.jsonl lives.
-
-    If an output lands in the default user results root, keep the manifest there.
-    If an output lands beside the source data anchor, keep the manifest in a hidden
-    `.imajin` folder under that anchor so anchored analyses do not recreate
-    ~/Documents/Imajin just for bookkeeping.
-    """
-    if path is None:
-        return user_results_root()
-    user_root = user_results_root().expanduser().resolve()
-    try:
-        output_path = Path(path).expanduser().resolve()
-    except Exception:
-        output_path = Path(path).expanduser().absolute()
-    try:
-        if output_path.is_relative_to(user_root):
-            return user_root
-    except Exception:
-        pass
-    if output_path.is_dir():
-        return output_path.parent / ".imajin"
-    if output_path.parent.name in _RESULT_CATEGORY_DIRS:
-        return output_path.parent.parent / ".imajin"
-    return output_path.parent / ".imajin"
-
-
-def record_result(kind: str, path: str | Path, metadata: dict[str, Any] | None = None) -> None:
-    root = _manifest_root(path)
-    root.mkdir(parents=True, exist_ok=True)
-    record = {
-        "kind": kind,
-        "path": str(path),
-        "created_at": datetime.now(UTC).isoformat(),
-        "metadata": dict(metadata or {}),
-    }
-    manifest = root / "manifest.jsonl"
-    with manifest.open("a", encoding="utf-8") as f:
-        f.write(json.dumps(record, default=str) + "\n")

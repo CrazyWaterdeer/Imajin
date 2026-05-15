@@ -26,6 +26,15 @@ from imajin.tools.results import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _reset_process_bundle():
+    from imajin.result_bundles import reset_process_bundle
+
+    reset_process_bundle()
+    yield
+    reset_process_bundle()
+
+
 def test_kst_now_returns_aware_datetime_with_plus_nine_offset() -> None:
     now = _kst_now()
     assert now.tzinfo is not None
@@ -195,7 +204,7 @@ def test_populate_sample_outputs_rejects_collision(tmp_path, viewer, monkeypatch
         )
 
 
-def test_finalize_writes_schema_v2(tmp_path) -> None:
+def test_finalize_writes_schema_v3(tmp_path) -> None:
     bundle = create_result_bundle("demo", root=tmp_path, kind="batch", tier="two_tier")
 
     finalize_bundle_metadata(
@@ -216,7 +225,7 @@ def test_finalize_writes_schema_v2(tmp_path) -> None:
     )
 
     meta = json.loads((bundle / "metadata.json").read_text())
-    assert meta["schema_version"] == 2
+    assert meta["schema_version"] == 3
     assert meta["recipe_params"]["segmentation"]["method"] == "target_objects"
     assert meta["run_context"]["kind"] == "batch"
     assert meta["run_context"]["tier"] == "two_tier"
@@ -224,6 +233,43 @@ def test_finalize_writes_schema_v2(tmp_path) -> None:
     assert meta["run_context"]["channel_roles"] == {"Ch1": "target"}
     assert meta["run_context"]["folder_set"] == [str(tmp_path)]
     assert "deps" in meta["environment"]
+    assert "tables" not in meta["run_context"]
+
+
+def test_ensure_active_bundle_lazy_creates_adhoc(tmp_path, monkeypatch):
+    monkeypatch.setenv("IMAJIN_RESULTS_DIR", str(tmp_path))
+    from imajin.result_bundles import (
+        ensure_active_bundle,
+        current_bundle,
+    )
+
+    assert current_bundle() is None
+
+    bundle = ensure_active_bundle()
+    assert bundle.parent == tmp_path
+    assert bundle.name.endswith("_adhoc")
+    assert (bundle / "metadata.json").exists()
+    assert current_bundle() == bundle
+
+    # Second call returns the same bundle.
+    assert ensure_active_bundle() == bundle
+
+
+def test_ensure_active_bundle_respects_explicit_active_bundle(tmp_path, monkeypatch):
+    monkeypatch.setenv("IMAJIN_RESULTS_DIR", str(tmp_path))
+    from imajin.results import create_result_bundle
+    from imajin.result_bundles import (
+        ensure_active_bundle,
+        with_active_bundle,
+    )
+
+    explicit = create_result_bundle("named", kind="single")
+    with with_active_bundle(explicit):
+        assert ensure_active_bundle() == explicit
+    # After leaving the context, ad-hoc takes over.
+    bundle = ensure_active_bundle()
+    assert bundle != explicit
+    assert bundle.name.endswith("_adhoc")
 
 
 def test_read_bundle_metadata_normalizes_v1(tmp_path) -> None:
@@ -247,3 +293,248 @@ def test_read_bundle_metadata_normalizes_v1(tmp_path) -> None:
     assert norm["run_context"]["kind"] == "batch"
     assert norm["run_context"]["tier"] == "two_tier"
     assert norm["run_context"]["status"] == "complete"
+
+
+def test_bundle_output_path_creates_parent(tmp_path, monkeypatch):
+    monkeypatch.setenv("IMAJIN_RESULTS_DIR", str(tmp_path))
+    from imajin.result_bundles import bundle_output_path, ensure_active_bundle
+
+    out = bundle_output_path("figures", "demo.png")
+    bundle = ensure_active_bundle()
+    assert out == bundle / "figures" / "demo.png"
+    assert out.parent.is_dir()
+
+
+def test_bundle_output_path_uses_active_named_bundle(tmp_path, monkeypatch):
+    monkeypatch.setenv("IMAJIN_RESULTS_DIR", str(tmp_path))
+    from imajin.results import create_result_bundle
+    from imajin.result_bundles import bundle_output_path, with_active_bundle
+
+    named = create_result_bundle("named", kind="single")
+    with with_active_bundle(named):
+        out = bundle_output_path("stats", "stuff.csv")
+    assert out == named / "stats" / "stuff.csv"
+
+
+def test_start_analysis_creates_named_bundle_in_progress(tmp_path, monkeypatch):
+    monkeypatch.setenv("IMAJIN_RESULTS_DIR", str(tmp_path))
+    from imajin.result_bundles import start_analysis, current_bundle
+    from imajin.results import read_bundle_metadata
+
+    bundle = start_analysis(name="J20_component1", kind="single")
+    assert re.match(r"^\d{8}_\d{6}_J20_component1$", bundle.name)
+    meta = read_bundle_metadata(bundle)
+    assert meta["schema_version"] == 3
+    assert meta["run_context"]["status"] == "in_progress"
+    assert meta["run_context"]["name"] == "J20_component1"
+    assert meta["run_context"]["kind"] == "single"
+    assert current_bundle() == bundle
+
+
+def test_finalize_analysis_writes_status_and_strips_redacted_fields(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("IMAJIN_RESULTS_DIR", str(tmp_path))
+    from imajin.result_bundles import (
+        finalize_analysis,
+        start_analysis,
+    )
+    from imajin.results import read_bundle_metadata
+
+    bundle = start_analysis(name="demo", kind="single")
+    samples = [
+        {
+            "sample_name": "s1",
+            "status": "complete",
+            "summary": {
+                "n_cells": 5,
+                "qc_warnings": ["should be dropped"],
+            },
+            "outputs": {"labels_cells": "labels/cells/s1.tif"},
+        }
+    ]
+    finalize_analysis(status="complete", samples=samples)
+
+    meta = read_bundle_metadata(bundle)
+    assert meta["schema_version"] == 3
+    rc = meta["run_context"]
+    assert rc["status"] == "complete"
+    assert rc["finalized_at"] is not None
+    assert rc["n_samples"] == 1
+    assert rc["n_complete"] == 1
+    sample = rc["samples"][0]
+    assert "qc_warnings" not in sample.get("summary", {})
+    assert "outputs" not in sample
+    assert "tables" not in rc  # `run_context.tables` shorthand removed.
+
+
+def test_finalize_after_start_preserves_kind_tier_name(tmp_path, monkeypatch):
+    """start_analysis -> finalize_analysis must retain bundle provenance fields."""
+    monkeypatch.setenv("IMAJIN_RESULTS_DIR", str(tmp_path))
+    from imajin.result_bundles import finalize_analysis, start_analysis
+    from imajin.results import read_bundle_metadata
+
+    bundle = start_analysis(name="provenance_demo", kind="single", tier="two_tier")
+    finalize_analysis(status="complete", samples=[{"sample_name": "s1", "status": "complete"}])
+
+    meta = read_bundle_metadata(bundle)
+    rc = meta["run_context"]
+    assert rc["kind"] == "single"
+    assert rc["tier"] == "two_tier"
+    assert rc["name"] == "provenance_demo"
+    assert rc["created_at"]  # ISO timestamp preserved
+
+
+def test_register_output_appends_to_metadata(tmp_path, monkeypatch):
+    monkeypatch.setenv("IMAJIN_RESULTS_DIR", str(tmp_path))
+    from imajin.result_bundles import (
+        bundle_output_path,
+        register_output,
+        start_analysis,
+    )
+    from imajin.results import read_bundle_metadata
+
+    bundle = start_analysis(name="demo")
+    p = bundle_output_path("figures", "x.png")
+    p.write_bytes(b"\x89PNG\r\n")
+    register_output("figure", p, {"source": "test"})
+
+    meta = read_bundle_metadata(bundle)
+    outputs = meta["outputs"]
+    assert len(outputs) == 1
+    entry = outputs[0]
+    assert entry["kind"] == "figure"
+    assert entry["path"] == "figures/x.png"
+    assert entry["metadata"] == {"source": "test"}
+    assert entry["created_at"]
+
+
+def test_register_output_rejects_path_outside_bundle(tmp_path, monkeypatch):
+    monkeypatch.setenv("IMAJIN_RESULTS_DIR", str(tmp_path))
+    from imajin.result_bundles import register_output, start_analysis
+
+    start_analysis(name="demo")
+    outside = tmp_path / "elsewhere.png"
+    outside.write_bytes(b"")
+    with pytest.raises(ValueError, match="outside the active bundle"):
+        register_output("figure", outside, None)
+
+
+def test_register_table_spec_merges_into_metadata(tmp_path, monkeypatch):
+    monkeypatch.setenv("IMAJIN_RESULTS_DIR", str(tmp_path))
+    from imajin.result_bundles import register_table_spec, start_analysis
+    from imajin.results import read_bundle_metadata
+
+    bundle = start_analysis(name="demo")
+    register_table_spec("measurements", {"tool": "measure_table", "value_cols": ["mean_intensity"]})
+    register_table_spec("ratios", {"tool": "derive_ratio", "source": "measurements"})
+
+    meta = read_bundle_metadata(bundle)
+    assert meta["table_specs"]["measurements"]["tool"] == "measure_table"
+    assert meta["table_specs"]["ratios"]["source"] == "measurements"
+
+
+def test_register_stats_rows_describe_long_format(tmp_path, monkeypatch):
+    import pandas as pd
+
+    monkeypatch.setenv("IMAJIN_RESULTS_DIR", str(tmp_path))
+    from imajin.result_bundles import register_stats_rows, start_analysis
+
+    bundle = start_analysis(name="demo")
+    register_stats_rows(
+        kind="describe",
+        table="measurements",
+        rows=[
+            {"value_col": "mean_intensity", "level": "object",
+             "sample_aggregation": "", "group": "control",
+             "n": 200, "mean": 1.1, "median": 1.05},
+        ],
+    )
+    register_stats_rows(
+        kind="describe",
+        table="measurements",
+        rows=[
+            {"value_col": "max_intensity", "level": "object",
+             "sample_aggregation": "", "group": "control",
+             "n": 200, "mean": 5.2, "median": 5.0},
+        ],
+    )
+
+    df = pd.read_csv(bundle / "stats" / "describe__measurements.csv")
+    assert set(df["value_col"]) == {"mean_intensity", "max_intensity"}
+    assert len(df) == 2
+
+
+def test_register_stats_rows_overwrites_same_key(tmp_path, monkeypatch):
+    import pandas as pd
+
+    monkeypatch.setenv("IMAJIN_RESULTS_DIR", str(tmp_path))
+    from imajin.result_bundles import register_stats_rows, start_analysis
+
+    bundle = start_analysis(name="demo")
+    register_stats_rows(
+        kind="describe",
+        table="measurements",
+        rows=[
+            {"value_col": "mean_intensity", "level": "object",
+             "sample_aggregation": "", "group": "control", "n": 200, "mean": 1.0},
+        ],
+    )
+    register_stats_rows(
+        kind="describe",
+        table="measurements",
+        rows=[
+            {"value_col": "mean_intensity", "level": "object",
+             "sample_aggregation": "", "group": "control", "n": 200, "mean": 1.5},
+        ],
+    )
+
+    df = pd.read_csv(bundle / "stats" / "describe__measurements.csv")
+    assert len(df) == 1
+    assert df.iloc[0]["mean"] == 1.5
+
+
+def test_register_stats_rows_compare_separate_file(tmp_path, monkeypatch):
+    import pandas as pd
+
+    monkeypatch.setenv("IMAJIN_RESULTS_DIR", str(tmp_path))
+    from imajin.result_bundles import register_stats_rows, start_analysis
+
+    bundle = start_analysis(name="demo")
+    register_stats_rows(
+        kind="compare",
+        table="measurements",
+        rows=[
+            {"value_col": "mean_intensity", "test": "welch_ttest",
+             "data_level": "sample", "p_value": 0.02},
+        ],
+    )
+    df = pd.read_csv(bundle / "stats" / "compare__measurements.csv")
+    assert df.iloc[0]["test"] == "welch_ttest"
+
+
+def test_create_result_bundle_writes_directly_under_root(tmp_path, monkeypatch):
+    monkeypatch.setenv("IMAJIN_RESULTS_DIR", str(tmp_path))
+    from imajin.results import create_result_bundle
+
+    bundle = create_result_bundle("demo", kind="single")
+    assert bundle.parent == tmp_path
+    assert not (tmp_path / "bundles").exists()
+
+
+def test_atexit_finalizes_adhoc_bundle(tmp_path, monkeypatch):
+    monkeypatch.setenv("IMAJIN_RESULTS_DIR", str(tmp_path))
+    from imajin.result_bundles import (
+        _run_atexit_finalize,
+        ensure_active_bundle,
+        reset_process_bundle,
+    )
+    from imajin.results import read_bundle_metadata
+
+    reset_process_bundle()
+    bundle = ensure_active_bundle()
+    assert read_bundle_metadata(bundle)["run_context"]["status"] == "in_progress"
+
+    _run_atexit_finalize()  # simulate process exit
+    assert read_bundle_metadata(bundle)["run_context"]["status"] == "complete"
+    reset_process_bundle()

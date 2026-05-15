@@ -322,7 +322,7 @@ def test_analyze_target_cells_saves_result_bundle(
 
     assert res["ok"] is True
     assert res["result_bundle_path"].startswith(
-        str(tmp_path / "results" / "bundles")
+        str(tmp_path / "results")
     )
     assert res["result_files"]["labels_cells"] == "labels/cells/green_target.tif"
     assert res["result_files"]["labels_domain"] is None
@@ -363,7 +363,10 @@ def test_analyze_target_cells_bundle_lands_in_layer_anchor_folder(
     assert str(res["qc_png_path"]).startswith(str(anchor.resolve()))
     assert Path(res["qc_png_path"]).exists()
     assert not (anchor / "segmentation_qc").exists()
-    assert not (tmp_path / "fallback").exists()
+    # Note: after T10, the segmentation step writes the QC PNG into an adhoc
+    # process bundle under IMAJIN_RESULTS_DIR before the anchor bundle is created.
+    # The fallback dir may therefore exist; the important thing is that the
+    # *final* QC PNG and the result bundle land in the anchor folder (above).
     assert (bundle / "labels" / "cells" / "reporter.tif").exists()
 
     meta = json.loads((bundle / "metadata.json").read_text())
@@ -572,16 +575,13 @@ def test_analyze_target_cells_single_tier_writes_new_layout_bundle(
 
     meta = json.loads((bundle / "metadata.json").read_text())
     run_context = meta["run_context"]
-    assert meta["schema_version"] == 2
+    assert meta["schema_version"] == 3
     assert run_context["kind"] == "single"
     assert run_context["tier"] == "single_tier"
     assert run_context["status"] == "complete"
     assert len(run_context["samples"]) == 1
     assert run_context["samples"][0]["status"] == "complete"
-    assert (
-        run_context["samples"][0]["outputs"]["labels_cells"]
-        == "labels/cells/reporter.tif"
-    )
+    assert "outputs" not in run_context["samples"][0]
 
 
 def test_analyze_target_cells_two_tier_writes_bundle(
@@ -614,15 +614,12 @@ def test_analyze_target_cells_two_tier_writes_bundle(
 
     meta = json.loads((bundle / "metadata.json").read_text())
     run_context = meta["run_context"]
-    assert meta["schema_version"] == 2
+    assert meta["schema_version"] == 3
     assert run_context["kind"] == "single"
     assert run_context["tier"] == "two_tier"
     assert run_context["status"] == "complete"
     assert len(run_context["samples"]) == 1
-    assert (
-        run_context["samples"][0]["outputs"]["labels_domain"]
-        == "labels/domain/reporter.tif"
-    )
+    assert "outputs" not in run_context["samples"][0]
 
 
 def test_analyze_target_cells_writes_into_active_parent_bundle(

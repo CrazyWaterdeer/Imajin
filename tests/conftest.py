@@ -18,6 +18,7 @@ import tifffile
 @pytest.fixture(autouse=True)
 def _reset_sample_annotations():
     from imajin.agent import state
+    from imajin.result_bundles import reset_process_bundle
     from imajin.tools import trace
 
     trace.reset_skeletons()
@@ -27,6 +28,7 @@ def _reset_sample_annotations():
     state.reset_recipes()
     state.reset_runs()
     state.reset_qc_records()
+    reset_process_bundle()
     yield
     trace.reset_skeletons()
     state.reset_samples()
@@ -35,6 +37,7 @@ def _reset_sample_annotations():
     state.reset_recipes()
     state.reset_runs()
     state.reset_qc_records()
+    reset_process_bundle()
 
 
 @pytest.fixture

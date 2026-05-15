@@ -6,7 +6,7 @@ from typing import Any
 
 import numpy as np
 
-from imajin.results import record_result, unique_result_path
+from imajin.result_bundles import bundle_output_path, register_output
 
 
 def _slug(value: str) -> str:
@@ -45,18 +45,7 @@ def _source_metadata_from_layer(layer: Any) -> dict[str, str]:
 
 
 def _default_qc_png_path(labels_layer: str, source_layer: Any | None = None) -> Path:
-    if source_layer is not None:
-        source = _source_path_from_layer(source_layer)
-        if source:
-            from imajin.anchor import resolve_anchor_folder
-
-            anchor = resolve_anchor_folder([source])
-            if anchor is not None:
-                return _unique_file(
-                    anchor / "segmentation_qc",
-                    f"{_slug(labels_layer)}.png",
-                )
-    return unique_result_path("segmentation_qc", f"{_slug(labels_layer)}.png")
+    return bundle_output_path("qc", f"{_slug(labels_layer)}.png")
 
 
 def _saturation_warnings(data: Any, *, layer_name: str) -> list[str]:
@@ -193,8 +182,8 @@ def _save_qc_png(
         secondary_outline_mask=secondary_outline_mask,
     )
     try:
-        record_result(
-            "segmentation_qc_png",
+        register_output(
+            "qc_png",
             path,
             {
                 "labels_layer": labels_layer,
@@ -202,6 +191,6 @@ def _save_qc_png(
                 "method": method,
             },
         )
-    except Exception:
+    except ValueError:
         pass
     return str(path), None
