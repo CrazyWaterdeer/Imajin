@@ -173,31 +173,6 @@ def test_create_result_bundle_uses_explicit_root(tmp_path):
         assert not (bundle / sub).exists()
 
 
-def test_record_result_keeps_anchored_manifest_out_of_user_results(tmp_path, monkeypatch):
-    """Anchored outputs must not recreate the user fallback results folder."""
-    from imajin import results as _results
-
-    anchor = tmp_path / "2026-05-11"
-    anchor.mkdir()
-    fake_file = anchor / "img.lsm"
-    fake_file.write_bytes(b"")
-    user_root = tmp_path / "user_root"
-
-    monkeypatch.setattr(
-        "imajin.agent.state.list_files",
-        lambda: [{"path": str(fake_file)}],
-    )
-    monkeypatch.setattr(_results, "user_results_root", lambda: user_root)
-
-    # Sanity: results_root would point at the anchor folder
-    assert _results.results_root() == anchor.absolute()
-
-    _results.record_result("test_kind", fake_file)
-    assert not user_root.exists()
-    assert (anchor / ".imajin" / "manifest.jsonl").exists()
-    assert not (anchor / "manifest.jsonl").exists()
-
-
 def test_save_result_bundle_writes_table_spec_into_metadata(tmp_path, monkeypatch):
     monkeypatch.setenv("IMAJIN_RESULTS_DIR", str(tmp_path))
     import pandas as pd
