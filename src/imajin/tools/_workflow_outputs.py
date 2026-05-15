@@ -99,6 +99,8 @@ def _write_analysis_bundle_outputs(
             },
             root=anchor,
         )
+        from imajin.result_bundles import promote_to_process_bundle
+        promote_to_process_bundle(bundle_path)
     else:
         bundle_path = parent
 

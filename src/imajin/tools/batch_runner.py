@@ -457,7 +457,7 @@ class BatchRecipeRunner:
                 sample_paths.append(str(info["file_path"]))
         anchor = resolve_anchor_folder(sample_paths)
 
-        return create_result_bundle(
+        bundle = create_result_bundle(
             name=self.recipe.name,
             kind="batch",
             tier="two_tier" if self.domain_strategy is not None else "single_tier",
@@ -474,6 +474,9 @@ class BatchRecipeRunner:
             },
             root=anchor,
         )
+        from imajin.result_bundles import promote_to_process_bundle
+        promote_to_process_bundle(bundle)
+        return bundle
 
     def _process_sample(self, index: int, name: str) -> None:
         total = len(self.names)

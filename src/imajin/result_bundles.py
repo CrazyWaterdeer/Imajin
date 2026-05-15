@@ -35,6 +35,18 @@ def reset_process_bundle() -> None:
         _process_bundle = None
 
 
+def promote_to_process_bundle(bundle: Path) -> None:
+    """Set the process-global bundle slot to ``bundle``.
+
+    Used by tools that create a bundle directly (workflow path, batch runner)
+    so subsequent LLM tool calls in the same task — figures, stats, QC —
+    land in the same bundle instead of triggering a separate ad-hoc bundle.
+    """
+    global _process_bundle
+    with _process_bundle_lock:
+        _process_bundle = bundle
+
+
 def ensure_active_bundle() -> Path:
     """Return the active bundle, creating a process-wide ad-hoc one if needed."""
     global _process_bundle

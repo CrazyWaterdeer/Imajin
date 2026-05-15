@@ -538,3 +538,37 @@ def test_atexit_finalizes_adhoc_bundle(tmp_path, monkeypatch):
     _run_atexit_finalize()  # simulate process exit
     assert read_bundle_metadata(bundle)["run_context"]["status"] == "complete"
     reset_process_bundle()
+
+
+def test_workflow_bundle_is_promoted_to_process_slot(tmp_path, monkeypatch):
+    """After _write_analysis_bundle_outputs creates a bundle, subsequent
+    register_output / register_stats_rows calls must target the same bundle,
+    not a separate ad-hoc bundle."""
+    monkeypatch.setenv("IMAJIN_RESULTS_DIR", str(tmp_path))
+    from imajin.result_bundles import (
+        current_bundle,
+        promote_to_process_bundle,
+        reset_process_bundle,
+    )
+    from imajin.results import create_result_bundle, read_bundle_metadata
+
+    reset_process_bundle()
+    # Simulate what the workflow does internally.
+    bundle = create_result_bundle("simulated_workflow", kind="single")
+    promote_to_process_bundle(bundle)
+
+    # A subsequent tool that uses ensure_active_bundle() sees the workflow bundle.
+    assert current_bundle() == bundle
+
+    from imajin.result_bundles import bundle_output_path, register_output
+
+    fig = bundle_output_path("figures", "x.png")
+    fig.write_bytes(b"\x89PNG\r\n")
+    register_output("figure", fig, {})
+
+    meta = read_bundle_metadata(bundle)
+    assert any(o["path"] == "figures/x.png" for o in meta["outputs"])
+    # No separate adhoc bundle should have been created.
+    adhoc_dirs = [p for p in tmp_path.iterdir() if p.is_dir() and p.name.endswith("_adhoc")]
+    assert adhoc_dirs == []
+    reset_process_bundle()
