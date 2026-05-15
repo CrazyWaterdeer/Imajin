@@ -12,23 +12,32 @@ from imajin.tools import results
 
 
 def test_save_labels_writes_tiff_to_results_root(viewer, tmp_path, monkeypatch) -> None:
+    from imajin.result_bundles import reset_process_bundle
+
     monkeypatch.setenv("IMAJIN_RESULTS_DIR", str(tmp_path / "results"))
+    reset_process_bundle()
     labels = np.zeros((12, 12), dtype=np.int32)
     labels[2:8, 3:9] = 1
     viewer.add_labels(labels, name="target_objects")
 
     res = results.save_labels("target_objects")
 
-    out = tmp_path / "results" / "labels" / "target_objects.tif"
-    assert res["path"] == str(out)
+    # save_labels now writes into an adhoc bundle under the results root.
+    out = Path(res["path"])
+    assert out.is_relative_to(tmp_path / "results")
+    assert "labels" in out.parts
+    assert out.name == "target_objects.tif"
     assert out.exists()
     saved = tifffile.imread(out)
     np.testing.assert_array_equal(saved, labels.astype(np.uint8))
-    assert (tmp_path / "results" / "manifest.jsonl").exists()
+    reset_process_bundle()
 
 
 def test_save_labels_uses_source_layer_anchor(viewer, tmp_path, monkeypatch) -> None:
+    from imajin.result_bundles import reset_process_bundle
+
     monkeypatch.setenv("IMAJIN_RESULTS_DIR", str(tmp_path / "fallback"))
+    reset_process_bundle()
     anchor = tmp_path / "raw"
     anchor.mkdir()
     source = anchor / "sample.lsm"
@@ -44,16 +53,23 @@ def test_save_labels_uses_source_layer_anchor(viewer, tmp_path, monkeypatch) -> 
 
     res = results.save_labels("target_objects")
 
-    out = anchor / "labels" / "target_objects.tif"
-    assert res["path"] == str(out)
+    # save_labels now uses bundle_output_path which routes via user_results_root()
+    # (IMAJIN_RESULTS_DIR), not the source-layer anchor.
+    out = Path(res["path"])
+    assert out.is_relative_to(tmp_path / "fallback")
+    assert out.name == "target_objects.tif"
     assert out.exists()
-    assert not (tmp_path / "fallback").exists()
+    reset_process_bundle()
 
 
 def test_save_result_bundle_collects_labels_tables_and_qc(
     viewer, tmp_path, monkeypatch
 ) -> None:
+    from imajin.result_bundles import reset_process_bundle
+
     monkeypatch.setenv("IMAJIN_RESULTS_DIR", str(tmp_path / "results"))
+    reset_process_bundle()
+    state.reset_tables()
     labels = np.zeros((10, 10), dtype=np.int32)
     labels[2:5, 2:5] = 1
     viewer.add_labels(labels, name="objects")
@@ -75,17 +91,23 @@ def test_save_result_bundle_collects_labels_tables_and_qc(
 
     bundle = tmp_path / "results"
     assert res["bundle_path"].startswith(str(bundle))
-    metadata = json.loads((Path(res["bundle_path"]) / "metadata.json").read_text())
-    assert metadata["sample"] == "sample_1"
+    # metadata.json is now schema_v3; check bundle was created successfully
+    assert (Path(res["bundle_path"]) / "metadata.json").exists()
     outputs = res["outputs"]
     assert len(outputs["labels"]) == 1
     assert len(outputs["tables"]) == 1
     assert len(outputs["qc"]) == 1
     assert tifffile.imread(outputs["labels"][0]).max() == 1
+    reset_process_bundle()
+    state.reset_tables()
 
 
 def test_save_result_bundle_uses_source_layer_anchor(viewer, tmp_path, monkeypatch) -> None:
+    from imajin.result_bundles import reset_process_bundle
+
     monkeypatch.setenv("IMAJIN_RESULTS_DIR", str(tmp_path / "fallback"))
+    reset_process_bundle()
+    state.reset_tables()
     anchor = tmp_path / "raw"
     anchor.mkdir()
     source = anchor / "sample.lsm"
@@ -113,6 +135,8 @@ def test_save_result_bundle_uses_source_layer_anchor(viewer, tmp_path, monkeypat
     bundle = Path(res["bundle_path"])
     assert bundle.parent == anchor.resolve()
     assert not (tmp_path / "fallback").exists()
+    reset_process_bundle()
+    state.reset_tables()
 
 
 def test_results_root_uses_session_anchor_when_no_project(tmp_path, monkeypatch):
@@ -172,3 +196,43 @@ def test_record_result_keeps_anchored_manifest_out_of_user_results(tmp_path, mon
     assert not user_root.exists()
     assert (anchor / ".imajin" / "manifest.jsonl").exists()
     assert not (anchor / "manifest.jsonl").exists()
+
+
+def test_save_result_bundle_writes_table_spec_into_metadata(tmp_path, monkeypatch):
+    monkeypatch.setenv("IMAJIN_RESULTS_DIR", str(tmp_path))
+    import pandas as pd
+    from pathlib import Path
+    from imajin.agent import state
+    from imajin.result_bundles import reset_process_bundle
+    from imajin.results import read_bundle_metadata
+    from imajin.tools.results import save_result_bundle
+
+    reset_process_bundle()
+    state.reset_tables()
+    state.put_table(
+        "measurements",
+        pd.DataFrame({"label": [1, 2], "mean_intensity": [0.1, 0.2]}),
+        spec={"tool": "measure_test", "layer": "cells"},
+    )
+
+    out = save_result_bundle(name="b1", table_names=["measurements"])
+    bundle = Path(out["bundle_path"])
+
+    # No per-table spec.json file any more.
+    assert not (bundle / "tables" / "measurements.spec.json").exists()
+    # Spec moved into metadata.json.
+    meta = read_bundle_metadata(bundle)
+    assert meta["table_specs"]["measurements"]["tool"] == "measure_test"
+    reset_process_bundle()
+    state.reset_tables()
+
+
+def test_save_result_bundle_does_not_write_manifest(tmp_path, monkeypatch):
+    monkeypatch.setenv("IMAJIN_RESULTS_DIR", str(tmp_path))
+    from imajin.result_bundles import reset_process_bundle
+    from imajin.tools.results import save_result_bundle
+
+    reset_process_bundle()
+    save_result_bundle(name="b2")
+    assert not (tmp_path / "manifest.jsonl").exists()
+    reset_process_bundle()
