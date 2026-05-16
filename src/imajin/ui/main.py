@@ -65,6 +65,10 @@ def _add_imajin_menu(viewer: Any, settings: Any, chat_dock: Any) -> None:
     qc_action.triggered.connect(lambda: _show_qc_panel(viewer))
     panels_menu.addAction(qc_action)
 
+    review_action = QAction("Show ROI Review", qmain)
+    review_action.triggered.connect(lambda: _show_review_panel(viewer))
+    panels_menu.addAction(review_action)
+
     menu.addSeparator()
 
     keys_action = QAction("API Keys…", qmain)
@@ -207,6 +211,23 @@ def _show_qc_panel(viewer: Any) -> None:
         area="right",
         name="QC",
     )
+
+
+def _show_review_panel(viewer: Any) -> "Any":
+    from imajin.ui.review_dock import ReviewDock
+
+    _show_optional_panel(
+        viewer,
+        "_imajin_review_dock",
+        lambda: ReviewDock(viewer=viewer),
+        area="right",
+        name="ROI Review",
+    )
+    qmain = viewer.window._qt_window
+    dock = getattr(qmain, "_imajin_review_dock", None)
+    if dock is None:
+        return None
+    return dock.widget()
 
 
 def launch(settings: Any | None = None) -> int:
