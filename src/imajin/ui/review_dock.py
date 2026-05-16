@@ -284,7 +284,7 @@ class ReviewDock(QWidget):
             np.empty((0, 2), dtype=float),
             name=names["add_points"],
             face_color=_ADD_COLOR,
-            edge_color="white",
+            border_color="white",
             size=6,
             symbol="o",
         )
@@ -292,7 +292,7 @@ class ReviewDock(QWidget):
             np.empty((0, 2), dtype=float),
             name=names["remove_points"],
             face_color=_REMOVE_COLOR,
-            edge_color="white",
+            border_color="white",
             size=6,
             symbol="x",
         )
