@@ -646,6 +646,10 @@ def segment_target_objects(
     background_percentile: float = 20.0,
     threshold_method: str = "auto",
     threshold_percentile: float = 99.0,
+    threshold_clip_percentile: float | None = None,
+    auto_mask_hyperbright: bool = False,
+    hyperbright_percentile: float = 99.5,
+    hyperbright_dilate_radius: int = 2,
     min_snr: float = 2.0,
     high_snr: float = 4.0,
     min_size: int | None = None,
@@ -731,6 +735,10 @@ def segment_target_objects(
         threshold_percentile=threshold_percentile,
         min_snr=min_snr,
         boundary_mask=boundary_data_bool,
+        clip_percentile=threshold_clip_percentile,
+        auto_mask_hyperbright=auto_mask_hyperbright,
+        hyperbright_percentile=hyperbright_percentile,
+        hyperbright_dilate_radius=hyperbright_dilate_radius,
     )
 
     high_threshold = max(float(threshold), float(high_snr) * float(noise_sigma))
