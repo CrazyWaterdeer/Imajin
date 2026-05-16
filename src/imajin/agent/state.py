@@ -184,6 +184,7 @@ class AnalysisRecipe:
     notes: str | None = None
     cell_diameter_um: float | None = None
     domain: dict[str, Any] | None = None
+    review_mode: str = "auto"  # "auto" | "interactive"
 
 
 _RECIPES: dict[str, AnalysisRecipe] = _CURRENT_SESSION.recipes
@@ -200,10 +201,15 @@ def put_recipe(
     notes: str | None = None,
     cell_diameter_um: float | None = None,
     domain: dict[str, Any] | None = None,
+    review_mode: str = "auto",
 ) -> str:
     name = name.strip()
     if not name:
         raise ValueError("recipe name must not be empty")
+    if review_mode not in {"auto", "interactive"}:
+        raise ValueError(
+            f"review_mode must be 'auto' or 'interactive' (got {review_mode!r})"
+        )
     _RECIPES[name] = AnalysisRecipe(
         recipe_id=name,
         name=name,
@@ -216,6 +222,7 @@ def put_recipe(
         notes=notes,
         cell_diameter_um=cell_diameter_um,
         domain=dict(domain) if domain else None,
+        review_mode=review_mode,
     )
     _state_changed("recipe_saved")
     return name
@@ -916,6 +923,7 @@ def _restore_session_state_impl(
             notes=rec.get("notes"),
             cell_diameter_um=rec.get("cell_diameter_um"),
             domain=dict(rec["domain"]) if rec.get("domain") else None,
+            review_mode=str(rec.get("review_mode") or "auto"),
         )
 
     max_run = 0

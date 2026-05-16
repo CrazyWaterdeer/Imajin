@@ -1168,6 +1168,114 @@ def segment_expression_domain(
 
 
 @tool(
+    description="Re-run target object segmentation on the same image with "
+    "overridden parameters and replace the existing labels layer in place. "
+    "Phase 3 of the SNR/ROI work; intended for natural-language corrections "
+    "such as 'lower min_snr and turn on the hyperbright mask'. Returns the "
+    "new label count, threshold, and any QC warnings.",
+    phase="2",
+    llm=True,
+    worker=True,
+)
+def correct_roi(
+    image_layer: str,
+    labels_layer: str,
+    min_snr: float | None = None,
+    high_snr: float | None = None,
+    threshold_method: str | None = None,
+    threshold_clip_percentile: float | None = None,
+    auto_mask_hyperbright: bool | None = None,
+    hyperbright_percentile: float | None = None,
+    background_radius: int | None = None,
+    smoothing_sigma: float | None = None,
+    min_size: int | None = None,
+) -> dict[str, Any]:
+    from imajin.agent.state import get_layer
+
+    try:
+        labels_layer_obj = call_on_main(get_layer, labels_layer)
+    except KeyError:
+        return {"ok": False, "error": f"labels_layer '{labels_layer}' not found"}
+
+    prev_meta = dict(getattr(labels_layer_obj, "metadata", {}) or {})
+
+    def _resolve(name: str, value: Any, default: Any) -> Any:
+        if value is not None:
+            return value
+        if name in prev_meta:
+            return prev_meta[name]
+        return default
+
+    kwargs: dict[str, Any] = {
+        "image_layer": image_layer,
+        "threshold_method": _resolve("threshold_method", threshold_method, "auto"),
+        "threshold_clip_percentile": _resolve(
+            "threshold_clip_percentile", threshold_clip_percentile, None
+        ),
+        "auto_mask_hyperbright": bool(
+            _resolve("auto_mask_hyperbright", auto_mask_hyperbright, False)
+        ),
+        "hyperbright_percentile": float(
+            _resolve("hyperbright_percentile", hyperbright_percentile, 99.5)
+        ),
+        "min_snr": float(_resolve("min_snr", min_snr, 2.0)),
+        "high_snr": float(_resolve("high_snr", high_snr, 4.0)),
+        "background_radius": int(_resolve("background_radius", background_radius, 48)),
+        "smoothing_sigma": float(_resolve("smoothing_sigma", smoothing_sigma, 1.0)),
+    }
+    if min_size is not None:
+        kwargs["min_size"] = int(min_size)
+    if "boundary_mask" in prev_meta and prev_meta["boundary_mask"]:
+        kwargs["boundary_mask"] = prev_meta["boundary_mask"]
+
+    new_result = segment_target_objects(**kwargs)
+    new_labels_layer = new_result.get("labels_layer")
+    if not new_labels_layer:
+        return {
+            "ok": False,
+            "error": "segment_target_objects did not produce a labels layer",
+            "result": new_result,
+        }
+
+    new_layer_obj = call_on_main(get_layer, new_labels_layer)
+    new_data = materialize_array(new_layer_obj.data)
+    new_metadata = dict(getattr(new_layer_obj, "metadata", {}) or {})
+
+    def _commit_to_target_layer():
+        target = get_layer(labels_layer)
+        target.data = np.asarray(new_data, dtype=np.int32)
+        merged = dict(getattr(target, "metadata", {}) or {})
+        merged.update(new_metadata)
+        merged["corrected_from"] = new_labels_layer
+        target.metadata = merged
+        # Drop the throwaway layer the worker created.
+        viewer_layers = target.parent if hasattr(target, "parent") else None
+        if viewer_layers is None:
+            from imajin.agent.state import get_viewer
+            viewer = get_viewer()
+            if viewer is not None and new_labels_layer in viewer.layers:
+                try:
+                    viewer.layers.remove(new_labels_layer)
+                except Exception:
+                    pass
+
+    call_on_main(_commit_to_target_layer)
+
+    return {
+        "ok": True,
+        "labels_layer": labels_layer,
+        "replaced_with": new_labels_layer,
+        "n_objects": new_result.get("n_objects", new_result.get("n_cells", 0)),
+        "threshold": new_result.get("threshold"),
+        "threshold_scope": new_result.get("threshold_scope"),
+        "qc_warnings": new_result.get("qc_warnings", []),
+        "applied_params": {
+            k: v for k, v in kwargs.items() if k not in {"image_layer"}
+        },
+    }
+
+
+@tool(
     description="Open the interactive ROI review dock against an existing "
     "(image, labels) pair so the user can mark points/regions to add or "
     "remove on a MIP overlay and rebuild the ROI on the original 3D stack. "

@@ -17,7 +17,7 @@ from typing import Any
 
 import numpy as np
 
-from qtpy.QtCore import Qt
+from qtpy.QtCore import Qt, Signal
 from qtpy.QtWidgets import (
     QButtonGroup,
     QFormLayout,
@@ -65,6 +65,9 @@ def _layer_suffix_names(stem: str) -> dict[str, str]:
 
 class ReviewDock(QWidget):
     """Single-sample interactive ROI review widget."""
+
+    review_committed = Signal(dict)
+    review_skipped = Signal(dict)
 
     def __init__(self, viewer: Any) -> None:
         super().__init__()
@@ -141,11 +144,17 @@ class ReviewDock(QWidget):
         row2 = QHBoxLayout()
         self.commit_btn = QPushButton("Commit to labels layer")
         self.commit_btn.clicked.connect(self._on_commit)
+        self.skip_btn = QPushButton("Skip sample")
+        self.skip_btn.clicked.connect(self._on_skip)
+        row2.addWidget(self.commit_btn)
+        row2.addWidget(self.skip_btn)
+        actions_layout.addLayout(row2)
+        row3 = QHBoxLayout()
         self.close_btn = QPushButton("Close review")
         self.close_btn.clicked.connect(self._on_close_review)
-        row2.addWidget(self.commit_btn)
-        row2.addWidget(self.close_btn)
-        actions_layout.addLayout(row2)
+        row3.addStretch(1)
+        row3.addWidget(self.close_btn)
+        actions_layout.addLayout(row3)
         layout.addWidget(actions_box)
 
         self.status_label = QLabel("No layer loaded.")
@@ -323,6 +332,7 @@ class ReviewDock(QWidget):
             self.rebuild_btn,
             self.reset_btn,
             self.commit_btn,
+            self.skip_btn,
             self.close_btn,
         ):
             w.setEnabled(active)
@@ -468,7 +478,30 @@ class ReviewDock(QWidget):
         meta["reviewed"] = True
         meta["review_noise_sigma"] = self._noise_sigma
         layer.metadata = meta
+        info = {
+            "image_layer": self._target_layer_name,
+            "labels_layer": self._labels_layer_name,
+            "final_voxels": int((self._current_labels > 0).sum()),
+            "final_objects": int(self._current_labels.max()) if self._current_labels.size else 0,
+            "noise_sigma": self._noise_sigma,
+        }
         self._update_status(committed=True)
+        self.review_committed.emit(info)
+        from imajin.agent.review_checkpoint import is_review_active, notify_review_committed
+        if is_review_active():
+            notify_review_committed(**info)
+
+    def _on_skip(self) -> None:
+        info = {
+            "image_layer": self._target_layer_name,
+            "labels_layer": self._labels_layer_name,
+            "reason": "user_skipped",
+        }
+        self.status_label.setText("Sample skipped.")
+        self.review_skipped.emit(info)
+        from imajin.agent.review_checkpoint import is_review_active, notify_review_skipped
+        if is_review_active():
+            notify_review_skipped(**info)
 
     def _on_close_review(self) -> None:
         self._tear_down_scratch_layers()

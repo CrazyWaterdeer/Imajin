@@ -584,6 +584,7 @@ class BatchRecipeRunner:
                 segmentation_options=self.seg,
                 domain_strategy=self.domain_strategy,
                 domain_options=self.domain_options,
+                review_mode=getattr(self.recipe, "review_mode", "auto"),
             )
         return result, target
 
