@@ -245,7 +245,10 @@ class ReviewDock(QWidget):
         self._labels_layer_name = labels_name
         self._original_corrected = target
         self._original_labels = labels
-        self._current_labels = labels.copy()
+        # Share until the first Rebuild reassigns `_current_labels`. Avoids
+        # an eager full-size int32 copy of the labels every time the user
+        # opens the review dock.
+        self._current_labels = labels
 
         meta = dict(getattr(labels_layer, "metadata", {}) or {})
         self._noise_sigma = float(
