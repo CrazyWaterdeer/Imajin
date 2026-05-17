@@ -177,3 +177,22 @@ def test_skipped_when_point_outside_image():
     )
     assert info["skipped_points"] == 2
     assert info["add_points_voxels"] == 0
+
+
+def test_broadcast_region_returns_view_for_3d_not_copy():
+    """The 3D broadcast of a YX mask must stay a view to keep peak memory low.
+
+    A real `.copy()` would allocate Z*Y*X bytes per region; for a typical
+    z-stack with several user regions this can easily add hundreds of MB.
+    """
+    from imajin.analysis.interactive_roi import _broadcast_region
+
+    region2d = np.zeros((10, 10), dtype=bool)
+    region2d[2:5, 2:5] = True
+    region3d = _broadcast_region(region2d, (4, 10, 10))
+
+    assert region3d.shape == (4, 10, 10)
+    # Broadcast view: stride along the broadcast axis is 0 (no per-slice
+    # storage). A `.copy()` would yield strides[0] == Y*X bytes.
+    assert region3d.strides[0] == 0
+    assert region3d.base is not None

@@ -57,7 +57,11 @@ def _resolve_seed(corrected: np.ndarray, y: int, x: int) -> tuple[int, ...] | No
 
 
 def _broadcast_region(region2d: np.ndarray, shape: tuple[int, ...]) -> np.ndarray:
-    """Broadcast a YX boolean mask to match a 2D or 3D target shape."""
+    """Broadcast a YX boolean mask to match a 2D or 3D target shape.
+
+    For 3D targets we return a read-only broadcast view, not a full copy,
+    so peak memory per region is O(Y*X) instead of O(Z*Y*X).
+    """
     region2d = np.asarray(region2d, dtype=bool)
     if region2d.shape != shape[-2:]:
         raise ValueError(
@@ -65,7 +69,7 @@ def _broadcast_region(region2d: np.ndarray, shape: tuple[int, ...]) -> np.ndarra
             f"shape {shape[-2:]}"
         )
     if len(shape) == 3:
-        return np.broadcast_to(region2d[None, :, :], shape).copy()
+        return np.broadcast_to(region2d[None, :, :], shape)
     return region2d
 
 
@@ -90,16 +94,22 @@ def _flood_fill_from_seed(
     seed: tuple[int, ...],
     *,
     floor: float,
+    finite_mask: np.ndarray | None = None,
 ) -> np.ndarray:
-    """Connected component of ``corrected > floor`` containing ``seed``."""
-    above = (corrected > floor) & np.isfinite(corrected)
+    """Connected component of ``corrected > floor`` containing ``seed``.
+
+    ``finite_mask`` may be passed by the caller to avoid recomputing
+    ``np.isfinite(corrected)`` on every call.
+    """
+    fmask = finite_mask if finite_mask is not None else np.isfinite(corrected)
+    above = (corrected > floor) & fmask
     if not above[seed]:
         # The user pointed at a pixel below the floor. Lower the floor just
         # enough to include the seed, then take the component.
         seed_val = float(corrected[seed])
         if not np.isfinite(seed_val):
             return np.zeros(corrected.shape, dtype=bool)
-        above = (corrected > min(floor, seed_val - 1e-6)) & np.isfinite(corrected)
+        above = (corrected > min(floor, seed_val - 1e-6)) & fmask
     return _component_mask(above, seed)
 
 
@@ -166,6 +176,11 @@ def correct_roi_from_markings(
         noise_sigma = robust_background_sigma(corrected)
     sigma = float(noise_sigma) if np.isfinite(noise_sigma) else 0.0
 
+    # Cache the finite mask once: every add-point flood-fill and every
+    # add-region call needs it, and recomputing per marking would allocate
+    # one extra full-size bool array each time.
+    finite_mask = np.isfinite(corrected)
+
     base_mask = auto_labels > 0
     add_mask = np.zeros(corrected.shape, dtype=bool)
     remove_mask = np.zeros(corrected.shape, dtype=bool)
@@ -190,7 +205,9 @@ def correct_roi_from_markings(
         if seed is None:
             info["skipped_points"] += 1
             continue
-        grown = _flood_fill_from_seed(corrected, seed, floor=growth_floor)
+        grown = _flood_fill_from_seed(
+            corrected, seed, floor=growth_floor, finite_mask=finite_mask
+        )
         info["add_points_voxels"] += int(grown.sum())
         add_mask |= grown
 
@@ -210,7 +227,7 @@ def correct_roi_from_markings(
     )
     for region2d in add_regions:
         region3d = _broadcast_region(region2d, corrected.shape)
-        addition = region3d & (corrected > region_threshold) & np.isfinite(corrected)
+        addition = region3d & (corrected > region_threshold) & finite_mask
         info["add_regions_voxels"] += int(addition.sum())
         add_mask |= addition
 
