@@ -283,6 +283,7 @@ def target_object_threshold(
     percentile: float,
     min_snr: float,
     noise_sigma: float,
+    clip_percentile: float | None = None,
 ) -> float:
     from skimage import filters
 
@@ -292,26 +293,45 @@ def target_object_threshold(
     if float(finite.max()) <= float(finite.min()):
         raise ValueError("cannot threshold a constant image")
 
+    # Hyper-bright outliers (autofluorescence, debris) pull histogram-based
+    # thresholds upward and starve dim signal. Optionally clip the upper tail
+    # before passing the histogram to skimage's threshold algorithms. The
+    # threshold value itself stays in the original intensity space.
+    histogram_input = finite
+    if clip_percentile is not None and 0.0 < float(clip_percentile) < 100.0:
+        cap = float(np.percentile(finite, float(clip_percentile)))
+        if np.isfinite(cap) and cap > float(finite.min()):
+            histogram_input = np.minimum(finite, cap)
+
     key = method.lower().strip().replace("-", "_")
     if key in {"auto", "background_corrected", "target"}:
         try:
-            threshold = float(filters.threshold_otsu(finite))
+            threshold = float(filters.threshold_otsu(histogram_input))
         except ValueError:
             positives = finite[finite > 0]
             threshold = float(np.percentile(positives, 25)) if positives.size else 0.0
     elif key == "percentile":
         threshold = float(np.percentile(finite, percentile))
     elif key == "otsu":
-        threshold = float(filters.threshold_otsu(finite))
+        threshold = float(filters.threshold_otsu(histogram_input))
     elif key == "yen":
-        threshold = float(filters.threshold_yen(finite))
+        threshold = float(filters.threshold_yen(histogram_input))
     elif key == "li":
-        threshold = float(filters.threshold_li(finite))
+        threshold = float(filters.threshold_li(histogram_input))
     elif key == "triangle":
-        threshold = float(filters.threshold_triangle(finite))
+        threshold = float(filters.threshold_triangle(histogram_input))
+    elif key in {"multi_otsu", "multiotsu"}:
+        # 3-class Multi-Otsu: background / signal / hyper-bright. The lower
+        # boundary separates background from signal, which is what we want.
+        try:
+            boundaries = filters.threshold_multiotsu(histogram_input, classes=3)
+            threshold = float(boundaries[0])
+        except ValueError:
+            threshold = float(filters.threshold_otsu(histogram_input))
     else:
         raise ValueError(
-            "threshold_method must be one of: auto, percentile, otsu, yen, li, triangle"
+            "threshold_method must be one of: auto, percentile, otsu, yen, li, "
+            "triangle, multi_otsu"
         )
 
     snr_floor = float(min_snr) * float(noise_sigma)

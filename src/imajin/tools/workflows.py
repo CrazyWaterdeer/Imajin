@@ -56,6 +56,8 @@ def analyze_target_cells(
     domain_options: dict[str, Any] | None = None,
     counterstain_layer: str | None = None,
     cell_diameter_um: float | None = None,
+    review_mode: str = "auto",
+    review_timeout_s: float | None = None,
 ) -> dict[str, Any]:
     warnings: list[str] = []
     report_progress(stage="resolve_target", message="Resolving target channel.")
@@ -133,6 +135,41 @@ def analyze_target_cells(
             "segmentation_method": method,
             "warnings": warnings,
         }
+
+    review_record: dict[str, Any] | None = None
+    if review_mode == "interactive":
+        from imajin.agent.review_checkpoint import request_review_and_wait
+
+        report_progress(
+            stage="review",
+            message=(
+                f"Awaiting interactive review of {seg_result['labels_layer']}."
+            ),
+        )
+        review_record = request_review_and_wait(
+            image_layer=seg_input_layer,
+            labels_layer=seg_result["labels_layer"],
+            timeout=review_timeout_s,
+        )
+        action = review_record.get("action")
+        if action == "skip":
+            return {
+                "ok": False,
+                "stage": "review_skipped",
+                "error": "user skipped this sample at the review checkpoint",
+                "target_channel": target_layer,
+                "target_source": resolution.source,
+                "labels_layer": seg_result["labels_layer"],
+                "preprocess": pre_step,
+                "segmentation_method": method,
+                "review": review_record,
+                "warnings": warnings,
+            }
+        if action == "timeout":
+            warnings.append(
+                "interactive review timed out; measuring auto-segmented labels"
+            )
+        # action == "commit" → labels layer was updated in-place by the dock.
 
     report_progress(
         stage="measurement",
@@ -338,6 +375,7 @@ def analyze_target_cells(
         "result_files": dict(bundle_outputs),
         "voxel_scale": voxel,
         "has_physical_units": bool(measure_result.get("has_physical_units")),
+        "review": review_record,
         "warnings": warnings,
     }
 
