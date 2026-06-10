@@ -190,7 +190,7 @@ signatures; additions are `find_similar_neurons` and `add_reference_neuron`.
   ("neural_tracer")` now includes the two new tools; prompt no longer claims
   classification is stubbed.
 
-- [ ] **N7. Docs.** `PROJECT_PLAN.md` Phase 6: mark local morphometric matching done;
+- [x] **N7. Docs.** `PROJECT_PLAN.md` Phase 6: mark local morphometric matching done;
   describe the reference-library workflow; record the Tier 2/3 roadmap + species
   caveat + that Tier 2 adds the `connectome` extra (`uv sync --extra connectome`).
   Short README note. No code.

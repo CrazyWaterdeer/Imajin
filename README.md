@@ -52,10 +52,13 @@ happen.
   report generation and future batch summaries.
 - **Cell tracking**: `track_cells` via [btrack](https://github.com/quantumjot/btrack)
   on T-axis Labels.
-- **Neural morphology**: available as an isolated advanced module
-  (skeletonization, branch metrics). Connectome / NBLAST hooks are stubbed
-  pending a target organism / dataset and are not part of the default cell
-  analysis workflow.
+- **Neural morphology**: an isolated advanced module — skeletonization, branch
+  metrics, Sholl analysis, SWC/CSV export, and local **morphometric neuron-type
+  classification / similarity search** against a labelled reference library you
+  build from your own traces (registration-free, offline). Spatial NBLAST and
+  external connectome lookup (neuPrint/FlyWire) are an opt-in Tier-2 backend
+  (`uv sync --extra connectome`) that is not yet wired up; mouse connectomes
+  (MICrONS/Allen) are out of scope. Not part of the default cell workflow.
 - **LLM-driven analysis**: provider abstraction with prompt caching for
   Anthropic and a translation layer for any OpenAI-compatible `/v1` endpoint.
   Streaming chat and tool-use are non-blocking via napari's `thread_worker`.

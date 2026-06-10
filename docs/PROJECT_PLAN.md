@@ -359,11 +359,23 @@ Reports must not claim unconfirmed biological meaning.
 
 ### Phase 6: Neural Process Analysis
 
-- build a proper process reconstruction pipeline
-- add pruning, QC, and morphology metrics
-- add SWC/CSV export
-- keep external Drosophila database backends optional
-- add connectome comparison only after backend selection
+Done (Tier 1 — local & offline, no extra dependency):
+- process reconstruction pipeline (enhance → segment → skeletonize)
+- pruning, QC, morphology metrics, Sholl analysis
+- SWC / CSV / TIFF export
+- morphometric neuron-type classification + similarity search against a labelled
+  reference library: build it with `add_reference_neuron` on your own labelled
+  skeletons, then `classify_neuron_type` / `find_similar_neurons`. Registration-free
+  (feature-vector based), so it needs no template and works on unregistered traces.
+
+Roadmap (Tier 2 — opt-in `uv sync --extra connectome`):
+- NBLAST spatial morphology comparison (`navis`) + template registration
+  (`navis-flybrains`) — the prerequisite for valid cross-dataset matching
+- Drosophila connectome lookup (neuPrint → FlyWire) via `query_connectome`
+
+Out of scope:
+- MICrONS / Allen (mouse connectomes; this app targets Drosophila — `query_connectome`
+  rejects them as off-domain)
 
 ## Open Questions
 
