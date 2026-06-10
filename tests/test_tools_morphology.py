@@ -488,3 +488,61 @@ def test_query_connectome_routes_neuprint_without_skeleton_lookup(viewer, monkey
     res = trace.query_connectome("any_id", db="neuprint")
     assert res["db"] == "neuprint"
     assert res["status"] == "backend_unavailable"
+
+
+# --------------------------------------------------------------------------- #
+# Option B: topological persistence features (registration-free)
+# --------------------------------------------------------------------------- #
+def test_persistence_unavailable_returns_none(monkeypatch, tmp_path) -> None:
+    import imajin.analysis.morphology_persistence as mp
+
+    monkeypatch.setattr(mp, "navis_available", lambda: False)
+    assert mp.persistence_features_from_swc(tmp_path / "x.swc") is None
+
+
+@requires_navis
+def test_persistence_features_from_real_skeleton(viewer, tmp_path) -> None:
+    from imajin.analysis.morphology_persistence import persistence_features_from_swc
+    from imajin.tools._trace_export import _write_swc
+
+    trace.reset_skeletons()
+    viewer.add_labels(_branched_mask(), name="p_branch", scale=(0.4, 0.4))
+    skel_id = trace.skeletonize("p_branch")["skeleton_id"]
+    swc = tmp_path / "p_branch.swc"
+    _write_swc(trace._entry(skel_id), swc)
+
+    feats = persistence_features_from_swc(swc, samples=32)
+    assert feats is not None
+    assert len(feats) == 32
+    assert all(k.startswith("pers_") for k in feats)
+    assert all(np.isfinite(v) for v in feats.values())
+
+
+@requires_navis
+def test_persistence_is_translation_rotation_invariant(tmp_path) -> None:
+    # the headline property: persistence is invariant to rigid motion (NBLAST is not)
+    import warnings
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        import navis
+
+        from imajin.analysis.morphology_persistence import persistence_features_from_swc
+
+        base = navis.example_neurons(1, kind="skeleton")
+        moved = base.copy()
+        theta = 0.7
+        rot = np.array(
+            [[np.cos(theta), -np.sin(theta), 0], [np.sin(theta), np.cos(theta), 0], [0, 0, 1]]
+        )
+        coords = moved.nodes[["x", "y", "z"]].to_numpy() @ rot.T + np.array([1e4, -5e3, 2e3])
+        moved.nodes[["x", "y", "z"]] = coords
+
+        navis.write_swc(base, tmp_path / "base.swc")
+        navis.write_swc(moved, tmp_path / "moved.swc")
+
+    f_base = persistence_features_from_swc(tmp_path / "base.swc", samples=48)
+    f_moved = persistence_features_from_swc(tmp_path / "moved.swc", samples=48)
+    assert f_base is not None and f_moved is not None
+    for key in f_base:
+        assert f_base[key] == pytest.approx(f_moved[key], abs=1e-6)
