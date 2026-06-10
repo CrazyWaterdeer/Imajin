@@ -55,9 +55,6 @@ class QCRecord:
     notes: str | None = None
 
 
-_QC_RECORDS: dict[str, QCRecord] = _CURRENT_SESSION.qc_records
-
-
 def _state_changed(reason: str, *, tables_changed: bool = False) -> None:
     global _PENDING_TABLES_CHANGED
 
@@ -310,7 +307,7 @@ def put_qc_record(
 ) -> str:
     if status not in {"pass", "warning", "fail", "not_checked"}:
         raise ValueError("status must be pass, warning, fail, or not_checked")
-    _QC_RECORDS[source] = QCRecord(
+    current_session().qc_records[source] = QCRecord(
         source=source,
         status=status,
         warnings=list(warnings or []),
@@ -323,17 +320,18 @@ def put_qc_record(
 
 
 def get_qc_record(source: str) -> QCRecord:
-    if source not in _QC_RECORDS:
-        raise KeyError(f"QC source {source!r} not found. Available: {list(_QC_RECORDS)}")
-    return _QC_RECORDS[source]
+    qc_records = current_session().qc_records
+    if source not in qc_records:
+        raise KeyError(f"QC source {source!r} not found. Available: {list(qc_records)}")
+    return qc_records[source]
 
 
 def list_qc_records() -> list[dict[str, Any]]:
-    return [asdict(record) for record in _QC_RECORDS.values()]
+    return [asdict(record) for record in current_session().qc_records.values()]
 
 
 def reset_qc_records() -> None:
-    _QC_RECORDS.clear()
+    current_session().qc_records.clear()
 
 
 @dataclass
@@ -426,13 +424,12 @@ def current_session() -> AnalysisSession:
 def set_current_session(session: AnalysisSession) -> None:
     """Replace the active session and refresh compatibility aliases."""
 
-    global _CURRENT_SESSION, _VIEWER, _TABLES, _QC_RECORDS
+    global _CURRENT_SESSION, _VIEWER, _TABLES
     global _SAMPLES, _CHANNELS, _TABLE_LISTENERS
 
     _CURRENT_SESSION = session
     _VIEWER = session.viewer
     _TABLES = session.tables
-    _QC_RECORDS = session.qc_records
     _SAMPLES = session.samples
     _CHANNELS = session.channels
     _TABLE_LISTENERS = session.table_listeners

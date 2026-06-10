@@ -188,7 +188,7 @@ tests after each.
   continuation `_RUN_COUNTER[0] = max(...)` in `_restore_session_state_impl`
   (state.py:949).** Delete `_RUNS`, `_RUN_COUNTER`. (guarded by the C0
   run-counter-continuation test)
-- [ ] **C4. qc records** → `current_session().qc_records`. Touches `put_qc_record`,
+- [x] **C4. qc records** → `current_session().qc_records`. Touches `put_qc_record`,
   `get_qc_record`, `list_qc_records`, `reset_qc_records`. Delete `_QC_RECORDS`.
   (tests: `test_tools_qc.py`, `test_qc_dock.py`)
 - [ ] **C5. samples** → `current_session().samples`. Touches `put_sample`,
