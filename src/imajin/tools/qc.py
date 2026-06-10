@@ -6,7 +6,7 @@ import numpy as np
 import pandas as pd
 
 from imajin.analysis.arrays import materialize_array
-from imajin.agent import state
+from imajin import session as state
 from imajin.agent.qt_dispatch import call_on_main
 from imajin.tools.napari_ops import add_image_from_worker, snapshot_layer
 from imajin.tools.registry import tool

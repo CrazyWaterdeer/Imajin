@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from imajin.agent.state import put_recipe
+from imajin.session import put_recipe
 from imajin.result_bundles import read_bundle_metadata_normalized
 from imajin.tools.registry import tool
 

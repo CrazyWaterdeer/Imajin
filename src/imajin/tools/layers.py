@@ -2,14 +2,14 @@ from __future__ import annotations
 
 
 def viewer_layer_names() -> list[str]:
-    from imajin.agent.state import get_viewer
+    from imajin.session import get_viewer
 
     viewer = get_viewer()
     return [str(layer.name) for layer in viewer.layers]
 
 
 def remove_layers_by_name(layer_names: list[str]) -> list[str]:
-    from imajin.agent.state import get_viewer
+    from imajin.session import get_viewer
 
     viewer = get_viewer()
     removed: list[str] = []

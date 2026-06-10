@@ -409,7 +409,7 @@ def generate_report(
     format: str = "html",
 ) -> dict[str, Any]:
     from imajin.agent import provenance
-    from imajin.agent.state import (
+    from imajin.session import (
         list_channel_annotations,
         list_qc_records,
         list_samples,
@@ -564,7 +564,7 @@ def _statistics_tables() -> tuple[
     list[tuple[str, object, dict[str, object]]],
     list[tuple[str, object, dict[str, object]]],
 ]:
-    from imajin.agent.state import get_table_entry, list_tables
+    from imajin.session import get_table_entry, list_tables
 
     summary_tables: list[tuple[str, object, dict[str, object]]] = []
     comparison_tables: list[tuple[str, object, dict[str, object]]] = []
@@ -664,7 +664,7 @@ def generate_experiment_report(
     format: str = "md",
 ) -> dict[str, Any]:
     from imajin.agent import provenance
-    from imajin.agent.state import (
+    from imajin.session import (
         list_files,
         list_qc_records,
         list_recipes,

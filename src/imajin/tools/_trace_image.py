@@ -3,7 +3,7 @@ from __future__ import annotations
 import numpy as np
 
 from imajin.agent.qt_dispatch import call_on_main
-from imajin.agent.state import get_layer
+from imajin.session import get_layer
 
 
 def _component_labels(mask: np.ndarray) -> tuple[np.ndarray, int]:

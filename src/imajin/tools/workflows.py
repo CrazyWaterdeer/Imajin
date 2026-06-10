@@ -12,7 +12,7 @@ from imajin.analysis.workflow import (
 )
 from imajin.agent.execution import raise_if_cancelled, report_progress
 from imajin.agent.qt_dispatch import call_on_main
-from imajin.agent.state import (
+from imajin.session import (
     AmbiguousChannelError,
     resolve_target_channel,
 )
@@ -230,7 +230,7 @@ def analyze_target_cells(
             )
 
         import pandas as _pd
-        from imajin.agent.state import get_layer as _get_layer
+        from imajin.session import get_layer as _get_layer
         domain_layer = pre_computed_domain_layer
         domain_layer_md = dict(getattr(_get_layer(domain_layer), "metadata", {}) or {})
         domain_result = {
@@ -251,7 +251,7 @@ def analyze_target_cells(
         domain_table_name = domain_measure["table_name"]
         cells_table_name = measure_result["table_name"]
 
-        from imajin.agent.state import get_table, put_table
+        from imajin.session import get_table, put_table
 
         domain_df = get_table(domain_table_name).copy()
         cells_df = get_table(cells_table_name).copy()

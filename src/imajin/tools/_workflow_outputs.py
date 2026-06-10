@@ -27,7 +27,7 @@ def _bundle_qc_png_path(
 
 
 def _single_bundle_run_context_extras(anchor: Path | None) -> dict[str, Any]:
-    from imajin.agent.state import list_channel_annotations
+    from imajin.session import list_channel_annotations
 
     channel_roles: dict[str, str] = {}
     for entry in list_channel_annotations():

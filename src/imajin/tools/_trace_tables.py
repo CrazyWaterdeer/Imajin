@@ -6,7 +6,7 @@ import numpy as np
 import pandas as pd
 
 from imajin.agent.qt_dispatch import call_on_main
-from imajin.agent.state import put_table
+from imajin.session import put_table
 
 
 _BRANCH_TYPES = {

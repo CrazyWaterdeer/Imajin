@@ -5,7 +5,7 @@ from typing import Any
 
 from imajin.agent.execution import raise_if_cancelled, report_progress
 from imajin.agent.qt_dispatch import call_on_main
-from imajin.agent.state import (
+from imajin.session import (
     attach_sample_columns_to_table,
     bulk_state_update,
     get_file,
@@ -56,7 +56,7 @@ def _statistics_partitions(df: Any) -> list[tuple[str, Any]]:
 def _combined_primary_table(primary_tables: list[str]) -> Any | None:
     import pandas as pd
 
-    from imajin.agent.state import get_table
+    from imajin.session import get_table
 
     frames = []
     for name in primary_tables:
@@ -160,7 +160,7 @@ def loaded_layer_metadata_text(layer: Any) -> str:
             if key in md and md[key] is not None:
                 parts.append(str(md[key]))
     try:
-        from imajin.agent.state import layer_channel_metadata
+        from imajin.session import layer_channel_metadata
 
         channel_info = layer_channel_metadata(layer)
     except Exception:
@@ -194,7 +194,7 @@ def resolve_target_within_loaded_layers(
     if target in current:
         return target
 
-    from imajin.agent.state import canonical_channel_color, get_viewer
+    from imajin.session import canonical_channel_color, get_viewer
 
     query = normalize_match_text(target)
     target_color = canonical_channel_color(target)
@@ -841,7 +841,7 @@ class BatchRecipeRunner:
         if not primary_tables:
             return
 
-        from imajin.agent.state import put_table
+        from imajin.session import put_table
         from imajin.tools import stats as _stats
 
         combined = _combined_primary_table(primary_tables)
@@ -929,7 +929,7 @@ class BatchRecipeRunner:
 
     def _run_context_extras(self) -> dict[str, Any]:
         from pathlib import Path
-        from imajin.agent.state import list_channel_annotations
+        from imajin.session import list_channel_annotations
 
         folder_set: set[str] = set()
         for name in self.names:

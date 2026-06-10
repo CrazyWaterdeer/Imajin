@@ -6,7 +6,7 @@ from typing import Any, Literal
 import numpy as np
 import pandas as pd
 
-from imajin.agent.state import get_table, put_table
+from imajin.session import get_table, put_table
 from imajin.paths import normalize_user_path
 from imajin.result_bundles import bundle_output_path, register_output
 from imajin.results import slugify_result_name

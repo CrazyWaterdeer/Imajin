@@ -238,7 +238,7 @@ tests after each.
   re-export shim: `from imajin.session import *  # noqa: F401,F403` (default star
   re-exports every public name; external code imports only public names, verified).
   Whole suite stays green with zero call-site edits.
-- [ ] **C12. migrate `tools/` imports** `imajin.agent.state` → `imajin.session`
+- [x] **C12. migrate `tools/` imports** `imajin.agent.state` → `imajin.session`
   (21 files; keep each import lazy/top-level exactly as it is — only the path
   changes).
 - [ ] **C13. migrate `ui/` imports** (4 files).

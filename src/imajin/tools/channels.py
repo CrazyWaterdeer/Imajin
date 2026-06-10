@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from imajin.agent.state import (
+from imajin.session import (
     AmbiguousChannelError,
     canonical_channel_color,
     canonical_channel_role,
@@ -75,7 +75,7 @@ def annotate_channel(
     )
     if resolved_role == "counterstain":
         try:
-            from imajin.agent.state import get_layer
+            from imajin.session import get_layer
 
             L = get_layer(layer_name)
             if hasattr(L, "colormap"):
@@ -155,7 +155,7 @@ def resolve_target_channel_tool(query: str | None = None) -> dict[str, Any]:
 def detect_counterstain_channel(
     sample_name: str | None = None,
 ) -> dict[str, Any]:
-    from imajin.agent.state import (
+    from imajin.session import (
         get_sample,
         viewer_or_none,
     )

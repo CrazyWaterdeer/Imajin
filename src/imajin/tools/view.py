@@ -9,7 +9,7 @@ import numpy as np
 
 from imajin.analysis.arrays import materialize_array, metadata_axes_without_channel
 from imajin.agent.qt_dispatch import call_on_main
-from imajin.agent.state import get_layer, get_viewer
+from imajin.session import get_layer, get_viewer
 from imajin.paths import normalize_user_path
 from imajin.tools.napari_ops import add_image_from_worker, snapshot_layer
 from imajin.tools.registry import tool
@@ -96,7 +96,7 @@ def _apply_lut(values: np.ndarray, color: str) -> np.ndarray:
 
 
 def _infer_export_color(layer_name: str) -> str:
-    from imajin.agent import state
+    from imajin import session as state
 
     for rec in state.list_channel_annotations():
         if rec.get("layer_name") != layer_name:

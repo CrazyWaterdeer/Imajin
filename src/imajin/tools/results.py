@@ -6,7 +6,7 @@ from typing import Any
 
 from imajin import result_bundles as _bundle_io
 from imajin.agent.qt_dispatch import call_on_main
-from imajin.agent.state import get_table, get_table_entry
+from imajin.session import get_table, get_table_entry
 from imajin.paths import normalize_user_path
 from imajin.result_bundles import (
     bundle_output_path,
