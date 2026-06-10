@@ -41,7 +41,6 @@ class TableEntry:
     spec: dict[str, Any] = field(default_factory=dict)
 
 
-_TABLES: dict[str, TableEntry] = _CURRENT_SESSION.tables
 QCStatus = Literal["pass", "warning", "fail", "not_checked"]
 
 
@@ -418,13 +417,10 @@ def current_session() -> AnalysisSession:
 def set_current_session(session: AnalysisSession) -> None:
     """Replace the active session and refresh compatibility aliases."""
 
-    global _CURRENT_SESSION, _VIEWER, _TABLES
-    global _TABLE_LISTENERS
+    global _CURRENT_SESSION, _VIEWER
 
     _CURRENT_SESSION = session
     _VIEWER = session.viewer
-    _TABLES = session.tables
-    _TABLE_LISTENERS = session.table_listeners
 
 
 def reset_session(viewer: Any | None = None) -> AnalysisSession:
@@ -635,30 +631,33 @@ def resolve_layer_name(query: str) -> str:
 
 
 def get_table(name: str) -> pd.DataFrame:
-    if name not in _TABLES:
-        raise KeyError(f"Table {name!r} not found. Available: {list(_TABLES)}")
-    return _TABLES[name].df
+    tables = current_session().tables
+    if name not in tables:
+        raise KeyError(f"Table {name!r} not found. Available: {list(tables)}")
+    return tables[name].df
 
 
 def get_table_entry(name: str) -> TableEntry:
-    if name not in _TABLES:
-        raise KeyError(f"Table {name!r} not found. Available: {list(_TABLES)}")
-    return _TABLES[name]
+    tables = current_session().tables
+    if name not in tables:
+        raise KeyError(f"Table {name!r} not found. Available: {list(tables)}")
+    return tables[name]
 
 
 def iter_table_entries() -> list[TableEntry]:
-    return list(_TABLES.values())
+    return list(current_session().tables.values())
 
 
 def put_table(
     name: str, df: pd.DataFrame, spec: dict[str, Any] | None = None
 ) -> str:
+    tables = current_session().tables
     base = name
     i = 1
-    while name in _TABLES:
+    while name in tables:
         name = f"{base}_{i}"
         i += 1
-    _TABLES[name] = TableEntry(df=df, spec=dict(spec or {}))
+    tables[name] = TableEntry(df=df, spec=dict(spec or {}))
     _state_changed("table_saved", tables_changed=True)
     return name
 
@@ -667,24 +666,25 @@ def set_table(
     name: str, df: pd.DataFrame, spec: dict[str, Any] | None = None
 ) -> str:
     """Set or replace a table by exact name for restore/import paths."""
-    _TABLES[name] = TableEntry(df=df, spec=dict(spec or {}))
+    current_session().tables[name] = TableEntry(df=df, spec=dict(spec or {}))
     _state_changed("table_restored", tables_changed=True)
     return name
 
 
 def update_table(name: str, df: pd.DataFrame) -> None:
-    if name not in _TABLES:
+    tables = current_session().tables
+    if name not in tables:
         raise KeyError(f"Table {name!r} not found")
-    _TABLES[name].df = df
+    tables[name].df = df
     _state_changed("table_updated", tables_changed=True)
 
 
 def list_tables() -> list[str]:
-    return list(_TABLES)
+    return list(current_session().tables)
 
 
 def reset_tables() -> None:
-    _TABLES.clear()
+    current_session().tables.clear()
     _tables_changed()
 
 
@@ -812,7 +812,7 @@ def snapshot_session_state() -> dict[str, Any]:
         "qc_records": list_qc_records(),
         "tables": [
             {"name": name, "spec": dict(entry.spec)}
-            for name, entry in _TABLES.items()
+            for name, entry in current_session().tables.items()
         ],
     }
 
@@ -1074,16 +1074,14 @@ def resolve_target_channel(query: str | None = None) -> ChannelResolution:
     )
 
 
-_TABLE_LISTENERS: list[Any] = _CURRENT_SESSION.table_listeners
-
-
 def on_tables_changed(callback: Any) -> None:
-    if callback not in _TABLE_LISTENERS:
-        _TABLE_LISTENERS.append(callback)
+    listeners = current_session().table_listeners
+    if callback not in listeners:
+        listeners.append(callback)
 
 
 def _emit_tables_changed() -> None:
-    for cb in list(_TABLE_LISTENERS):
+    for cb in list(current_session().table_listeners):
         try:
             cb()
         except Exception:

@@ -208,7 +208,7 @@ tests after each.
   `_CHANNEL_COLOR_ALIASES` / `_CHANNEL_ROLE_ALIASES` as module constants.
   (tests: `test_tools_channels.py`, plus `resolve_target_channel` coverage from
   the C0 channel-resolution tests)
-- [ ] **C7. tables + listeners** → `current_session().tables` and
+- [x] **C7. tables + listeners** → `current_session().tables` and
   `.table_listeners`. Touches `get_table`, `get_table_entry`, `iter_table_entries`,
   `put_table`, `set_table`, `update_table`, `list_tables`, `reset_tables`,
   `on_tables_changed`, `_emit_tables_changed`, **the `_TABLES.items()` read in
