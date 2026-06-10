@@ -191,7 +191,7 @@ tests after each.
 - [x] **C4. qc records** → `current_session().qc_records`. Touches `put_qc_record`,
   `get_qc_record`, `list_qc_records`, `reset_qc_records`. Delete `_QC_RECORDS`.
   (tests: `test_tools_qc.py`, `test_qc_dock.py`)
-- [ ] **C5. samples** → `current_session().samples`. Touches `put_sample`,
+- [x] **C5. samples** → `current_session().samples`. Touches `put_sample`,
   `list_samples`, `get_sample`, `reset_samples`, and the sample half of
   `snapshot/restore_session_state`. Delete `_SAMPLES`. **Note:
   `attach_sample_columns_to_table` is named for samples but actually reads/writes

@@ -350,9 +350,6 @@ class SampleAnnotation:
 SampleEntry = SampleAnnotation
 
 
-_SAMPLES: dict[str, SampleAnnotation] = _CURRENT_SESSION.samples
-
-
 _CHANNEL_COLOR_ALIASES: dict[str, str] = {
     "green": "green",
     "gfp": "green",
@@ -425,12 +422,11 @@ def set_current_session(session: AnalysisSession) -> None:
     """Replace the active session and refresh compatibility aliases."""
 
     global _CURRENT_SESSION, _VIEWER, _TABLES
-    global _SAMPLES, _CHANNELS, _TABLE_LISTENERS
+    global _CHANNELS, _TABLE_LISTENERS
 
     _CURRENT_SESSION = session
     _VIEWER = session.viewer
     _TABLES = session.tables
-    _SAMPLES = session.samples
     _CHANNELS = session.channels
     _TABLE_LISTENERS = session.table_listeners
 
@@ -707,9 +703,10 @@ def attach_sample_columns_to_table(
 ) -> None:
     """Add identifier columns required by the Phase-3 spec onto an existing table.
     No-op if the table doesn't exist or already has these columns."""
-    if table_name not in _TABLES:
+    tables = current_session().tables
+    if table_name not in tables:
         return
-    df = _TABLES[table_name].df
+    df = tables[table_name].df
     additions = {
         "sample_id": sample_id,
         "sample_name": sample_name,
@@ -721,7 +718,7 @@ def attach_sample_columns_to_table(
     for col, value in additions.items():
         if col not in df.columns:
             df[col] = value
-    _TABLES[table_name].df = df
+    tables[table_name].df = df
     _state_changed("table_sample_columns_attached", tables_changed=True)
 
 
@@ -741,7 +738,7 @@ def put_sample(
     if group is not None:
         group = group.strip() or None
     sid = (sample_id or "").strip() or sample_name
-    _SAMPLES[sample_name] = SampleAnnotation(
+    current_session().samples[sample_name] = SampleAnnotation(
         sample_name=sample_name,
         sample_id=sid,
         group=group,
@@ -756,17 +753,18 @@ def put_sample(
 
 
 def list_samples() -> list[dict[str, Any]]:
-    return [asdict(entry) for entry in _SAMPLES.values()]
+    return [asdict(entry) for entry in current_session().samples.values()]
 
 
 def get_sample(sample_name: str) -> SampleAnnotation:
-    if sample_name not in _SAMPLES:
-        raise KeyError(f"Sample {sample_name!r} not found. Available: {list(_SAMPLES)}")
-    return _SAMPLES[sample_name]
+    samples = current_session().samples
+    if sample_name not in samples:
+        raise KeyError(f"Sample {sample_name!r} not found. Available: {list(samples)}")
+    return samples[sample_name]
 
 
 def reset_samples() -> None:
-    _SAMPLES.clear()
+    current_session().samples.clear()
 
 
 def put_channel_annotation(
