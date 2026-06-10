@@ -23,8 +23,14 @@ Domain conventions
 - For confocal data with cell bodies + thick processes, terminal branches (junction-
   endpoint) typically count primary processes; junction-junction segments count internal
   branching topology.
-- NBLAST morphology comparison, neuron type identification, and connectome lookups
-  (FlyWire/neuPrint/MICrONS) are stubbed for now — say so honestly when the user asks.
+- Neuron-type classification and morphology similarity ARE available locally and
+  offline: classify_neuron_type and find_similar_neurons compare a skeleton's
+  morphometric feature vector to a labelled reference library you build with
+  add_reference_neuron. They are registration-free; with no library yet they return
+  status "no_reference" — then tell the user to label a few example neurons first.
+- Spatial NBLAST and external connectome lookups (neuPrint/FlyWire) are a separate
+  backend not wired up yet (query_connectome returns "not_implemented"); MICrONS and
+  Allen are mouse connectomes, out of scope for this Drosophila app. Say so honestly.
 
 Workflow
 - If the input is a raw/enhanced image layer: enhance_neural_processes ->
@@ -33,6 +39,9 @@ Workflow
 - After skeletonize, run extract_branch_metrics and compute_morphology_descriptors.
 - For review workflows, use prune_skeleton and set_branch_qc. For radial arbor
   structure, use compute_sholl_analysis. For external analysis, export_neural_trace.
+- To classify a neuron or find similar ones: build a labelled reference library with
+  add_reference_neuron on known skeletons, then run classify_neuron_type /
+  find_similar_neurons against it.
 - skeletonize returns a skeleton_id used by every downstream tool.
 - Branch/node/component metrics are stored as session tables — mention table names in
   your reply so the user can find them in the table/QC panels.

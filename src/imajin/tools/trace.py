@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 import numpy as np
 import pandas as pd
 
 from imajin.analysis.arrays import materialize_array
+from imajin.analysis.morphology_features import extract_feature_vector
+from imajin.analysis.morphology_match import match_against_library
+from imajin.analysis.morphology_reference import append_reference, load_reference_library
 from imajin import session as state
 from imajin.agent.qt_dispatch import call_on_main
 from imajin.session import get_layer
@@ -734,9 +738,9 @@ def export_neural_trace(
 
 
 @tool(
-    description="Query a connectome database for nearest reference neurons by morphology. "
-    "STUB — returns 'not implemented' until a target organism / database backend is "
-    "wired up (planned: FlyWire, neuPrint, navis/NBLAST plugins).",
+    description="Query an external connectome database (neuPrint/FlyWire, Drosophila) for "
+    "reference neurons by morphology. Tier-2 backend — currently returns "
+    "'not_implemented'. For local, offline morphology search use find_similar_neurons.",
     phase="6B",
     subagent="neural_tracer",
 )
@@ -745,22 +749,65 @@ def query_connectome(
     db: str = "neuprint",
     k: int = 10,
 ) -> dict[str, Any]:
-    if db not in {"flywire", "neuprint", "microns", "allen"}:
-        raise ValueError(f"unknown db {db!r}; expected flywire|neuprint|microns|allen")
+    db = db.lower().strip()
+    if db in {"microns", "allen"}:
+        return {
+            "skeleton_id": skeleton_id,
+            "db": db,
+            "matches": [],
+            "status": "off_domain",
+            "note": f"{db!r} is a mouse connectome; this app targets Drosophila. Not supported.",
+        }
+    if db not in {"flywire", "neuprint"}:
+        raise ValueError(
+            f"unknown db {db!r}; expected neuprint|flywire (microns/allen are mouse, off-domain)"
+        )
     return {
         "skeleton_id": skeleton_id,
         "db": db,
         "k": k,
         "matches": [],
         "status": "not_implemented",
-        "note": "Connectome backend deferred. Local trace/export is available; reference matching needs a plugin/backend.",
+        "note": (
+            "External connectome lookup is a Tier-2 backend (needs navis + template "
+            "registration + a DB token). For local morphology search use find_similar_neurons."
+        ),
     }
 
 
+def _reference_library_path(reference: str) -> Path:
+    """Resolve a reference-library path. 'default' → <results_root>/morphology_reference.csv."""
+    if reference.strip() in ("", "default"):
+        from imajin.results import results_root
+
+        return results_root() / "morphology_reference.csv"
+    return normalize_user_path(reference)
+
+
+def _load_reference_or_none(reference: str):
+    """Load the reference library, or None if it is missing/empty/malformed."""
+    path = _reference_library_path(reference)
+    if not path.exists():
+        return None
+    try:
+        return load_reference_library(path)
+    except (FileNotFoundError, ValueError):
+        return None
+
+
+def _skeleton_feature_vector(skeleton_id: str) -> dict[str, Any]:
+    """Descriptor → feature vector for one registered skeleton (incl. tortuosity)."""
+    entry = _entry(skeleton_id)
+    descriptors = compute_morphology_descriptors(skeleton_id)
+    branch_df = _branch_summary(entry.skel, entry.record.spacing)
+    return extract_feature_vector(descriptors, branch_df)
+
+
 @tool(
-    description="Classify a skeleton's neuron type by comparison to a reference set. "
-    "STUB — returns 'not implemented' until a reference morphology DB or learned "
-    "classifier is added.",
+    description="Classify a skeleton's neuron type by morphometric similarity to a "
+    "labelled reference library (build one with add_reference_neuron). Local, "
+    "offline, registration-free. Returns status 'no_reference' when no library is "
+    "configured. (Spatial NBLAST / connectome lookup is a separate Tier-2 backend.)",
     phase="6B",
     subagent="neural_tracer",
 )
@@ -768,11 +815,111 @@ def classify_neuron_type(
     skeleton_id: str,
     reference: str = "default",
 ) -> dict[str, Any]:
+    # H3: resolve the reference library BEFORE touching the skeleton registry, so a
+    # missing library returns a graceful status rather than KeyError on a bad id.
+    library = _load_reference_or_none(reference)
+    if library is None:
+        return {
+            "skeleton_id": skeleton_id,
+            "reference": reference,
+            "predicted_type": None,
+            "confidence": None,
+            "status": "no_reference",
+            "note": (
+                "No morphology reference library found. Build one by labelling your "
+                "own traced neurons: add_reference_neuron(skeleton_id, label)."
+            ),
+        }
+
+    fv = _skeleton_feature_vector(skeleton_id)
+    res = match_against_library(fv, library, k=5)
+    runner_up = res["ranked"][1]["label"] if len(res["ranked"]) > 1 else None
+
+    # H2: distinct QC key — do NOT reuse the bare skeleton_id, which holds the
+    # neural_morphology record written by compute_morphology_descriptors.
+    state.put_qc_record(
+        f"{skeleton_id}::classification",
+        status="pass",
+        metrics={
+            "kind": "neural_classification",
+            "predicted_type": res["predicted"],
+            "confidence": res["confidence"],
+            "invariant_only": res["invariant_only"],
+        },
+    )
     return {
         "skeleton_id": skeleton_id,
         "reference": reference,
-        "predicted_type": None,
-        "confidence": None,
-        "status": "not_implemented",
-        "note": "Classification deferred. Use local morphology descriptors/export until a reference backend exists.",
+        "predicted_type": res["predicted"],
+        "confidence": res["confidence"],
+        "runner_up": runner_up,
+        "ranked": res["ranked"],
+        "invariant_only": res["invariant_only"],
+        "status": res["status"],
+        "note": "Morphometric (feature-vector) match — registration-free, local.",
+    }
+
+
+@tool(
+    description="Add the current skeleton to a labelled morphology reference library "
+    "(CSV) so future neurons can be classified against it. Builds the library from "
+    "your own traced + labelled neurons; fully local/offline.",
+    phase="6B",
+    subagent="neural_tracer",
+)
+def add_reference_neuron(
+    skeleton_id: str,
+    label: str,
+    library_path: str = "default",
+) -> dict[str, Any]:
+    # adding a reference requires a real skeleton, so the lookup (KeyError on a bad
+    # id) is the correct behaviour here
+    fv = _skeleton_feature_vector(skeleton_id)
+    path = _reference_library_path(library_path)
+    library = append_reference(path, fv, label=label.strip(), name=skeleton_id)
+    return {
+        "skeleton_id": skeleton_id,
+        "label": label.strip(),
+        "library_path": str(path),
+        "n_references": len(library),
+        "units_physical": fv["units_physical"],
+        "status": "ok",
+    }
+
+
+@tool(
+    description="Find the k most morphometrically similar neurons in a labelled "
+    "reference library (local, offline, registration-free). Returns status "
+    "'no_reference' when no library is configured. (External connectome lookup is "
+    "query_connectome, a separate Tier-2 backend.)",
+    phase="6B",
+    subagent="neural_tracer",
+)
+def find_similar_neurons(
+    skeleton_id: str,
+    reference: str = "default",
+    k: int = 10,
+) -> dict[str, Any]:
+    # H3 ordering: reference first, skeleton lookup only when a library exists
+    library = _load_reference_or_none(reference)
+    if library is None:
+        return {
+            "skeleton_id": skeleton_id,
+            "reference": reference,
+            "matches": [],
+            "status": "no_reference",
+            "note": (
+                "No morphology reference library found. Build one with "
+                "add_reference_neuron(skeleton_id, label)."
+            ),
+        }
+
+    fv = _skeleton_feature_vector(skeleton_id)
+    res = match_against_library(fv, library, k=k)
+    return {
+        "skeleton_id": skeleton_id,
+        "reference": reference,
+        "matches": res["ranked"],
+        "invariant_only": res["invariant_only"],
+        "status": res["status"],
     }
