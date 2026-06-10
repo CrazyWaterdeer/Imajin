@@ -280,7 +280,7 @@ to module-top imports, one source module per commit, and after each run
 `python -c "import imajin.tools.<mod>"` plus the suite to confirm no cycle reappeared.
 
 - [x] **C18. experiment.py** (9 lazy imports → top-level).
-- [ ] **C19. batch_runner.py** (5).
+- [x] **C19. batch_runner.py** (5).
 - [ ] **C20. segment.py / report.py / napari_ops.py** (3 each) — one commit each
   if any still trips a cycle; otherwise batch the clearly-safe ones.
 - [ ] **C21. remaining** (workflows, stats, layers, channels, view,
