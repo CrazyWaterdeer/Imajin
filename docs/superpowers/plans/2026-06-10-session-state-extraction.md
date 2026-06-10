@@ -264,7 +264,7 @@ tests after each.
   `test_anchor.py` / `test_tools_results.py` were already handled in C15 — only
   plain `import imajin.agent.state` / `from imajin.agent.state import …` lines
   remain here.
-- [ ] **C17. delete the shim.** Confirm `grep -rn "agent.state" src tests` is empty
+- [x] **C17. delete the shim.** Confirm `grep -rn "agent.state" src tests` is empty
   (the `anchor.py` docstring reference was rewritten in C15), remove
   `src/imajin/agent/state.py`. Green.
 
