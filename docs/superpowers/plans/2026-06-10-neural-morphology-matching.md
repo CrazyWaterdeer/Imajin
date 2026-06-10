@@ -148,7 +148,8 @@ signatures; additions are `find_similar_neurons` and `add_reference_neuron`.
   error on empty/missing library, requires a `label` column, and refuses to mix
   physical and non-physical rows without falling back to the invariant subset.
 
-- [ ] **N3. Matcher core.** `tools/_trace_classify.py`:
+- [x] **N3. Matcher core.** (placed in `analysis/morphology_match.py` to keep the
+  pure morphometric layer together with N1/N2, not `tools/_trace_classify.py`.) `tools/_trace_classify.py`:
   `match_against_library(query_fv, library, *, k) -> {ranked: [{name,label,distance}],
   predicted, confidence, status}`. `StandardScaler` fit on the library + k-NN in
   feature space; when query and library disagree on `units_physical`, restrict to the

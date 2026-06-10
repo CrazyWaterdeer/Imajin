@@ -14,6 +14,7 @@ import numpy as np
 import pytest
 
 from imajin.analysis.morphology_features import extract_feature_vector
+from imajin.analysis.morphology_match import match_against_library
 from imajin.analysis.morphology_reference import (
     append_reference,
     load_reference_library,
@@ -50,6 +51,16 @@ def _bushy_mask() -> np.ndarray:
         img[y, 32:40] = 1
     for y in (23, 33, 43):
         img[y, 25:32] = 1
+    return img
+
+
+def _branched_variant_mask() -> np.ndarray:
+    """A different Y-shape (held-out query): same topology, different placement."""
+    img = np.zeros((64, 64), dtype=np.uint8)
+    img[14:50, 29:31] = 1
+    for i in range(16):
+        img[14 + i, 29 - i] = 1
+        img[14 + i, 30 + i] = 1
     return img
 
 
@@ -231,3 +242,61 @@ def test_append_records_units_and_detects_mixed(tmp_path) -> None:
         lib_path, extract_feature_vector(_descriptor_dict("pixels")), label="b", name="n2"
     )
     assert load_reference_library(lib_path).all_physical is False
+
+
+# --------------------------------------------------------------------------- #
+# N3: matcher core
+# --------------------------------------------------------------------------- #
+def test_match_classifies_held_out_branched(
+    labeled_morphology_samples, viewer, tmp_path
+) -> None:
+    lib_path = tmp_path / "refs.csv"
+    for sample in labeled_morphology_samples:
+        append_reference(
+            lib_path,
+            extract_feature_vector(sample["descriptors"]),
+            label=sample["label"],
+            name=sample["name"],
+        )
+    library = load_reference_library(lib_path)
+
+    # a held-out Y-shape (not in the library) should classify as branched
+    viewer.add_labels(_branched_variant_mask(), name="q_branch")
+    qid = trace.skeletonize("q_branch")["skeleton_id"]
+    query_fv = extract_feature_vector(trace.compute_morphology_descriptors(qid))
+
+    res = match_against_library(query_fv, library, k=3)
+    assert res["status"] == "ok"
+    assert res["predicted"] == "branched"
+    assert res["ranked"][0]["label"] == "branched"
+
+
+def test_match_single_row_library_no_div_by_zero(tmp_path) -> None:
+    lib_path = tmp_path / "one.csv"
+    append_reference(
+        lib_path, extract_feature_vector(_descriptor_dict("pixels")), label="solo", name="n1"
+    )
+    library = load_reference_library(lib_path)
+
+    res = match_against_library(extract_feature_vector(_descriptor_dict("pixels")), library, k=5)
+    assert res["status"] == "ok"
+    assert res["predicted"] == "solo"
+    assert 0.0 <= res["confidence"] <= 1.0
+
+
+def test_match_falls_back_to_invariant_on_mixed_units(tmp_path) -> None:
+    lib_path = tmp_path / "phys.csv"
+    append_reference(
+        lib_path, extract_feature_vector(_descriptor_dict("um")), label="a", name="n1"
+    )
+    append_reference(
+        lib_path, extract_feature_vector(_descriptor_dict("um", scale=3.0)), label="b", name="n2"
+    )
+    library = load_reference_library(lib_path)
+    assert library.all_physical is True
+
+    res = match_against_library(extract_feature_vector(_descriptor_dict("pixels")), library, k=2)
+    assert res["status"] == "ok"
+    assert res["invariant_only"] is True
+    # absolute (micron) features end with "_um"; none should be used here
+    assert not any(c.endswith("_um") for c in res["features_used"])
