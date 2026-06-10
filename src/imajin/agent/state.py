@@ -113,9 +113,6 @@ class FileRecord:
     notes: str | None = None
 
 
-_FILES: dict[str, FileRecord] = _CURRENT_SESSION.files
-
-
 def put_file(
     path: str,
     original_name: str,
@@ -124,13 +121,14 @@ def put_file(
     notes: str | None = None,
     load_status: str = "unloaded",
 ) -> str:
+    files = current_session().files
     base = _slugify(original_name)
     file_id = base
     n = 2
-    while file_id in _FILES:
+    while file_id in files:
         file_id = f"{base}_{n}"
         n += 1
-    _FILES[file_id] = FileRecord(
+    files[file_id] = FileRecord(
         file_id=file_id,
         path=path,
         original_name=original_name,
@@ -144,19 +142,20 @@ def put_file(
 
 
 def get_file(file_id: str) -> FileRecord:
-    if file_id not in _FILES:
+    files = current_session().files
+    if file_id not in files:
         raise KeyError(
-            f"File id {file_id!r} not found. Available: {list(_FILES)}"
+            f"File id {file_id!r} not found. Available: {list(files)}"
         )
-    return _FILES[file_id]
+    return files[file_id]
 
 
 def iter_file_records() -> list[FileRecord]:
-    return list(_FILES.values())
+    return list(current_session().files.values())
 
 
 def list_files() -> list[dict[str, Any]]:
-    return [asdict(rec) for rec in _FILES.values()]
+    return [asdict(rec) for rec in current_session().files.values()]
 
 
 def update_file_status(file_id: str, status: str, notes: str | None = None) -> None:
@@ -168,7 +167,7 @@ def update_file_status(file_id: str, status: str, notes: str | None = None) -> N
 
 
 def reset_files() -> None:
-    _FILES.clear()
+    current_session().files.clear()
 
 
 @dataclass
@@ -429,14 +428,13 @@ def current_session() -> AnalysisSession:
 def set_current_session(session: AnalysisSession) -> None:
     """Replace the active session and refresh compatibility aliases."""
 
-    global _CURRENT_SESSION, _VIEWER, _TABLES, _QC_RECORDS, _FILES, _RECIPES
+    global _CURRENT_SESSION, _VIEWER, _TABLES, _QC_RECORDS, _RECIPES
     global _RUNS, _RUN_COUNTER, _SAMPLES, _CHANNELS, _TABLE_LISTENERS
 
     _CURRENT_SESSION = session
     _VIEWER = session.viewer
     _TABLES = session.tables
     _QC_RECORDS = session.qc_records
-    _FILES = session.files
     _RECIPES = session.recipes
     _RUNS = session.runs
     _RUN_COUNTER = session.run_counter
@@ -876,7 +874,7 @@ def _restore_session_state_impl(
 
     for rec in files or []:
         file_id = str(rec.get("file_id") or rec.get("original_name") or "file")
-        _FILES[file_id] = FileRecord(
+        current_session().files[file_id] = FileRecord(
             file_id=file_id,
             path=str(rec.get("path") or rec.get("original_path") or ""),
             original_name=str(rec.get("original_name") or file_id),

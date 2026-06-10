@@ -131,7 +131,7 @@ is the smallest, safest migration depth and was the explicit owner choice.
 
 ### Phase 0 — Characterization net
 
-- [ ] **C0. Add `tests/test_session.py` (passes on unchanged code).**
+- [x] **C0. Add `tests/test_session.py` (passes on unchanged code).**
   Pin observable behavior only — never assert that a particular module global
   exists. Cover, at minimum:
   - file family: `put_file` returns a slug id; a second file with the same
@@ -175,7 +175,7 @@ per-commit "Touches" lists below were verified against the source, but the `rg`
 check is the authority). Run `test_session.py` plus the family's existing tool
 tests after each.
 
-- [ ] **C1. files** → `current_session().files`. Touches `put_file`, `get_file`,
+- [x] **C1. files** → `current_session().files`. Touches `put_file`, `get_file`,
   `iter_file_records`, `list_files`, `update_file_status`, `reset_files`, **and the
   direct `_FILES[...]` write in `_restore_session_state_impl` (state.py:879).**
   Delete `_FILES`. (tests: `test_session.py`, `test_phase2_workflow.py`, plus the
