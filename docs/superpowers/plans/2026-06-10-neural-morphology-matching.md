@@ -158,7 +158,7 @@ signatures; additions are `find_similar_neurons` and `add_reference_neuron`.
   Y-branch query ranks a branched label above a linear one; single-row library still
   classifies; empty library ⇒ `status="no_reference"`.
 
-- [ ] **N4. Make `classify_neuron_type` real.** Rewrite the stub. **Ordering (fixes
+- [x] **N4. Make `classify_neuron_type` real.** Rewrite the stub. **Ordering (fixes
   H3):** resolve the reference library *first*; if missing/empty return
   `{status:"no_reference", ...}` **without** calling `_entry(skeleton_id)` — so the
   existing-style call with a bogus id still returns a graceful status, not a KeyError.

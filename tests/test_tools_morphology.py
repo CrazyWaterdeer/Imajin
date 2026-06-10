@@ -13,6 +13,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
+from imajin import session as state
 from imajin.analysis.morphology_features import extract_feature_vector
 from imajin.analysis.morphology_match import match_against_library
 from imajin.analysis.morphology_reference import (
@@ -110,9 +111,11 @@ def labeled_morphology_samples(viewer) -> list[dict]:
 # --------------------------------------------------------------------------- #
 # Current stub contract (pinned so N4/N6 changes are observable)
 # --------------------------------------------------------------------------- #
-def test_classify_neuron_type_is_currently_stub(viewer) -> None:
-    res = trace.classify_neuron_type("any_id")
-    assert res["status"] == "not_implemented"
+def test_classify_neuron_type_no_reference_is_graceful(viewer, tmp_path) -> None:
+    # missing library ⇒ no_reference, and (H3) no KeyError on a bogus skeleton id
+    res = trace.classify_neuron_type("any_id", reference=str(tmp_path / "none.csv"))
+    assert res["status"] == "no_reference"
+    assert res["predicted_type"] is None
 
 
 def test_query_connectome_is_currently_stub(viewer) -> None:
@@ -300,3 +303,30 @@ def test_match_falls_back_to_invariant_on_mixed_units(tmp_path) -> None:
     assert res["invariant_only"] is True
     # absolute (micron) features end with "_um"; none should be used here
     assert not any(c.endswith("_um") for c in res["features_used"])
+
+
+# --------------------------------------------------------------------------- #
+# N4: classify_neuron_type tool (real path + H2 distinct QC key)
+# --------------------------------------------------------------------------- #
+def test_classify_neuron_type_real_and_distinct_qc(
+    labeled_morphology_samples, viewer, tmp_path
+) -> None:
+    lib_path = tmp_path / "refs.csv"
+    for sample in labeled_morphology_samples:
+        append_reference(
+            lib_path,
+            extract_feature_vector(sample["descriptors"]),
+            label=sample["label"],
+            name=sample["name"],
+        )
+
+    viewer.add_labels(_branched_variant_mask(), name="q_classify")
+    qid = trace.skeletonize("q_classify")["skeleton_id"]
+    res = trace.classify_neuron_type(qid, reference=str(lib_path))
+
+    assert res["status"] == "ok"
+    assert res["predicted_type"] == "branched"
+
+    # H2: classification QC under a distinct key; morphology QC under the bare id
+    assert state.get_qc_record(f"{qid}::classification").metrics["kind"] == "neural_classification"
+    assert state.get_qc_record(qid).metrics["kind"] == "neural_morphology"

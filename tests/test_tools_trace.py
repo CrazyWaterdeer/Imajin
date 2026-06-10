@@ -82,9 +82,11 @@ def test_query_connectome_is_stub(viewer) -> None:
     assert res["matches"] == []
 
 
-def test_classify_neuron_type_is_stub(viewer) -> None:
-    res = trace.classify_neuron_type("any_id")
-    assert res["status"] == "not_implemented"
+def test_classify_neuron_type_no_reference(viewer, tmp_path) -> None:
+    # H3: a missing library returns a graceful status without a registry lookup,
+    # so a non-existent skeleton id does not raise.
+    res = trace.classify_neuron_type("any_id", reference=str(tmp_path / "none.csv"))
+    assert res["status"] == "no_reference"
 
 
 def test_skeletonize_rejects_4d(viewer) -> None:
