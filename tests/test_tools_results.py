@@ -7,7 +7,7 @@ import numpy as np
 import pandas as pd
 import tifffile
 
-from imajin.agent import state
+from imajin import session as state
 from imajin.tools import results
 
 
@@ -148,7 +148,7 @@ def test_results_root_uses_session_anchor_when_no_project(tmp_path, monkeypatch)
     fake_file.write_bytes(b"")
 
     monkeypatch.setattr(
-        "imajin.agent.state.list_files",
+        "imajin.session.list_files",
         lambda: [{"path": str(fake_file)}],
     )
     assert _results.results_root() == folder.absolute()
@@ -157,7 +157,7 @@ def test_results_root_uses_session_anchor_when_no_project(tmp_path, monkeypatch)
 def test_results_root_falls_back_to_user_root_when_no_anchor(tmp_path, monkeypatch):
     from imajin import results as _results
 
-    monkeypatch.setattr("imajin.agent.state.list_files", lambda: [])
+    monkeypatch.setattr("imajin.session.list_files", lambda: [])
     monkeypatch.setattr(_results, "user_results_root", lambda: tmp_path / "user_root")
     assert _results.results_root() == tmp_path / "user_root"
 
@@ -177,7 +177,7 @@ def test_save_result_bundle_writes_table_spec_into_metadata(tmp_path, monkeypatc
     monkeypatch.setenv("IMAJIN_RESULTS_DIR", str(tmp_path))
     import pandas as pd
     from pathlib import Path
-    from imajin.agent import state
+    from imajin import session as state
     from imajin.result_bundles import reset_process_bundle
     from imajin.results import read_bundle_metadata
     from imajin.tools.results import save_result_bundle
@@ -206,7 +206,7 @@ def test_save_result_bundle_outputs_index_is_list_of_records(tmp_path, monkeypat
     monkeypatch.setenv("IMAJIN_RESULTS_DIR", str(tmp_path))
     import pandas as pd
     from pathlib import Path
-    from imajin.agent import state
+    from imajin import session as state
     from imajin.result_bundles import reset_process_bundle
     from imajin.results import read_bundle_metadata
     from imajin.tools.results import save_result_bundle

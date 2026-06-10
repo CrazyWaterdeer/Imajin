@@ -3,7 +3,7 @@ from __future__ import annotations
 import pandas as pd
 import pytest
 
-from imajin.agent import state
+from imajin import session as state
 from imajin.tools import stats
 
 
@@ -106,7 +106,7 @@ def test_ensure_default_statistics_adds_missing_comparison_after_summary() -> No
 def test_describe_table_writes_long_format(tmp_path, monkeypatch):
     monkeypatch.setenv("IMAJIN_RESULTS_DIR", str(tmp_path))
     import pandas as pd
-    from imajin.agent import state
+    from imajin import session as state
     from imajin.result_bundles import reset_process_bundle, start_analysis
     from imajin.tools import stats
 
@@ -141,7 +141,7 @@ def test_describe_table_writes_long_format(tmp_path, monkeypatch):
 def test_compare_groups_writes_long_format(tmp_path, monkeypatch):
     monkeypatch.setenv("IMAJIN_RESULTS_DIR", str(tmp_path))
     import pandas as pd
-    from imajin.agent import state
+    from imajin import session as state
     from imajin.result_bundles import reset_process_bundle, start_analysis
     from imajin.tools import stats
 

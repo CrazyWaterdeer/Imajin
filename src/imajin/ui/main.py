@@ -238,7 +238,7 @@ def launch(settings: Any | None = None) -> int:
 
     import napari
 
-    from imajin.agent.state import set_viewer
+    from imajin.session import set_viewer
     from imajin.config import Settings, ensure_dirs
     from imajin.ui.chat_dock import ChatDock
     from imajin.ui.manual_dock import ManualDock

@@ -5,6 +5,16 @@ from html import escape
 from typing import Any
 
 from imajin.paths import normalize_user_path
+from imajin.session import (
+    get_table_entry,
+    list_channel_annotations,
+    list_files,
+    list_qc_records,
+    list_recipes,
+    list_runs,
+    list_samples,
+    list_tables,
+)
 from imajin.tools.registry import tool
 
 
@@ -409,11 +419,6 @@ def generate_report(
     format: str = "html",
 ) -> dict[str, Any]:
     from imajin.agent import provenance
-    from imajin.agent.state import (
-        list_channel_annotations,
-        list_qc_records,
-        list_samples,
-    )
     from imajin.tools.trace import list_trace_records
 
     if format not in ("html", "md"):
@@ -564,7 +569,6 @@ def _statistics_tables() -> tuple[
     list[tuple[str, object, dict[str, object]]],
     list[tuple[str, object, dict[str, object]]],
 ]:
-    from imajin.agent.state import get_table_entry, list_tables
 
     summary_tables: list[tuple[str, object, dict[str, object]]] = []
     comparison_tables: list[tuple[str, object, dict[str, object]]] = []
@@ -664,13 +668,6 @@ def generate_experiment_report(
     format: str = "md",
 ) -> dict[str, Any]:
     from imajin.agent import provenance
-    from imajin.agent.state import (
-        list_files,
-        list_qc_records,
-        list_recipes,
-        list_runs,
-        list_samples,
-    )
     from imajin.tools.trace import list_trace_records
 
     if format not in ("md", "html"):

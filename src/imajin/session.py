@@ -12,8 +12,10 @@ import pandas as pd
 class AnalysisSession:
     """Mutable analysis state for one napari/Imajin session.
 
-    The module-level variables below remain as compatibility aliases while the
-    codebase is migrated away from scattered globals.
+    This is the single source of truth for per-session state. Every free
+    function in this module delegates to ``current_session()``; there are no
+    module-level compatibility aliases. The only module-level mutable name is
+    ``_CURRENT_SESSION`` — the channel lookup tables are immutable constants.
     """
 
     viewer: Any | None = None
@@ -26,13 +28,12 @@ class AnalysisSession:
     samples: dict[str, "SampleAnnotation"] = field(default_factory=dict)
     channels: dict[str, "ChannelEntry"] = field(default_factory=dict)
     table_listeners: list[Any] = field(default_factory=list)
+    state_change_depth: int = 0
+    pending_state_reasons: list[str] = field(default_factory=list)
+    pending_tables_changed: bool = False
 
 
 _CURRENT_SESSION = AnalysisSession()
-_VIEWER: Any | None = _CURRENT_SESSION.viewer
-_STATE_CHANGE_DEPTH = 0
-_PENDING_STATE_REASONS: list[str] = []
-_PENDING_TABLES_CHANGED = False
 
 
 @dataclass
@@ -41,7 +42,6 @@ class TableEntry:
     spec: dict[str, Any] = field(default_factory=dict)
 
 
-_TABLES: dict[str, TableEntry] = _CURRENT_SESSION.tables
 QCStatus = Literal["pass", "warning", "fail", "not_checked"]
 
 
@@ -55,25 +55,20 @@ class QCRecord:
     notes: str | None = None
 
 
-_QC_RECORDS: dict[str, QCRecord] = _CURRENT_SESSION.qc_records
-
-
 def _state_changed(reason: str, *, tables_changed: bool = False) -> None:
-    global _PENDING_TABLES_CHANGED
-
-    if _STATE_CHANGE_DEPTH > 0:
-        _PENDING_STATE_REASONS.append(reason)
-        _PENDING_TABLES_CHANGED = _PENDING_TABLES_CHANGED or tables_changed
+    session = current_session()
+    if session.state_change_depth > 0:
+        session.pending_state_reasons.append(reason)
+        session.pending_tables_changed = session.pending_tables_changed or tables_changed
         return
     if tables_changed:
         _emit_tables_changed()
 
 
 def _tables_changed() -> None:
-    global _PENDING_TABLES_CHANGED
-
-    if _STATE_CHANGE_DEPTH > 0:
-        _PENDING_TABLES_CHANGED = True
+    session = current_session()
+    if session.state_change_depth > 0:
+        session.pending_tables_changed = True
         return
     _emit_tables_changed()
 
@@ -81,17 +76,16 @@ def _tables_changed() -> None:
 @contextmanager
 def bulk_state_update(reason: str | None = None):
     """Coalesce state-change notifications produced inside a bulk mutation."""
-    global _STATE_CHANGE_DEPTH, _PENDING_STATE_REASONS, _PENDING_TABLES_CHANGED
-
-    _STATE_CHANGE_DEPTH += 1
+    session = current_session()
+    session.state_change_depth += 1
     try:
         yield
     finally:
-        _STATE_CHANGE_DEPTH = max(0, _STATE_CHANGE_DEPTH - 1)
-        if _STATE_CHANGE_DEPTH == 0:
-            tables_changed = _PENDING_TABLES_CHANGED
-            _PENDING_STATE_REASONS = []
-            _PENDING_TABLES_CHANGED = False
+        session.state_change_depth = max(0, session.state_change_depth - 1)
+        if session.state_change_depth == 0:
+            tables_changed = session.pending_tables_changed
+            session.pending_state_reasons = []
+            session.pending_tables_changed = False
             if tables_changed:
                 _emit_tables_changed()
 
@@ -113,9 +107,6 @@ class FileRecord:
     notes: str | None = None
 
 
-_FILES: dict[str, FileRecord] = _CURRENT_SESSION.files
-
-
 def put_file(
     path: str,
     original_name: str,
@@ -124,13 +115,14 @@ def put_file(
     notes: str | None = None,
     load_status: str = "unloaded",
 ) -> str:
+    files = current_session().files
     base = _slugify(original_name)
     file_id = base
     n = 2
-    while file_id in _FILES:
+    while file_id in files:
         file_id = f"{base}_{n}"
         n += 1
-    _FILES[file_id] = FileRecord(
+    files[file_id] = FileRecord(
         file_id=file_id,
         path=path,
         original_name=original_name,
@@ -144,19 +136,20 @@ def put_file(
 
 
 def get_file(file_id: str) -> FileRecord:
-    if file_id not in _FILES:
+    files = current_session().files
+    if file_id not in files:
         raise KeyError(
-            f"File id {file_id!r} not found. Available: {list(_FILES)}"
+            f"File id {file_id!r} not found. Available: {list(files)}"
         )
-    return _FILES[file_id]
+    return files[file_id]
 
 
 def iter_file_records() -> list[FileRecord]:
-    return list(_FILES.values())
+    return list(current_session().files.values())
 
 
 def list_files() -> list[dict[str, Any]]:
-    return [asdict(rec) for rec in _FILES.values()]
+    return [asdict(rec) for rec in current_session().files.values()]
 
 
 def update_file_status(file_id: str, status: str, notes: str | None = None) -> None:
@@ -168,7 +161,7 @@ def update_file_status(file_id: str, status: str, notes: str | None = None) -> N
 
 
 def reset_files() -> None:
-    _FILES.clear()
+    current_session().files.clear()
 
 
 @dataclass
@@ -185,9 +178,6 @@ class AnalysisRecipe:
     cell_diameter_um: float | None = None
     domain: dict[str, Any] | None = None
     review_mode: str = "auto"  # "auto" | "interactive"
-
-
-_RECIPES: dict[str, AnalysisRecipe] = _CURRENT_SESSION.recipes
 
 
 def put_recipe(
@@ -210,7 +200,8 @@ def put_recipe(
         raise ValueError(
             f"review_mode must be 'auto' or 'interactive' (got {review_mode!r})"
         )
-    _RECIPES[name] = AnalysisRecipe(
+    recipes = current_session().recipes
+    recipes[name] = AnalysisRecipe(
         recipe_id=name,
         name=name,
         target_channel=target_channel,
@@ -229,17 +220,18 @@ def put_recipe(
 
 
 def get_recipe(name: str) -> AnalysisRecipe:
-    if name not in _RECIPES:
-        raise KeyError(f"Recipe {name!r} not found. Available: {list(_RECIPES)}")
-    return _RECIPES[name]
+    recipes = current_session().recipes
+    if name not in recipes:
+        raise KeyError(f"Recipe {name!r} not found. Available: {list(recipes)}")
+    return recipes[name]
 
 
 def list_recipes() -> list[dict[str, Any]]:
-    return [asdict(r) for r in _RECIPES.values()]
+    return [asdict(r) for r in current_session().recipes.values()]
 
 
 def reset_recipes() -> None:
-    _RECIPES.clear()
+    current_session().recipes.clear()
 
 
 @dataclass
@@ -255,10 +247,6 @@ class AnalysisRun:
     error: str | None = None
 
 
-_RUNS: dict[str, AnalysisRun] = _CURRENT_SESSION.runs
-_RUN_COUNTER: list[int] = _CURRENT_SESSION.run_counter
-
-
 def put_run(
     sample_id: str,
     file_id: str,
@@ -270,10 +258,11 @@ def put_run(
     error: str | None = None,
     run_id: str | None = None,
 ) -> str:
+    session = current_session()
     if run_id is None:
-        _RUN_COUNTER[0] += 1
-        run_id = f"run_{_RUN_COUNTER[0]:04d}"
-    _RUNS[run_id] = AnalysisRun(
+        session.run_counter[0] += 1
+        run_id = f"run_{session.run_counter[0]:04d}"
+    session.runs[run_id] = AnalysisRun(
         run_id=run_id,
         sample_id=sample_id,
         file_id=file_id,
@@ -289,18 +278,20 @@ def put_run(
 
 
 def get_run(run_id: str) -> AnalysisRun:
-    if run_id not in _RUNS:
-        raise KeyError(f"Run {run_id!r} not found. Available: {list(_RUNS)}")
-    return _RUNS[run_id]
+    runs = current_session().runs
+    if run_id not in runs:
+        raise KeyError(f"Run {run_id!r} not found. Available: {list(runs)}")
+    return runs[run_id]
 
 
 def list_runs() -> list[dict[str, Any]]:
-    return [asdict(r) for r in _RUNS.values()]
+    return [asdict(r) for r in current_session().runs.values()]
 
 
 def reset_runs() -> None:
-    _RUNS.clear()
-    _RUN_COUNTER[0] = 0
+    session = current_session()
+    session.runs.clear()
+    session.run_counter[0] = 0
 
 
 def put_qc_record(
@@ -313,7 +304,7 @@ def put_qc_record(
 ) -> str:
     if status not in {"pass", "warning", "fail", "not_checked"}:
         raise ValueError("status must be pass, warning, fail, or not_checked")
-    _QC_RECORDS[source] = QCRecord(
+    current_session().qc_records[source] = QCRecord(
         source=source,
         status=status,
         warnings=list(warnings or []),
@@ -326,17 +317,18 @@ def put_qc_record(
 
 
 def get_qc_record(source: str) -> QCRecord:
-    if source not in _QC_RECORDS:
-        raise KeyError(f"QC source {source!r} not found. Available: {list(_QC_RECORDS)}")
-    return _QC_RECORDS[source]
+    qc_records = current_session().qc_records
+    if source not in qc_records:
+        raise KeyError(f"QC source {source!r} not found. Available: {list(qc_records)}")
+    return qc_records[source]
 
 
 def list_qc_records() -> list[dict[str, Any]]:
-    return [asdict(record) for record in _QC_RECORDS.values()]
+    return [asdict(record) for record in current_session().qc_records.values()]
 
 
 def reset_qc_records() -> None:
-    _QC_RECORDS.clear()
+    current_session().qc_records.clear()
 
 
 @dataclass
@@ -353,9 +345,6 @@ class SampleAnnotation:
 
 # Backward-compat alias so external imports `from state import SampleEntry` keep working.
 SampleEntry = SampleAnnotation
-
-
-_SAMPLES: dict[str, SampleAnnotation] = _CURRENT_SESSION.samples
 
 
 _CHANNEL_COLOR_ALIASES: dict[str, str] = {
@@ -419,30 +408,15 @@ class ChannelEntry:
     notes: str | None = None
 
 
-_CHANNELS: dict[str, ChannelEntry] = _CURRENT_SESSION.channels
-
-
 def current_session() -> AnalysisSession:
     return _CURRENT_SESSION
 
 
 def set_current_session(session: AnalysisSession) -> None:
-    """Replace the active session and refresh compatibility aliases."""
-
-    global _CURRENT_SESSION, _VIEWER, _TABLES, _QC_RECORDS, _FILES, _RECIPES
-    global _RUNS, _RUN_COUNTER, _SAMPLES, _CHANNELS, _TABLE_LISTENERS
+    """Replace the active session; free functions read it via current_session()."""
+    global _CURRENT_SESSION
 
     _CURRENT_SESSION = session
-    _VIEWER = session.viewer
-    _TABLES = session.tables
-    _QC_RECORDS = session.qc_records
-    _FILES = session.files
-    _RECIPES = session.recipes
-    _RUNS = session.runs
-    _RUN_COUNTER = session.run_counter
-    _SAMPLES = session.samples
-    _CHANNELS = session.channels
-    _TABLE_LISTENERS = session.table_listeners
 
 
 def reset_session(viewer: Any | None = None) -> AnalysisSession:
@@ -488,9 +462,7 @@ def canonical_channel_role(value: str | None) -> str:
 
 
 def set_viewer(v: Any) -> None:
-    global _VIEWER
-    _CURRENT_SESSION.viewer = v
-    _VIEWER = v
+    current_session().viewer = v
 
 
 def get_viewer() -> Any:
@@ -617,7 +589,7 @@ def resolve_layer_name(query: str) -> str:
     q_color = canonical_channel_color(query)
     matches: list[str] = []
 
-    for entry in _CHANNELS.values():
+    for entry in current_session().channels.values():
         values = [
             entry.layer_name,
             entry.color or "",
@@ -653,30 +625,33 @@ def resolve_layer_name(query: str) -> str:
 
 
 def get_table(name: str) -> pd.DataFrame:
-    if name not in _TABLES:
-        raise KeyError(f"Table {name!r} not found. Available: {list(_TABLES)}")
-    return _TABLES[name].df
+    tables = current_session().tables
+    if name not in tables:
+        raise KeyError(f"Table {name!r} not found. Available: {list(tables)}")
+    return tables[name].df
 
 
 def get_table_entry(name: str) -> TableEntry:
-    if name not in _TABLES:
-        raise KeyError(f"Table {name!r} not found. Available: {list(_TABLES)}")
-    return _TABLES[name]
+    tables = current_session().tables
+    if name not in tables:
+        raise KeyError(f"Table {name!r} not found. Available: {list(tables)}")
+    return tables[name]
 
 
 def iter_table_entries() -> list[TableEntry]:
-    return list(_TABLES.values())
+    return list(current_session().tables.values())
 
 
 def put_table(
     name: str, df: pd.DataFrame, spec: dict[str, Any] | None = None
 ) -> str:
+    tables = current_session().tables
     base = name
     i = 1
-    while name in _TABLES:
+    while name in tables:
         name = f"{base}_{i}"
         i += 1
-    _TABLES[name] = TableEntry(df=df, spec=dict(spec or {}))
+    tables[name] = TableEntry(df=df, spec=dict(spec or {}))
     _state_changed("table_saved", tables_changed=True)
     return name
 
@@ -685,24 +660,25 @@ def set_table(
     name: str, df: pd.DataFrame, spec: dict[str, Any] | None = None
 ) -> str:
     """Set or replace a table by exact name for restore/import paths."""
-    _TABLES[name] = TableEntry(df=df, spec=dict(spec or {}))
+    current_session().tables[name] = TableEntry(df=df, spec=dict(spec or {}))
     _state_changed("table_restored", tables_changed=True)
     return name
 
 
 def update_table(name: str, df: pd.DataFrame) -> None:
-    if name not in _TABLES:
+    tables = current_session().tables
+    if name not in tables:
         raise KeyError(f"Table {name!r} not found")
-    _TABLES[name].df = df
+    tables[name].df = df
     _state_changed("table_updated", tables_changed=True)
 
 
 def list_tables() -> list[str]:
-    return list(_TABLES)
+    return list(current_session().tables)
 
 
 def reset_tables() -> None:
-    _TABLES.clear()
+    current_session().tables.clear()
     _tables_changed()
 
 
@@ -717,9 +693,10 @@ def attach_sample_columns_to_table(
 ) -> None:
     """Add identifier columns required by the Phase-3 spec onto an existing table.
     No-op if the table doesn't exist or already has these columns."""
-    if table_name not in _TABLES:
+    tables = current_session().tables
+    if table_name not in tables:
         return
-    df = _TABLES[table_name].df
+    df = tables[table_name].df
     additions = {
         "sample_id": sample_id,
         "sample_name": sample_name,
@@ -731,7 +708,7 @@ def attach_sample_columns_to_table(
     for col, value in additions.items():
         if col not in df.columns:
             df[col] = value
-    _TABLES[table_name].df = df
+    tables[table_name].df = df
     _state_changed("table_sample_columns_attached", tables_changed=True)
 
 
@@ -751,7 +728,7 @@ def put_sample(
     if group is not None:
         group = group.strip() or None
     sid = (sample_id or "").strip() or sample_name
-    _SAMPLES[sample_name] = SampleAnnotation(
+    current_session().samples[sample_name] = SampleAnnotation(
         sample_name=sample_name,
         sample_id=sid,
         group=group,
@@ -766,17 +743,18 @@ def put_sample(
 
 
 def list_samples() -> list[dict[str, Any]]:
-    return [asdict(entry) for entry in _SAMPLES.values()]
+    return [asdict(entry) for entry in current_session().samples.values()]
 
 
 def get_sample(sample_name: str) -> SampleAnnotation:
-    if sample_name not in _SAMPLES:
-        raise KeyError(f"Sample {sample_name!r} not found. Available: {list(_SAMPLES)}")
-    return _SAMPLES[sample_name]
+    samples = current_session().samples
+    if sample_name not in samples:
+        raise KeyError(f"Sample {sample_name!r} not found. Available: {list(samples)}")
+    return samples[sample_name]
 
 
 def reset_samples() -> None:
-    _SAMPLES.clear()
+    current_session().samples.clear()
 
 
 def put_channel_annotation(
@@ -797,7 +775,7 @@ def put_channel_annotation(
             "color must be one of green, red, uv, or ir/far red "
             f"(got {color!r})"
         )
-    _CHANNELS[resolved_layer] = ChannelEntry(
+    current_session().channels[resolved_layer] = ChannelEntry(
         layer_name=resolved_layer,
         role=canonical_role,
         color=canonical_color,
@@ -810,11 +788,11 @@ def put_channel_annotation(
 
 
 def list_channel_annotations() -> list[dict[str, Any]]:
-    return [asdict(entry) for entry in _CHANNELS.values()]
+    return [asdict(entry) for entry in current_session().channels.values()]
 
 
 def reset_channel_annotations() -> None:
-    _CHANNELS.clear()
+    current_session().channels.clear()
 
 
 def snapshot_session_state() -> dict[str, Any]:
@@ -828,7 +806,7 @@ def snapshot_session_state() -> dict[str, Any]:
         "qc_records": list_qc_records(),
         "tables": [
             {"name": name, "spec": dict(entry.spec)}
-            for name, entry in _TABLES.items()
+            for name, entry in current_session().tables.items()
         ],
     }
 
@@ -876,7 +854,7 @@ def _restore_session_state_impl(
 
     for rec in files or []:
         file_id = str(rec.get("file_id") or rec.get("original_name") or "file")
-        _FILES[file_id] = FileRecord(
+        current_session().files[file_id] = FileRecord(
             file_id=file_id,
             path=str(rec.get("path") or rec.get("original_path") or ""),
             original_name=str(rec.get("original_name") or file_id),
@@ -902,7 +880,7 @@ def _restore_session_state_impl(
         layer_name = str(rec.get("layer_name") or "")
         if not layer_name:
             continue
-        _CHANNELS[layer_name] = ChannelEntry(
+        current_session().channels[layer_name] = ChannelEntry(
             layer_name=layer_name,
             role=canonical_channel_role(rec.get("role")),
             color=rec.get("color"),
@@ -946,7 +924,8 @@ def _restore_session_state_impl(
             except (IndexError, ValueError):
                 pass
     if max_run:
-        _RUN_COUNTER[0] = max(_RUN_COUNTER[0], max_run)
+        run_counter = current_session().run_counter
+        run_counter[0] = max(run_counter[0], max_run)
 
     for rec in qc_records or []:
         put_qc_record(
@@ -979,7 +958,11 @@ class AmbiguousChannelError(KeyError):
 
 
 def _confirmed_target_layers() -> list[str]:
-    return [entry.layer_name for entry in _CHANNELS.values() if entry.role == "target"]
+    return [
+        entry.layer_name
+        for entry in current_session().channels.values()
+        if entry.role == "target"
+    ]
 
 
 def _layer_kind(layer: Any) -> str:
@@ -995,7 +978,7 @@ def _image_layer_names() -> list[str]:
     skip_roles = {"counterstain", "ignore"}
     excluded = {
         entry.layer_name
-        for entry in _CHANNELS.values()
+        for entry in current_session().channels.values()
         if entry.role in skip_roles
     }
     out: list[str] = []
@@ -1038,7 +1021,7 @@ def resolve_target_channel(query: str | None = None) -> ChannelResolution:
             raise AmbiguousChannelError(str(e), _image_layer_names()) from e
 
         if resolved != query and resolved in _layer_names():
-            entry = _CHANNELS.get(resolved)
+            entry = current_session().channels.get(resolved)
             if entry and entry.role in {"counterstain", "ignore"}:
                 raise AmbiguousChannelError(
                     f"Layer {resolved!r} is annotated as {entry.role!r}; refusing "
@@ -1061,7 +1044,7 @@ def resolve_target_channel(query: str | None = None) -> ChannelResolution:
         return ChannelResolution(
             layer=confirmed[0],
             source="annotation",
-            color=_CHANNELS[confirmed[0]].color,
+            color=current_session().channels[confirmed[0]].color,
         )
     if len(confirmed) > 1:
         raise AmbiguousChannelError(
@@ -1085,16 +1068,14 @@ def resolve_target_channel(query: str | None = None) -> ChannelResolution:
     )
 
 
-_TABLE_LISTENERS: list[Any] = _CURRENT_SESSION.table_listeners
-
-
 def on_tables_changed(callback: Any) -> None:
-    if callback not in _TABLE_LISTENERS:
-        _TABLE_LISTENERS.append(callback)
+    listeners = current_session().table_listeners
+    if callback not in listeners:
+        listeners.append(callback)
 
 
 def _emit_tables_changed() -> None:
-    for cb in list(_TABLE_LISTENERS):
+    for cb in list(current_session().table_listeners):
         try:
             cb()
         except Exception:

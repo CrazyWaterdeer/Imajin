@@ -149,7 +149,7 @@ def test_generate_report_md(fake_session, tmp_path) -> None:
 
 
 def test_generate_report_includes_sample_groups(fake_session, tmp_path) -> None:
-    from imajin.agent import state
+    from imajin import session as state
 
     state.put_sample("control_1", "control", files=["/data/control_1.lsm"])
     state.put_sample("treatment_1", "treatment", files=["/data/treatment_1.lsm"])
@@ -165,7 +165,7 @@ def test_generate_report_includes_sample_groups(fake_session, tmp_path) -> None:
 
 
 def test_generate_report_includes_channel_annotations(fake_session, tmp_path, viewer) -> None:
-    from imajin.agent import state
+    from imajin import session as state
 
     viewer.add_image([[0]], name="green_reporter")
     state.put_channel_annotation(
@@ -187,7 +187,7 @@ def test_generate_report_includes_channel_annotations(fake_session, tmp_path, vi
 
 
 def test_generate_report_includes_qc_records(fake_session, tmp_path) -> None:
-    from imajin.agent import state
+    from imajin import session as state
 
     state.put_qc_record(
         "masks",
@@ -209,7 +209,7 @@ def test_generate_report_includes_qc_records(fake_session, tmp_path) -> None:
 def test_generate_report_auto_adds_statistics_summary(fake_session, tmp_path) -> None:
     import pandas as pd
 
-    from imajin.agent import state
+    from imajin import session as state
 
     state.put_table(
         "skel_0_nodes",

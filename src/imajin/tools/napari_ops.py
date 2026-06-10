@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from imajin.session import get_layer, get_viewer
+
 
 @dataclass(frozen=True)
 class LayerSnapshot:
@@ -13,7 +15,6 @@ class LayerSnapshot:
 
 
 def snapshot_layer(name: str) -> LayerSnapshot:
-    from imajin.agent.state import get_layer
 
     layer = get_layer(name)
     metadata = dict(getattr(layer, "metadata", {}) or {})
@@ -38,7 +39,6 @@ def add_image_from_worker(
     metadata: dict[str, Any],
     **kwargs: Any,
 ):
-    from imajin.agent.state import get_viewer
 
     viewer = get_viewer()
     return viewer.add_image(
@@ -57,7 +57,6 @@ def add_labels_from_worker(
     scale: tuple[float, ...],
     metadata: dict[str, Any],
 ):
-    from imajin.agent.state import get_viewer
 
     return get_viewer().add_labels(
         data,

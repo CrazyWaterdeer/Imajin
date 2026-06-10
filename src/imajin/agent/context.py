@@ -82,7 +82,7 @@ def summarize_viewer_state(
     max_samples: int = 20,
     max_channels: int = 20,
 ) -> str:
-    from imajin.agent.state import (
+    from imajin.session import (
         list_channel_annotations,
         list_samples,
         list_tables,

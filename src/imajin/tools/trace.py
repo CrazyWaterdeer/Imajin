@@ -6,9 +6,9 @@ import numpy as np
 import pandas as pd
 
 from imajin.analysis.arrays import materialize_array
-from imajin.agent import state
+from imajin import session as state
 from imajin.agent.qt_dispatch import call_on_main
-from imajin.agent.state import get_layer
+from imajin.session import get_layer
 from imajin.paths import normalize_user_path
 from imajin.tools._trace_export import _swc_coordinates, _write_swc
 from imajin.tools._trace_image import (

@@ -3,7 +3,7 @@ from __future__ import annotations
 import pandas as pd
 import pytest
 
-from imajin.agent import state
+from imajin import session as state
 from imajin.tools import figures
 
 
@@ -103,7 +103,7 @@ def test_figure_writes_into_active_bundle(tmp_path, monkeypatch):
     monkeypatch.setenv("IMAJIN_RESULTS_DIR", str(tmp_path))
     import pandas as pd
     from pathlib import Path
-    from imajin.agent import state
+    from imajin import session as state
     from imajin.result_bundles import reset_process_bundle, start_analysis
     from imajin.results import read_bundle_metadata
     from imajin.tools import figures

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from imajin.agent import state
+from imajin import session as state
 from imajin.result_bundles import finalize_bundle_metadata
 from imajin.results import create_result_bundle, write_bundle_metadata
 from imajin.tools.recipe_import import import_recipe_from_bundle

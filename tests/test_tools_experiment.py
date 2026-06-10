@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from imajin.agent import state
+from imajin import session as state
 from imajin.tools import experiment
 
 

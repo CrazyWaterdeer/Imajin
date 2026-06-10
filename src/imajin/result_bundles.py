@@ -12,7 +12,7 @@ import numpy as np
 
 from imajin.analysis.arrays import materialize_array
 from imajin.agent.qt_dispatch import call_on_main
-from imajin.agent.state import get_table
+from imajin.session import get_table
 from imajin.paths import normalize_user_path
 from imajin.results import read_bundle_metadata, write_bundle_metadata
 

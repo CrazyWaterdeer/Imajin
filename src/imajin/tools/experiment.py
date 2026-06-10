@@ -4,7 +4,19 @@ import re
 from pathlib import Path
 from typing import Any
 
-from imajin.agent.state import list_samples, put_sample
+from imajin.session import (
+    get_file,
+    iter_file_records,
+    iter_table_entries,
+    list_files,
+    list_recipes,
+    list_runs,
+    list_samples,
+    put_file,
+    put_recipe,
+    put_sample,
+    put_table,
+)
 from imajin.paths import normalize_user_path
 from imajin.tools.registry import tool
 
@@ -182,7 +194,6 @@ def register_files(
     include: list[str] | None = None,
     exclude: list[str] | None = None,
 ) -> dict[str, Any]:
-    from imajin.agent.state import put_file
 
     out: list[dict[str, Any]] = []
     n_unsupported = 0
@@ -292,7 +303,6 @@ def _query_registered_file_records(
     offset: int = 0,
     limit: int = 50,
 ) -> dict[str, Any]:
-    from imajin.agent.state import list_files
 
     records = list_files()
     if file_ids:
@@ -410,7 +420,6 @@ def validate_analysis_metadata(
     measurement: dict[str, Any] | None = None,
     strict_missing: bool = True,
 ) -> dict[str, Any]:
-    from imajin.agent.state import list_files
     from imajin.analysis.metadata_validation import validate_acquisition_metadata
 
     records: list[dict[str, Any]] = []
@@ -451,7 +460,6 @@ def _resolve_files_for_sample(
     """Return (file_paths, file_ids). Either input can be empty.
     Paths are matched against registered FileRecords; unmatched paths are
     accepted but get no file_id."""
-    from imajin.agent.state import get_file, iter_file_records
 
     resolved_paths: list[str] = []
     resolved_ids: list[str] = list(file_ids or [])
@@ -489,7 +497,6 @@ def _resolve_files_for_sample(
     phase="3",
 )
 def annotate_samples(samples: list[dict[str, Any]]) -> dict[str, Any]:
-    from imajin.agent.state import put_sample
 
     out: list[dict[str, Any]] = []
     for entry in samples:
@@ -527,12 +534,6 @@ def annotate_samples(samples: list[dict[str, Any]]) -> dict[str, Any]:
     phase="3",
 )
 def list_experiment() -> dict[str, Any]:
-    from imajin.agent.state import (
-        list_files,
-        list_recipes,
-        list_runs,
-        list_samples,
-    )
 
     return {
         "files": list_files(),
@@ -566,7 +567,6 @@ def create_analysis_recipe(
     cell_diameter_um: float | None = None,
     domain: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    from imajin.agent.state import put_recipe
     from imajin.tools.workflows import (
         _normalize_domain_spec,
         _normalize_segmentation_method,
@@ -602,7 +602,6 @@ def _scan_measurement_tables(measurement: str) -> "pd.DataFrame":
     plus the sample/group identifier columns."""
     import pandas as pd
 
-    from imajin.agent.state import iter_table_entries
 
     frames: list[pd.DataFrame] = []
     for entry in iter_table_entries():
@@ -636,7 +635,6 @@ def summarize_experiment(
 ) -> dict[str, Any]:
     import pandas as pd
 
-    from imajin.agent.state import put_table
 
     df = _scan_measurement_tables(measurement)
     sample_grp = df.groupby(sample_col, dropna=False)[measurement]

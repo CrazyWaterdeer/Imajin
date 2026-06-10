@@ -37,7 +37,7 @@ class ReviewAlreadyActiveError(RuntimeError):
 
 
 def _default_open_dock(image_layer: str, labels_layer: str) -> Any:
-    from imajin.agent.state import get_viewer
+    from imajin.session import get_viewer
     from imajin.ui.main import _show_review_panel
 
     viewer = get_viewer()

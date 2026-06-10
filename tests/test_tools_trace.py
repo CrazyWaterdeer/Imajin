@@ -5,7 +5,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from imajin.agent import state
+from imajin import session as state
 from imajin.tools import report
 from imajin.tools import trace
 
@@ -57,7 +57,7 @@ def test_extract_branch_metrics_table(viewer) -> None:
     assert res["n_branches"] >= 3
     assert "branch_type_counts" in res
 
-    from imajin.agent.state import get_table
+    from imajin.session import get_table
 
     df = get_table(res["table_name"])
     assert "branch_length" in df.columns

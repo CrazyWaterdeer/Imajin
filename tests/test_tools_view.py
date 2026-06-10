@@ -7,7 +7,7 @@ import numpy as np
 import pytest
 from PIL import Image
 
-from imajin.agent import state
+from imajin import session as state
 from imajin.tools import view
 
 needs_gl = pytest.mark.skipif(

@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Any
 
 from imajin.analysis.workflow import build_sample_summary
+from imajin.session import list_channel_annotations
 from imajin.tools.napari_ops import snapshot_layer
 
 
@@ -27,7 +28,6 @@ def _bundle_qc_png_path(
 
 
 def _single_bundle_run_context_extras(anchor: Path | None) -> dict[str, Any]:
-    from imajin.agent.state import list_channel_annotations
 
     channel_roles: dict[str, str] = {}
     for entry in list_channel_annotations():

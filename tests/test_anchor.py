@@ -69,7 +69,7 @@ def test_session_anchor_uses_registered_files(tmp_path):
     a.mkdir()
     file_a = a / "x.lsm"
     file_a.write_bytes(b"")
-    with patch("imajin.agent.state.list_files", return_value=[{"path": str(file_a)}]):
+    with patch("imajin.session.list_files", return_value=[{"path": str(file_a)}]):
         assert resolve_session_anchor() == a.absolute()
 
 
@@ -80,11 +80,11 @@ def test_session_anchor_merges_extra_paths(tmp_path):
     b.mkdir()
     (a / "x.lsm").write_bytes(b"")
     (b / "y.lsm").write_bytes(b"")
-    with patch("imajin.agent.state.list_files", return_value=[{"path": str(b / "y.lsm")}]):
+    with patch("imajin.session.list_files", return_value=[{"path": str(b / "y.lsm")}]):
         anchor = resolve_session_anchor(extra_paths=[str(a / "x.lsm")])
     assert anchor == a.absolute()
 
 
 def test_session_anchor_returns_none_when_no_files():
-    with patch("imajin.agent.state.list_files", return_value=[]):
+    with patch("imajin.session.list_files", return_value=[]):
         assert resolve_session_anchor() is None

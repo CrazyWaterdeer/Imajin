@@ -7,7 +7,7 @@ import pandas as pd
 
 from imajin.analysis.arrays import layer_axes_from_metadata, materialize_array
 from imajin.agent.qt_dispatch import call_on_main
-from imajin.agent.state import (
+from imajin.session import (
     get_table,
     get_table_entry,
     put_table,

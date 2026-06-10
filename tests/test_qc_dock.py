@@ -3,7 +3,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from imajin.agent import state
+from imajin import session as state
 
 
 def test_qc_dock_computes_label_qc(qtbot, viewer) -> None:

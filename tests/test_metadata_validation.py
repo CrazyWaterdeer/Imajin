@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from imajin.agent import state
+from imajin import session as state
 from imajin.analysis.metadata_validation import validate_acquisition_metadata
 from imajin.io.metadata import read_metadata_summary
 from imajin.tools import experiment, workflows

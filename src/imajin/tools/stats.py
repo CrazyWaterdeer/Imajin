@@ -5,7 +5,7 @@ from typing import Any, Literal
 import numpy as np
 import pandas as pd
 
-from imajin.agent.state import get_table, put_table
+from imajin.session import get_table, get_table_entry, list_tables, put_table
 from imajin.result_bundles import register_stats_rows
 from imajin.results import slugify_result_name
 from imajin.tools._dataframes import finite_numeric_frame, infer_time_column
@@ -613,7 +613,6 @@ def compare_groups(
 
 
 def _existing_auto_statistics_keys() -> set[tuple[str, str, str]]:
-    from imajin.agent.state import get_table_entry, list_tables
 
     keys: set[tuple[str, str, str]] = set()
     covered_inputs: dict[str, tuple[list[str], str]] = {}
@@ -737,7 +736,6 @@ def ensure_default_statistics(
     Existing stats tables are respected, so repeated report generation does not
     keep duplicating outputs.
     """
-    from imajin.agent.state import get_table_entry, list_tables
 
     existing = _existing_auto_statistics_keys()
     outputs: list[dict[str, Any]] = []

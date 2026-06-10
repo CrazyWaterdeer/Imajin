@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from imajin.agent.state import get_table, get_viewer
+from imajin.session import get_table, get_viewer
 from imajin.paths import normalize_user_path
 from imajin.tools.layers import remove_layers_by_name as _remove_layers_by_name
 from imajin.tools.registry import tool
