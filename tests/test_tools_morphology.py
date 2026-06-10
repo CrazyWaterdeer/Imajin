@@ -137,9 +137,9 @@ def test_classify_neuron_type_no_reference_is_graceful(viewer, tmp_path) -> None
     assert res["predicted_type"] is None
 
 
-def test_query_connectome_is_currently_stub(viewer) -> None:
+def test_query_connectome_neuprint_degrades(viewer) -> None:
     res = trace.query_connectome("any_id", db="neuprint", k=5)
-    assert res["status"] == "not_implemented"
+    assert res["status"] in {"backend_unavailable", "needs_token", "needs_registration"}
     assert res["matches"] == []
 
 
@@ -398,8 +398,8 @@ def test_query_connectome_rejects_mouse_databases(viewer) -> None:
     for db in ("microns", "allen"):
         res = trace.query_connectome("any_id", db=db)
         assert res["status"] == "off_domain"
-    # Drosophila DBs remain a Tier-2 not_implemented (not off-domain)
-    assert trace.query_connectome("any_id", db="neuprint")["status"] == "not_implemented"
+    # neuprint is a real Drosophila DB → a backend/credential degradation, never off_domain
+    assert trace.query_connectome("any_id", db="neuprint")["status"] != "off_domain"
 
 
 def test_specialist_prompt_advertises_local_classification() -> None:
@@ -447,3 +447,44 @@ def test_nblast_self_match_ranks_highest(viewer) -> None:
     assert res["status"] == "ok"
     # the co-located self (branched) must score highest
     assert res["ranked"][0]["name"] == "branched"
+
+
+# --------------------------------------------------------------------------- #
+# Tier 2: neuPrint backend readiness (credential-gated, deterministic via patch)
+# --------------------------------------------------------------------------- #
+def test_neuprint_backend_unavailable(monkeypatch) -> None:
+    from imajin.analysis import connectome_neuprint as cn
+
+    monkeypatch.setattr(cn, "navis_available", lambda: False)
+    res = cn.query_neuprint(None, None)
+    assert res["status"] == "backend_unavailable"
+
+
+def test_neuprint_needs_token_when_backend_present(monkeypatch) -> None:
+    from imajin.analysis import connectome_neuprint as cn
+
+    monkeypatch.setattr(cn, "navis_available", lambda: True)
+    monkeypatch.setattr(cn, "neuprint_available", lambda: True)
+    monkeypatch.delenv("NEUPRINT_APPLICATION_CREDENTIALS", raising=False)
+    res = cn.query_neuprint(None, None)
+    assert res["status"] == "needs_token"
+
+
+def test_neuprint_with_token_needs_registration(monkeypatch) -> None:
+    from imajin.analysis import connectome_neuprint as cn
+
+    monkeypatch.setattr(cn, "navis_available", lambda: True)
+    monkeypatch.setattr(cn, "neuprint_available", lambda: True)
+    monkeypatch.setenv("NEUPRINT_APPLICATION_CREDENTIALS", "fake-token")
+    res = cn.query_neuprint(None, None)
+    assert res["status"] == "needs_registration"
+
+
+def test_query_connectome_routes_neuprint_without_skeleton_lookup(viewer, monkeypatch) -> None:
+    from imajin.analysis import connectome_neuprint as cn
+
+    monkeypatch.setattr(cn, "navis_available", lambda: False)
+    # bogus skeleton id must not raise — readiness is resolved before any lookup
+    res = trace.query_connectome("any_id", db="neuprint")
+    assert res["db"] == "neuprint"
+    assert res["status"] == "backend_unavailable"

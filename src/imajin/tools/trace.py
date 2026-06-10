@@ -762,16 +762,23 @@ def query_connectome(
         raise ValueError(
             f"unknown db {db!r}; expected neuprint|flywire (microns/allen are mouse, off-domain)"
         )
+    if db == "neuprint":
+        from imajin.analysis.connectome_neuprint import query_neuprint
+
+        # backend/token readiness is resolved without a skeleton lookup, so a bad id
+        # returns a graceful status rather than KeyError (the live fetch — pending a
+        # token + template registration — is not wired yet).
+        result = query_neuprint(None, None, k=k)
+        return {"skeleton_id": skeleton_id, "db": db, **result}
+
+    # FlyWire is a later Tier-2 step (heavier CAVE auth); not wired yet.
     return {
         "skeleton_id": skeleton_id,
         "db": db,
         "k": k,
         "matches": [],
         "status": "not_implemented",
-        "note": (
-            "External connectome lookup is a Tier-2 backend (needs navis + template "
-            "registration + a DB token). For local morphology search use find_similar_neurons."
-        ),
+        "note": "FlyWire backend not wired yet (Tier 2, after neuPrint).",
     }
 
 
