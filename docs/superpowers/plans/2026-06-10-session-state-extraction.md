@@ -281,8 +281,9 @@ to module-top imports, one source module per commit, and after each run
 
 - [x] **C18. experiment.py** (9 lazy imports → top-level).
 - [x] **C19. batch_runner.py** (5).
-- [ ] **C20. segment.py / report.py / napari_ops.py** (3 each) — one commit each
-  if any still trips a cycle; otherwise batch the clearly-safe ones.
+- [x] **C20. segment.py / report.py / napari_ops.py** (3 each) — batched; all
+  import-time clean (session pulls in nothing from imajin). report.py's lazy
+  `imajin.tools.trace` imports were left as-is (not session).
 - [ ] **C21. remaining** (workflows, stats, layers, channels, view,
   _workflow_outputs). Finish with a repo-wide check that no `from imajin.session`
   remains inside a function body except where a genuine cycle still requires it

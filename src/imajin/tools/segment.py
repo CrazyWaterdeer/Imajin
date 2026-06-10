@@ -4,6 +4,7 @@ from typing import Any
 
 import numpy as np
 
+from imajin.session import get_layer, get_viewer
 from imajin.analysis.arrays import layer_axes_from_metadata, materialize_array
 from imajin.analysis.domain_segmentation import (
     domain_min_size_from_physical as _domain_min_size_from_physical,
@@ -1190,7 +1191,6 @@ def correct_roi(
     smoothing_sigma: float | None = None,
     min_size: int | None = None,
 ) -> dict[str, Any]:
-    from imajin.session import get_layer
 
     try:
         labels_layer_obj = call_on_main(get_layer, labels_layer)
@@ -1251,7 +1251,6 @@ def correct_roi(
         # Drop the throwaway layer the worker created.
         viewer_layers = target.parent if hasattr(target, "parent") else None
         if viewer_layers is None:
-            from imajin.session import get_viewer
             viewer = get_viewer()
             if viewer is not None and new_labels_layer in viewer.layers:
                 try:
@@ -1289,7 +1288,6 @@ def review_target_roi(
     labels_layer: str,
 ) -> dict[str, Any]:
     from imajin.ui.main import _show_review_panel
-    from imajin.session import get_viewer
 
     viewer = get_viewer()
     if viewer is None:
