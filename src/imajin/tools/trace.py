@@ -802,12 +802,39 @@ def _load_reference_or_none(reference: str):
         return None
 
 
+def _add_persistence_features(feature_vector: dict[str, Any], entry: Any) -> None:
+    """Enrich the feature vector with navis persistence features, when available.
+
+    Persistence is rotation/translation-invariant but scale-sensitive, so the
+    features are added to ``features`` but NOT to ``invariant_keys`` — the matcher
+    uses them only when query and library share physical (micron) units. A no-op
+    without the connectome extra or on a degenerate skeleton.
+    """
+    import tempfile
+
+    from imajin.analysis.morphology_persistence import (
+        persistence_available,
+        persistence_features_from_swc,
+    )
+
+    if not persistence_available():
+        return
+    with tempfile.TemporaryDirectory() as tmp:
+        swc = Path(tmp) / "skeleton.swc"
+        _write_swc(entry, swc)
+        features = persistence_features_from_swc(swc)
+    if features:
+        feature_vector["features"].update(features)
+
+
 def _skeleton_feature_vector(skeleton_id: str) -> dict[str, Any]:
     """Descriptor → feature vector for one registered skeleton (incl. tortuosity)."""
     entry = _entry(skeleton_id)
     descriptors = compute_morphology_descriptors(skeleton_id)
     branch_df = _branch_summary(entry.skel, entry.record.spacing)
-    return extract_feature_vector(descriptors, branch_df)
+    fv = extract_feature_vector(descriptors, branch_df)
+    _add_persistence_features(fv, entry)
+    return fv
 
 
 @tool(

@@ -546,3 +546,29 @@ def test_persistence_is_translation_rotation_invariant(tmp_path) -> None:
     assert f_base is not None and f_moved is not None
     for key in f_base:
         assert f_base[key] == pytest.approx(f_moved[key], abs=1e-6)
+
+
+@requires_navis
+def test_persistence_enriches_physical_matching(viewer, tmp_path) -> None:
+    trace.reset_skeletons()
+    lib_path = str(tmp_path / "lib_um.csv")
+    for label, mask, name in [
+        ("branched", _branched_mask(), "pe_br"),
+        ("linear", _straight_mask(), "pe_lin"),
+    ]:
+        viewer.add_labels(mask, name=name, scale=(0.4, 0.4))  # physical → microns
+        sid = trace.skeletonize(name)["skeleton_id"]
+        trace.add_reference_neuron(sid, label=label, library_path=lib_path)
+
+    # the library now carries persistence columns (computed because navis is present)
+    library = load_reference_library(lib_path)
+    assert any(c.startswith("pers_") for c in library.feature_columns)
+
+    viewer.add_labels(_branched_variant_mask(), name="pe_q", scale=(0.4, 0.4))
+    qid = trace.skeletonize("pe_q")["skeleton_id"]
+    res = trace.classify_neuron_type(qid, reference=lib_path)
+
+    assert res["status"] == "ok"
+    # both query and library are micron-scale ⇒ persistence + absolute features used
+    assert res["invariant_only"] is False
+    assert res["predicted_type"] == "branched"
