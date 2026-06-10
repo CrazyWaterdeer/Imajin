@@ -224,7 +224,7 @@ tests after each.
   `bulk_state_update` to use them. Behavior is identical for single-session usage
   (the only real usage) and a session swap now resets the counters coherently.
   Delete the three module globals. Guarded by the C0 bulk-update test.
-- [ ] **C10. collapse `set_current_session` + refresh docstring.**
+- [x] **C10. collapse `set_current_session` + refresh docstring.**
   `set_current_session` becomes `global _CURRENT_SESSION; _CURRENT_SESSION =
   session`. Update the `AnalysisSession` docstring to state that free functions
   delegate to `current_session()` and that there are no compat aliases. Confirm

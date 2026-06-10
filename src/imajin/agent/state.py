@@ -12,8 +12,10 @@ import pandas as pd
 class AnalysisSession:
     """Mutable analysis state for one napari/Imajin session.
 
-    The module-level variables below remain as compatibility aliases while the
-    codebase is migrated away from scattered globals.
+    This is the single source of truth for per-session state. Every free
+    function in this module delegates to ``current_session()``; there are no
+    module-level compatibility aliases. The only module-level mutable name is
+    ``_CURRENT_SESSION`` — the channel lookup tables are immutable constants.
     """
 
     viewer: Any | None = None
@@ -411,8 +413,7 @@ def current_session() -> AnalysisSession:
 
 
 def set_current_session(session: AnalysisSession) -> None:
-    """Replace the active session and refresh compatibility aliases."""
-
+    """Replace the active session; free functions read it via current_session()."""
     global _CURRENT_SESSION
 
     _CURRENT_SESSION = session
