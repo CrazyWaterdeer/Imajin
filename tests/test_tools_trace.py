@@ -76,9 +76,9 @@ def test_morphology_descriptors_shape(viewer) -> None:
     assert "note" in res  # stub disclosure
 
 
-def test_query_connectome_is_stub(viewer) -> None:
+def test_query_connectome_neuprint_degrades_gracefully(viewer) -> None:
     res = trace.query_connectome("any_id", db="neuprint", k=5)
-    assert res["status"] == "not_implemented"
+    assert res["status"] in {"backend_unavailable", "needs_token", "needs_registration"}
     assert res["matches"] == []
 
 

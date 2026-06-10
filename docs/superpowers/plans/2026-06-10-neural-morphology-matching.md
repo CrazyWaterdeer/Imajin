@@ -195,18 +195,30 @@ signatures; additions are `find_similar_neurons` and `add_reference_neuron`.
   caveat + that Tier 2 adds the `connectome` extra (`uv sync --extra connectome`).
   Short README note. No code.
 
-### Phase 2 — Tier 2: NBLAST + Drosophila connectome (roadmap, NOT committed here)
+### Phase 2 — Tier 2: NBLAST + Drosophila connectome (partially built)
 
-- Add `[project.optional-dependencies] connectome = ["navis", "navis-flybrains",
-  "neuprint-python"]`; verify it installs under the `numpy>=1.26,<3` pin on
-  Python 3.11-3.12 **before** relying on it (v1 assumed this; do not).
-- `navis` NBLAST adapter isolated in one module behind the matcher interface; SWC
-  bridge via the existing `_write_swc`. Force single-threaded NBLAST in tests.
-- Template registration (`navis-flybrains`): confocal trace → standard brain space —
-  the real prerequisite for valid cross-dataset NBLAST.
-- neuPrint reference source (token-configured) feeding the same matcher; then FlyWire
-  (CAVE auth). `query_connectome(db="neuprint")` becomes real here.
-- Every backend lazy + optional + behind the Tier-1 graceful-degradation contract.
+Status on branch `feat/connectome-neuprint`:
+
+- [x] `[project.optional-dependencies] connectome = ["navis", "neuprint-python"]`
+  declared; **verified it installs** (navis 1.11, neuprint 0.6.2) under
+  `numpy>=1.26,<3` on Python 3.12.
+- [x] **NBLAST adapter** (`analysis/morphology_nblast.py`), navis isolated +
+  single-threaded; verified self-match scores highest. Guards: `backend_unavailable`
+  (no extra) and `needs_microns` (NBLAST is micron-calibrated and crashes on unitless
+  dotprops — confirmed in the proof-of-concept).
+- [x] **Topological persistence** (`analysis/morphology_persistence.py`, "Option B"):
+  rotation/translation-invariant descriptors (verified invariant), wired into the
+  matcher so micron-scale matching is enriched when the extra is present; degrades to
+  morphometric-only without it. **This is the registration-free win and needs no
+  token/network.**
+- [x] **neuPrint backend scaffold** (`analysis/connectome_neuprint.py`):
+  token resolution + readiness; `query_connectome(db="neuprint")` returns honest
+  `backend_unavailable → needs_token → needs_registration` statuses.
+- [ ] **Live neuPrint fetch** (`fetch_neurons`/`fetch_skeleton` + NBLAST): blocked on
+  a token + network, and on **template registration** (`navis-flybrains`,
+  confocal → hemibrain space) — the real prerequisite for valid cross-dataset NBLAST.
+  Not written until it can be verified with a token.
+- [ ] FlyWire (CAVE auth); a later step after neuPrint.
 
 ### Phase 3 — Out of scope
 

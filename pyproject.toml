@@ -43,6 +43,17 @@ dependencies = [
     "platformdirs>=4.2",
 ]
 
+[project.optional-dependencies]
+# Tier-2 neural connectome backend: spatial NBLAST morphology comparison and
+# Drosophila connectome lookup. Opt-in (heavy); install with:
+#   uv sync --extra connectome
+# Without it, query_connectome / NBLAST tools degrade to a typed
+# "backend_unavailable" status — the default install and offline mode stay light.
+connectome = [
+    "navis>=1.10",
+    "neuprint-python>=0.4",
+]
+
 [project.scripts]
 imajin = "imajin.cli:main"
 

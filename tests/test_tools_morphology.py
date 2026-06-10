@@ -10,17 +10,36 @@ Everything here passes on the current code with only existing dependencies.
 """
 from __future__ import annotations
 
+import importlib.util
+
 import numpy as np
 import pytest
 
 from imajin import session as state
+from imajin.analysis import morphology_nblast
 from imajin.analysis.morphology_features import extract_feature_vector
 from imajin.analysis.morphology_match import match_against_library
+from imajin.analysis.morphology_nblast import nblast_against_references
 from imajin.analysis.morphology_reference import (
     append_reference,
     load_reference_library,
 )
 from imajin.tools import trace
+
+
+requires_navis = pytest.mark.skipif(
+    importlib.util.find_spec("navis") is None,
+    reason="navis not installed (uv sync --extra connectome)",
+)
+
+
+def _um_points(viewer, mask, name, scale=(0.4, 0.4)):
+    """Skeletonize a mask at a physical (micron) scale; return (points_um, units)."""
+    viewer.add_labels(mask, name=name, scale=scale)
+    skel_id = trace.skeletonize(name)["skeleton_id"]
+    entry = trace._entry(skel_id)
+    points = np.asarray(entry.skel.coordinates, dtype=float) * np.asarray(entry.record.spacing)
+    return points, entry.record.units
 
 
 # --------------------------------------------------------------------------- #
@@ -118,9 +137,9 @@ def test_classify_neuron_type_no_reference_is_graceful(viewer, tmp_path) -> None
     assert res["predicted_type"] is None
 
 
-def test_query_connectome_is_currently_stub(viewer) -> None:
+def test_query_connectome_neuprint_degrades(viewer) -> None:
     res = trace.query_connectome("any_id", db="neuprint", k=5)
-    assert res["status"] == "not_implemented"
+    assert res["status"] in {"backend_unavailable", "needs_token", "needs_registration"}
     assert res["matches"] == []
 
 
@@ -379,8 +398,8 @@ def test_query_connectome_rejects_mouse_databases(viewer) -> None:
     for db in ("microns", "allen"):
         res = trace.query_connectome("any_id", db=db)
         assert res["status"] == "off_domain"
-    # Drosophila DBs remain a Tier-2 not_implemented (not off-domain)
-    assert trace.query_connectome("any_id", db="neuprint")["status"] == "not_implemented"
+    # neuprint is a real Drosophila DB → a backend/credential degradation, never off_domain
+    assert trace.query_connectome("any_id", db="neuprint")["status"] != "off_domain"
 
 
 def test_specialist_prompt_advertises_local_classification() -> None:
@@ -388,3 +407,168 @@ def test_specialist_prompt_advertises_local_classification() -> None:
 
     assert "add_reference_neuron" in NEURAL_TRACER_PROMPT
     assert "stubbed for now" not in NEURAL_TRACER_PROMPT
+
+
+# --------------------------------------------------------------------------- #
+# Tier 2: NBLAST adapter (navis optional; gated/degraded)
+# --------------------------------------------------------------------------- #
+def test_nblast_backend_unavailable_is_graceful(monkeypatch) -> None:
+    # forced absent backend ⇒ typed status, never an exception (runs without navis)
+    monkeypatch.setattr(morphology_nblast, "navis_available", lambda: False)
+    res = morphology_nblast.nblast_against_references(
+        np.zeros((5, 3)), ("um", "um", "um"), []
+    )
+    assert res["status"] == "backend_unavailable"
+
+
+@requires_navis
+def test_nblast_refuses_pixel_scale_data() -> None:
+    # NBLAST is micron-calibrated; pixel-scale (units None) must be refused
+    res = nblast_against_references(
+        np.zeros((10, 3)),
+        None,
+        [{"name": "r", "label": "x", "points": np.zeros((10, 3)), "units": ("um",)}],
+    )
+    assert res["status"] == "needs_microns"
+
+
+@requires_navis
+def test_nblast_self_match_ranks_highest(viewer) -> None:
+    trace.reset_skeletons()
+    pts_branched, units = _um_points(viewer, _branched_mask(), "nb_branched")
+    pts_linear, _ = _um_points(viewer, _straight_mask(), "nb_linear")
+    references = [
+        {"name": "branched", "label": "branched", "points": pts_branched, "units": units},
+        {"name": "linear", "label": "linear", "points": pts_linear, "units": units},
+    ]
+
+    res = nblast_against_references(pts_branched, units, references, k=2)
+
+    assert res["status"] == "ok"
+    # the co-located self (branched) must score highest
+    assert res["ranked"][0]["name"] == "branched"
+
+
+# --------------------------------------------------------------------------- #
+# Tier 2: neuPrint backend readiness (credential-gated, deterministic via patch)
+# --------------------------------------------------------------------------- #
+def test_neuprint_backend_unavailable(monkeypatch) -> None:
+    from imajin.analysis import connectome_neuprint as cn
+
+    monkeypatch.setattr(cn, "navis_available", lambda: False)
+    res = cn.query_neuprint(None, None)
+    assert res["status"] == "backend_unavailable"
+
+
+def test_neuprint_needs_token_when_backend_present(monkeypatch) -> None:
+    from imajin.analysis import connectome_neuprint as cn
+
+    monkeypatch.setattr(cn, "navis_available", lambda: True)
+    monkeypatch.setattr(cn, "neuprint_available", lambda: True)
+    monkeypatch.delenv("NEUPRINT_APPLICATION_CREDENTIALS", raising=False)
+    res = cn.query_neuprint(None, None)
+    assert res["status"] == "needs_token"
+
+
+def test_neuprint_with_token_needs_registration(monkeypatch) -> None:
+    from imajin.analysis import connectome_neuprint as cn
+
+    monkeypatch.setattr(cn, "navis_available", lambda: True)
+    monkeypatch.setattr(cn, "neuprint_available", lambda: True)
+    monkeypatch.setenv("NEUPRINT_APPLICATION_CREDENTIALS", "fake-token")
+    res = cn.query_neuprint(None, None)
+    assert res["status"] == "needs_registration"
+
+
+def test_query_connectome_routes_neuprint_without_skeleton_lookup(viewer, monkeypatch) -> None:
+    from imajin.analysis import connectome_neuprint as cn
+
+    monkeypatch.setattr(cn, "navis_available", lambda: False)
+    # bogus skeleton id must not raise — readiness is resolved before any lookup
+    res = trace.query_connectome("any_id", db="neuprint")
+    assert res["db"] == "neuprint"
+    assert res["status"] == "backend_unavailable"
+
+
+# --------------------------------------------------------------------------- #
+# Option B: topological persistence features (registration-free)
+# --------------------------------------------------------------------------- #
+def test_persistence_unavailable_returns_none(monkeypatch, tmp_path) -> None:
+    import imajin.analysis.morphology_persistence as mp
+
+    monkeypatch.setattr(mp, "navis_available", lambda: False)
+    assert mp.persistence_features_from_swc(tmp_path / "x.swc") is None
+
+
+@requires_navis
+def test_persistence_features_from_real_skeleton(viewer, tmp_path) -> None:
+    from imajin.analysis.morphology_persistence import persistence_features_from_swc
+    from imajin.tools._trace_export import _write_swc
+
+    trace.reset_skeletons()
+    viewer.add_labels(_branched_mask(), name="p_branch", scale=(0.4, 0.4))
+    skel_id = trace.skeletonize("p_branch")["skeleton_id"]
+    swc = tmp_path / "p_branch.swc"
+    _write_swc(trace._entry(skel_id), swc)
+
+    feats = persistence_features_from_swc(swc, samples=32)
+    assert feats is not None
+    assert len(feats) == 32
+    assert all(k.startswith("pers_") for k in feats)
+    assert all(np.isfinite(v) for v in feats.values())
+
+
+@requires_navis
+def test_persistence_is_translation_rotation_invariant(tmp_path) -> None:
+    # the headline property: persistence is invariant to rigid motion (NBLAST is not)
+    import warnings
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        import navis
+
+        from imajin.analysis.morphology_persistence import persistence_features_from_swc
+
+        base = navis.example_neurons(1, kind="skeleton")
+        moved = base.copy()
+        theta = 0.7
+        rot = np.array(
+            [[np.cos(theta), -np.sin(theta), 0], [np.sin(theta), np.cos(theta), 0], [0, 0, 1]]
+        )
+        coords = moved.nodes[["x", "y", "z"]].to_numpy() @ rot.T + np.array([1e4, -5e3, 2e3])
+        moved.nodes[["x", "y", "z"]] = coords
+
+        navis.write_swc(base, tmp_path / "base.swc")
+        navis.write_swc(moved, tmp_path / "moved.swc")
+
+    f_base = persistence_features_from_swc(tmp_path / "base.swc", samples=48)
+    f_moved = persistence_features_from_swc(tmp_path / "moved.swc", samples=48)
+    assert f_base is not None and f_moved is not None
+    for key in f_base:
+        assert f_base[key] == pytest.approx(f_moved[key], abs=1e-6)
+
+
+@requires_navis
+def test_persistence_enriches_physical_matching(viewer, tmp_path) -> None:
+    trace.reset_skeletons()
+    lib_path = str(tmp_path / "lib_um.csv")
+    for label, mask, name in [
+        ("branched", _branched_mask(), "pe_br"),
+        ("linear", _straight_mask(), "pe_lin"),
+    ]:
+        viewer.add_labels(mask, name=name, scale=(0.4, 0.4))  # physical → microns
+        sid = trace.skeletonize(name)["skeleton_id"]
+        trace.add_reference_neuron(sid, label=label, library_path=lib_path)
+
+    # the library now carries persistence columns (computed because navis is present)
+    library = load_reference_library(lib_path)
+    assert any(c.startswith("pers_") for c in library.feature_columns)
+
+    viewer.add_labels(_branched_variant_mask(), name="pe_q", scale=(0.4, 0.4))
+    qid = trace.skeletonize("pe_q")["skeleton_id"]
+    res = trace.classify_neuron_type(qid, reference=lib_path)
+
+    assert res["status"] == "ok"
+    # both query and library are micron-scale ⇒ persistence + absolute features used
+    assert res["invariant_only"] is False
+    assert res["predicted_type"] == "branched"
