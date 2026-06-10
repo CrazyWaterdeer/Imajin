@@ -199,7 +199,7 @@ tests after each.
   `current_session().tables` — do it here (safe: `_TABLES` is not deleted until
   C7) or defer it to C7, but never point it at `.samples`.**
   (tests: `test_phase3_experiment.py`, `test_tools_experiment.py`)
-- [ ] **C6. channel annotations** → `current_session().channels`. Touches
+- [x] **C6. channel annotations** → `current_session().channels`. Touches
   `put_channel_annotation`, `list_channel_annotations`, `reset_channel_annotations`,
   the channel half of snapshot/restore, **and the five `_CHANNELS` reads in the
   resolver layer that the CRUD list misses: `resolve_layer_name` (state.py:620),

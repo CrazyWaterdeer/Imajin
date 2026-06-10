@@ -411,9 +411,6 @@ class ChannelEntry:
     notes: str | None = None
 
 
-_CHANNELS: dict[str, ChannelEntry] = _CURRENT_SESSION.channels
-
-
 def current_session() -> AnalysisSession:
     return _CURRENT_SESSION
 
@@ -422,12 +419,11 @@ def set_current_session(session: AnalysisSession) -> None:
     """Replace the active session and refresh compatibility aliases."""
 
     global _CURRENT_SESSION, _VIEWER, _TABLES
-    global _CHANNELS, _TABLE_LISTENERS
+    global _TABLE_LISTENERS
 
     _CURRENT_SESSION = session
     _VIEWER = session.viewer
     _TABLES = session.tables
-    _CHANNELS = session.channels
     _TABLE_LISTENERS = session.table_listeners
 
 
@@ -603,7 +599,7 @@ def resolve_layer_name(query: str) -> str:
     q_color = canonical_channel_color(query)
     matches: list[str] = []
 
-    for entry in _CHANNELS.values():
+    for entry in current_session().channels.values():
         values = [
             entry.layer_name,
             entry.color or "",
@@ -785,7 +781,7 @@ def put_channel_annotation(
             "color must be one of green, red, uv, or ir/far red "
             f"(got {color!r})"
         )
-    _CHANNELS[resolved_layer] = ChannelEntry(
+    current_session().channels[resolved_layer] = ChannelEntry(
         layer_name=resolved_layer,
         role=canonical_role,
         color=canonical_color,
@@ -798,11 +794,11 @@ def put_channel_annotation(
 
 
 def list_channel_annotations() -> list[dict[str, Any]]:
-    return [asdict(entry) for entry in _CHANNELS.values()]
+    return [asdict(entry) for entry in current_session().channels.values()]
 
 
 def reset_channel_annotations() -> None:
-    _CHANNELS.clear()
+    current_session().channels.clear()
 
 
 def snapshot_session_state() -> dict[str, Any]:
@@ -890,7 +886,7 @@ def _restore_session_state_impl(
         layer_name = str(rec.get("layer_name") or "")
         if not layer_name:
             continue
-        _CHANNELS[layer_name] = ChannelEntry(
+        current_session().channels[layer_name] = ChannelEntry(
             layer_name=layer_name,
             role=canonical_channel_role(rec.get("role")),
             color=rec.get("color"),
@@ -968,7 +964,11 @@ class AmbiguousChannelError(KeyError):
 
 
 def _confirmed_target_layers() -> list[str]:
-    return [entry.layer_name for entry in _CHANNELS.values() if entry.role == "target"]
+    return [
+        entry.layer_name
+        for entry in current_session().channels.values()
+        if entry.role == "target"
+    ]
 
 
 def _layer_kind(layer: Any) -> str:
@@ -984,7 +984,7 @@ def _image_layer_names() -> list[str]:
     skip_roles = {"counterstain", "ignore"}
     excluded = {
         entry.layer_name
-        for entry in _CHANNELS.values()
+        for entry in current_session().channels.values()
         if entry.role in skip_roles
     }
     out: list[str] = []
@@ -1027,7 +1027,7 @@ def resolve_target_channel(query: str | None = None) -> ChannelResolution:
             raise AmbiguousChannelError(str(e), _image_layer_names()) from e
 
         if resolved != query and resolved in _layer_names():
-            entry = _CHANNELS.get(resolved)
+            entry = current_session().channels.get(resolved)
             if entry and entry.role in {"counterstain", "ignore"}:
                 raise AmbiguousChannelError(
                     f"Layer {resolved!r} is annotated as {entry.role!r}; refusing "
@@ -1050,7 +1050,7 @@ def resolve_target_channel(query: str | None = None) -> ChannelResolution:
         return ChannelResolution(
             layer=confirmed[0],
             source="annotation",
-            color=_CHANNELS[confirmed[0]].color,
+            color=current_session().channels[confirmed[0]].color,
         )
     if len(confirmed) > 1:
         raise AmbiguousChannelError(
