@@ -14,6 +14,10 @@ import numpy as np
 import pytest
 
 from imajin.analysis.morphology_features import extract_feature_vector
+from imajin.analysis.morphology_reference import (
+    append_reference,
+    load_reference_library,
+)
 from imajin.tools import trace
 
 
@@ -180,3 +184,50 @@ def test_feature_vector_from_real_descriptors(labeled_morphology_samples) -> Non
         fv = extract_feature_vector(sample["descriptors"])
         assert set(fv["invariant_keys"]).issubset(fv["features"])
         assert all(np.isfinite(v) for v in fv["features"].values())
+
+
+# --------------------------------------------------------------------------- #
+# N2: reference library I/O
+# --------------------------------------------------------------------------- #
+def test_reference_library_round_trip(labeled_morphology_samples, tmp_path) -> None:
+    lib_path = tmp_path / "refs.csv"
+    for sample in labeled_morphology_samples:
+        fv = extract_feature_vector(sample["descriptors"])
+        append_reference(lib_path, fv, label=sample["label"], name=sample["name"])
+
+    lib = load_reference_library(lib_path)
+    assert len(lib) == 3
+    assert set(lib.labels) == {"linear", "branched", "bushy"}
+    assert "n_branches" in lib.feature_columns
+
+
+def test_load_missing_library_raises(tmp_path) -> None:
+    with pytest.raises(FileNotFoundError):
+        load_reference_library(tmp_path / "nope.csv")
+
+
+def test_load_empty_library_raises(tmp_path) -> None:
+    p = tmp_path / "empty.csv"
+    p.write_text("name,label,n_branches\n")  # header only, no rows
+    with pytest.raises(ValueError):
+        load_reference_library(p)
+
+
+def test_load_library_requires_label_column(tmp_path) -> None:
+    p = tmp_path / "bad.csv"
+    p.write_text("name,n_branches\nfoo,3\n")
+    with pytest.raises(ValueError, match="label"):
+        load_reference_library(p)
+
+
+def test_append_records_units_and_detects_mixed(tmp_path) -> None:
+    lib_path = tmp_path / "mixed.csv"
+    append_reference(
+        lib_path, extract_feature_vector(_descriptor_dict("um")), label="a", name="n1"
+    )
+    assert load_reference_library(lib_path).all_physical is True
+
+    append_reference(
+        lib_path, extract_feature_vector(_descriptor_dict("pixels")), label="b", name="n2"
+    )
+    assert load_reference_library(lib_path).all_physical is False

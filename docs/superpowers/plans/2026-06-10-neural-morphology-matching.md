@@ -141,7 +141,7 @@ signatures; additions are `find_similar_neurons` and `add_reference_neuron`.
   version of the same shape (this is the M1 guard); absolute features present only
   when physical.
 
-- [ ] **N2. Reference library I/O.** `analysis/morphology_reference.py`:
+- [x] **N2. Reference library I/O.** `analysis/morphology_reference.py`:
   `load_reference_library(path)`, `append_reference(path, feature_vector, label,
   name)`. CSV schema = one row per neuron: `name, label, <feature columns>,
   units_physical`. Pure pandas. Tests (use N0 fixtures): round-trips, raises a clear
