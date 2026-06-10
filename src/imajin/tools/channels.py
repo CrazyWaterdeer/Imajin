@@ -6,10 +6,13 @@ from imajin.session import (
     AmbiguousChannelError,
     canonical_channel_color,
     canonical_channel_role,
+    get_layer,
+    get_sample,
     list_channel_annotations,
     put_channel_annotation,
     resolve_layer_name,
     resolve_target_channel,
+    viewer_or_none,
 )
 from imajin.tools.registry import tool
 
@@ -75,7 +78,6 @@ def annotate_channel(
     )
     if resolved_role == "counterstain":
         try:
-            from imajin.session import get_layer
 
             L = get_layer(layer_name)
             if hasattr(L, "colormap"):
@@ -155,10 +157,6 @@ def resolve_target_channel_tool(query: str | None = None) -> dict[str, Any]:
 def detect_counterstain_channel(
     sample_name: str | None = None,
 ) -> dict[str, Any]:
-    from imajin.session import (
-        get_sample,
-        viewer_or_none,
-    )
 
     sample_layer_names: set[str] | None = None
     if sample_name is not None:

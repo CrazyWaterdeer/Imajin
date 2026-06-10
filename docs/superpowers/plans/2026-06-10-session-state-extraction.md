@@ -284,10 +284,15 @@ to module-top imports, one source module per commit, and after each run
 - [x] **C20. segment.py / report.py / napari_ops.py** (3 each) — batched; all
   import-time clean (session pulls in nothing from imajin). report.py's lazy
   `imajin.tools.trace` imports were left as-is (not session).
-- [ ] **C21. remaining** (workflows, stats, layers, channels, view,
-  _workflow_outputs). Finish with a repo-wide check that no `from imajin.session`
-  remains inside a function body except where a genuine cycle still requires it
-  (document any such exception inline).
+- [x] **C21. remaining** (workflows, stats, layers, channels, view,
+  _workflow_outputs). All 10 tool-layer function-local session imports hoisted;
+  `grep` confirms `tools/` has no function-local `imajin.session` imports left.
+  Out-of-scope function-local session imports remain in `agent/` (context,
+  review_checkpoint), `ui/` (main, table_dock, qc_dock, manual_dock), and
+  `anchor.py` — these predate the tool-layer cycle and were never in Phase 3's
+  scope (facts table line 117). `anchor.py`'s is documented inline as a
+  deliberate keep: its `list_files` is a monkeypatch target, so hoisting would
+  bind the original at import time and defeat the patch.
 
 ---
 
