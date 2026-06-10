@@ -84,7 +84,7 @@ class QCDock(QWidget):
         self.refresh()
 
     def refresh(self) -> None:
-        from imajin.agent import state
+        from imajin import session as state
 
         previous = self.source_picker.currentData()
         items: list[tuple[str, str, str]] = []
@@ -129,7 +129,7 @@ class QCDock(QWidget):
         self._on_source_change(self.source_picker.currentIndex())
 
     def _on_source_change(self, _index: int) -> None:
-        from imajin.agent import state
+        from imajin import session as state
 
         current = self._current_source()
         if current is None:
@@ -182,7 +182,7 @@ class QCDock(QWidget):
         return -1
 
     def _compute_qc(self) -> None:
-        from imajin.agent import state
+        from imajin import session as state
         from imajin.tools import qc
 
         current = self._current_source()
@@ -217,7 +217,7 @@ class QCDock(QWidget):
         self.refresh()
 
     def _infer_kind(self, source: str) -> str:
-        from imajin.agent import state
+        from imajin import session as state
 
         if source in state.list_tables():
             return "table"

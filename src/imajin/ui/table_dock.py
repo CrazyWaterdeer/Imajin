@@ -93,13 +93,13 @@ class TableDock(QWidget):
         self.table_picker.currentTextChanged.connect(self._on_table_change)
         self._view.clicked.connect(self._on_row_click)
 
-        from imajin.agent import state
+        from imajin import session as state
 
         state.on_tables_changed(self._refresh_table_list)
         self._refresh_table_list()
 
     def _refresh_table_list(self) -> None:
-        from imajin.agent import state
+        from imajin import session as state
 
         prev = self.table_picker.currentText()
         self.table_picker.blockSignals(True)
@@ -114,7 +114,7 @@ class TableDock(QWidget):
         self._on_table_change(self.table_picker.currentText())
 
     def _on_table_change(self, name: str) -> None:
-        from imajin.agent import state
+        from imajin import session as state
 
         if not name or name not in state.list_tables():
             self._model.setDataFrame(pd.DataFrame())
@@ -122,7 +122,7 @@ class TableDock(QWidget):
         self._model.setDataFrame(state.get_table(name))
 
     def _on_row_click(self, index: QModelIndex) -> None:
-        from imajin.agent import state
+        from imajin import session as state
 
         if not index.isValid() or self.viewer is None:
             return

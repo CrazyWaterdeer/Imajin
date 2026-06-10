@@ -241,7 +241,7 @@ tests after each.
 - [x] **C12. migrate `tools/` imports** `imajin.agent.state` → `imajin.session`
   (21 files; keep each import lazy/top-level exactly as it is — only the path
   changes).
-- [ ] **C13. migrate `ui/` imports** (4 files).
+- [x] **C13. migrate `ui/` imports** (4 files).
 - [ ] **C14. migrate `agent/` imports** (execution.py, provenance.py, and any
   others). Watch for self-imports of the shim.
 - [ ] **C15. migrate root modules + coupled test patch targets.** The two

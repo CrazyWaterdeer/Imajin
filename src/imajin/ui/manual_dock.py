@@ -113,7 +113,7 @@ class ManualDock(QWidget):
         return [L.name for L in self.viewer.layers]
 
     def _table_choices(self, _widget) -> list[str]:
-        from imajin.agent import state
+        from imajin import session as state
 
         return state.list_tables()
 
