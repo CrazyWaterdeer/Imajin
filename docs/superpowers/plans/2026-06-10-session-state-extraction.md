@@ -242,8 +242,9 @@ tests after each.
   (21 files; keep each import lazy/top-level exactly as it is — only the path
   changes).
 - [x] **C13. migrate `ui/` imports** (4 files).
-- [ ] **C14. migrate `agent/` imports** (execution.py, provenance.py, and any
-  others). Watch for self-imports of the shim.
+- [x] **C14. migrate `agent/` imports** (the actual sites are `context.py` and
+  `review_checkpoint.py`; execution/provenance don't import state). Shim
+  `agent/state.py` left untouched.
 - [ ] **C15. migrate root modules + coupled test patch targets.** The two
   root-level `src/imajin/` consumers that Phase 2's directory buckets miss:
   `anchor.py` (function-local `from imajin.agent.state import list_files` at
