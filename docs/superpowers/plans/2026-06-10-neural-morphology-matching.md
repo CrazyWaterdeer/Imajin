@@ -171,7 +171,7 @@ signatures; additions are `find_similar_neurons` and `add_reference_neuron`.
   morphology descriptors). Update `test_tools_trace.py:85` to assert `"no_reference"`
   when unconfigured, plus a real classification test against an N0 library.
 
-- [ ] **N5. New tools: `add_reference_neuron` + `find_similar_neurons`.** Both
+- [x] **N5. New tools: `add_reference_neuron` + `find_similar_neurons`.** Both
   `@tool(subagent="neural_tracer", phase="6B")`. `add_reference_neuron(skeleton_id,
   label, library_path)` appends the current skeleton's feature vector — closing the
   loop so a user builds a labelled library from their own traces, fully offline.

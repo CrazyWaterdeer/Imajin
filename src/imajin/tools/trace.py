@@ -844,3 +844,68 @@ def classify_neuron_type(
         "status": res["status"],
         "note": "Morphometric (feature-vector) match — registration-free, local.",
     }
+
+
+@tool(
+    description="Add the current skeleton to a labelled morphology reference library "
+    "(CSV) so future neurons can be classified against it. Builds the library from "
+    "your own traced + labelled neurons; fully local/offline.",
+    phase="6B",
+    subagent="neural_tracer",
+)
+def add_reference_neuron(
+    skeleton_id: str,
+    label: str,
+    library_path: str = "default",
+) -> dict[str, Any]:
+    # adding a reference requires a real skeleton, so the lookup (KeyError on a bad
+    # id) is the correct behaviour here
+    fv = _skeleton_feature_vector(skeleton_id)
+    path = _reference_library_path(library_path)
+    library = append_reference(path, fv, label=label.strip(), name=skeleton_id)
+    return {
+        "skeleton_id": skeleton_id,
+        "label": label.strip(),
+        "library_path": str(path),
+        "n_references": len(library),
+        "units_physical": fv["units_physical"],
+        "status": "ok",
+    }
+
+
+@tool(
+    description="Find the k most morphometrically similar neurons in a labelled "
+    "reference library (local, offline, registration-free). Returns status "
+    "'no_reference' when no library is configured. (External connectome lookup is "
+    "query_connectome, a separate Tier-2 backend.)",
+    phase="6B",
+    subagent="neural_tracer",
+)
+def find_similar_neurons(
+    skeleton_id: str,
+    reference: str = "default",
+    k: int = 10,
+) -> dict[str, Any]:
+    # H3 ordering: reference first, skeleton lookup only when a library exists
+    library = _load_reference_or_none(reference)
+    if library is None:
+        return {
+            "skeleton_id": skeleton_id,
+            "reference": reference,
+            "matches": [],
+            "status": "no_reference",
+            "note": (
+                "No morphology reference library found. Build one with "
+                "add_reference_neuron(skeleton_id, label)."
+            ),
+        }
+
+    fv = _skeleton_feature_vector(skeleton_id)
+    res = match_against_library(fv, library, k=k)
+    return {
+        "skeleton_id": skeleton_id,
+        "reference": reference,
+        "matches": res["ranked"],
+        "invariant_only": res["invariant_only"],
+        "status": res["status"],
+    }

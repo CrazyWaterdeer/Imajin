@@ -330,3 +330,36 @@ def test_classify_neuron_type_real_and_distinct_qc(
     # H2: classification QC under a distinct key; morphology QC under the bare id
     assert state.get_qc_record(f"{qid}::classification").metrics["kind"] == "neural_classification"
     assert state.get_qc_record(qid).metrics["kind"] == "neural_morphology"
+
+
+# --------------------------------------------------------------------------- #
+# N5: add_reference_neuron + find_similar_neurons (full offline loop)
+# --------------------------------------------------------------------------- #
+def test_build_library_and_find_similar_round_trip(viewer, tmp_path) -> None:
+    trace.reset_skeletons()
+    lib_path = str(tmp_path / "lib.csv")
+
+    out = None
+    for label, mask, name in [
+        ("linear", _straight_mask(), "r_lin"),
+        ("branched", _branched_mask(), "r_br"),
+        ("bushy", _bushy_mask(), "r_bush"),
+    ]:
+        viewer.add_labels(mask, name=name)
+        sid = trace.skeletonize(name)["skeleton_id"]
+        out = trace.add_reference_neuron(sid, label=label, library_path=lib_path)
+        assert out["status"] == "ok"
+    assert out["n_references"] == 3
+
+    viewer.add_labels(_branched_variant_mask(), name="q_find")
+    qid = trace.skeletonize("q_find")["skeleton_id"]
+    res = trace.find_similar_neurons(qid, reference=lib_path, k=3)
+
+    assert res["status"] == "ok"
+    assert res["matches"][0]["label"] == "branched"
+
+
+def test_find_similar_no_reference_is_graceful(viewer, tmp_path) -> None:
+    res = trace.find_similar_neurons("any_id", reference=str(tmp_path / "none.csv"))
+    assert res["status"] == "no_reference"
+    assert res["matches"] == []
