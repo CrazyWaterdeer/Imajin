@@ -30,7 +30,7 @@ def test_chat_dock_tool_caller_accepts_tool_input_named_name(qtbot, viewer) -> N
     from collections.abc import Iterator
     from typing import Any
 
-    from imajin.agent import state
+    from imajin import session as state
     from imajin.agent.providers.base import Event
     from imajin.config import Settings
     from imajin.ui.chat_dock import ChatDock

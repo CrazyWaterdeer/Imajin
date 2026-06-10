@@ -17,7 +17,7 @@ import tifffile
 
 @pytest.fixture(autouse=True)
 def _reset_sample_annotations():
-    from imajin.agent import state
+    from imajin import session as state
     from imajin.result_bundles import reset_process_bundle
     from imajin.tools import trace
 
@@ -77,7 +77,7 @@ def plain_tiff(tmp_path: Path) -> Path:
 @pytest.fixture
 def viewer(qapp):
     if os.environ.get("QT_QPA_PLATFORM") == "offscreen":
-        from imajin.agent import state
+        from imajin import session as state
 
         v = _FakeViewer()
         state.set_viewer(v)
@@ -88,7 +88,7 @@ def viewer(qapp):
 
     import napari
 
-    from imajin.agent import state
+    from imajin import session as state
 
     v = napari.Viewer(show=False)
     state.set_viewer(v)

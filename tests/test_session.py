@@ -6,8 +6,8 @@ This is the safety net for the de-globalization refactor: it must pass on the
 current code unchanged and survive Phase 1 (internals → ``current_session()``)
 without edits.
 
-Imports target ``imajin.agent.state`` for now; Phase 2 retargets them to
-``imajin.session``.
+Imports target ``imajin.session`` (the session-state module's home after the
+Phase 2 relocation).
 """
 from __future__ import annotations
 
@@ -15,8 +15,8 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from imajin.agent import state
-from imajin.agent.state import AnalysisSession
+from imajin import session as state
+from imajin.session import AnalysisSession
 
 
 @pytest.fixture

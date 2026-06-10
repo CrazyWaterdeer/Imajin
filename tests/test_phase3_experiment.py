@@ -9,7 +9,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from imajin.agent import state
+from imajin import session as state
 
 
 @pytest.fixture(autouse=True)
@@ -954,7 +954,7 @@ def test_generate_experiment_report_includes_statistics_tables(tmp_path, monkeyp
 
 
 def test_create_analysis_recipe_passes_through_domain(viewer) -> None:
-    from imajin.agent.state import get_recipe, reset_recipes
+    from imajin.session import get_recipe, reset_recipes
     from imajin.tools.experiment import create_analysis_recipe
 
     reset_recipes()

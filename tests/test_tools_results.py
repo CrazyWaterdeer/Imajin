@@ -7,7 +7,7 @@ import numpy as np
 import pandas as pd
 import tifffile
 
-from imajin.agent import state
+from imajin import session as state
 from imajin.tools import results
 
 
@@ -177,7 +177,7 @@ def test_save_result_bundle_writes_table_spec_into_metadata(tmp_path, monkeypatc
     monkeypatch.setenv("IMAJIN_RESULTS_DIR", str(tmp_path))
     import pandas as pd
     from pathlib import Path
-    from imajin.agent import state
+    from imajin import session as state
     from imajin.result_bundles import reset_process_bundle
     from imajin.results import read_bundle_metadata
     from imajin.tools.results import save_result_bundle
@@ -206,7 +206,7 @@ def test_save_result_bundle_outputs_index_is_list_of_records(tmp_path, monkeypat
     monkeypatch.setenv("IMAJIN_RESULTS_DIR", str(tmp_path))
     import pandas as pd
     from pathlib import Path
-    from imajin.agent import state
+    from imajin import session as state
     from imajin.result_bundles import reset_process_bundle
     from imajin.results import read_bundle_metadata
     from imajin.tools.results import save_result_bundle

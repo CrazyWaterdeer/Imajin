@@ -30,7 +30,7 @@ def test_track_cells_creates_tracks_layer_and_table(viewer) -> None:
     assert res["n_detections"] >= len(data)
     assert res["tracks_layer"] in viewer.layers
 
-    from imajin.agent.state import get_table
+    from imajin.session import get_table
 
     df = get_table(res["tracks_table"])
     assert {"track_id", "t", "y", "x"}.issubset(df.columns)

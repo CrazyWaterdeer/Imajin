@@ -14,7 +14,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from imajin.agent import state
+from imajin import session as state
 from imajin.tools import channels, measure, workflows
 
 
@@ -482,7 +482,7 @@ def test_analyze_target_cells_two_tier_produces_long_format(viewer) -> None:
     assert res["n_domain_components"] >= 2
     assert "tier_table_name" in res
 
-    from imajin.agent.state import get_table
+    from imajin.session import get_table
     table = get_table(res["tier_table_name"])
     assert "tier" in table.columns
     assert set(table["tier"].unique()) == {"domain", "cells"}

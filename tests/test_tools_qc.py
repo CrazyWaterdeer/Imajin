@@ -4,7 +4,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from imajin.agent import state
+from imajin import session as state
 from imajin.tools import call_tool, qc
 
 

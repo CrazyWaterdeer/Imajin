@@ -258,7 +258,7 @@ tests after each.
   a patch on the old path silently misses once the source reads from
   `imajin.session`. (`get_table` is not patched anywhere, so `result_bundles.py`
   needs no coupled test edit.)
-- [ ] **C16. migrate `tests/` imports**, including `conftest.py` last within this
+- [x] **C16. migrate `tests/` imports**, including `conftest.py` last within this
   commit (it is `autouse`, so a mistake fails everything — change it deliberately
   and run the full suite). The `list_files` patch-target strings in
   `test_anchor.py` / `test_tools_results.py` were already handled in C15 — only
