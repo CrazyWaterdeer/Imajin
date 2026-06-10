@@ -119,7 +119,7 @@ signatures; additions are `find_similar_neurons` and `add_reference_neuron`.
 
 ### Phase 0 — Net
 
-- [ ] **N0. Characterization tests + reference fixtures.** Add
+- [x] **N0. Characterization tests + reference fixtures.** Add
   `tests/test_tools_morphology.py`. Pin the *current* stub contract
   (`classify_neuron_type` / `query_connectome` return a dict with a `status` key,
   today `"not_implemented"`) so the change is observable. Add a fixture that
