@@ -253,10 +253,6 @@ class AnalysisRun:
     error: str | None = None
 
 
-_RUNS: dict[str, AnalysisRun] = _CURRENT_SESSION.runs
-_RUN_COUNTER: list[int] = _CURRENT_SESSION.run_counter
-
-
 def put_run(
     sample_id: str,
     file_id: str,
@@ -268,10 +264,11 @@ def put_run(
     error: str | None = None,
     run_id: str | None = None,
 ) -> str:
+    session = current_session()
     if run_id is None:
-        _RUN_COUNTER[0] += 1
-        run_id = f"run_{_RUN_COUNTER[0]:04d}"
-    _RUNS[run_id] = AnalysisRun(
+        session.run_counter[0] += 1
+        run_id = f"run_{session.run_counter[0]:04d}"
+    session.runs[run_id] = AnalysisRun(
         run_id=run_id,
         sample_id=sample_id,
         file_id=file_id,
@@ -287,18 +284,20 @@ def put_run(
 
 
 def get_run(run_id: str) -> AnalysisRun:
-    if run_id not in _RUNS:
-        raise KeyError(f"Run {run_id!r} not found. Available: {list(_RUNS)}")
-    return _RUNS[run_id]
+    runs = current_session().runs
+    if run_id not in runs:
+        raise KeyError(f"Run {run_id!r} not found. Available: {list(runs)}")
+    return runs[run_id]
 
 
 def list_runs() -> list[dict[str, Any]]:
-    return [asdict(r) for r in _RUNS.values()]
+    return [asdict(r) for r in current_session().runs.values()]
 
 
 def reset_runs() -> None:
-    _RUNS.clear()
-    _RUN_COUNTER[0] = 0
+    session = current_session()
+    session.runs.clear()
+    session.run_counter[0] = 0
 
 
 def put_qc_record(
@@ -428,14 +427,12 @@ def set_current_session(session: AnalysisSession) -> None:
     """Replace the active session and refresh compatibility aliases."""
 
     global _CURRENT_SESSION, _VIEWER, _TABLES, _QC_RECORDS
-    global _RUNS, _RUN_COUNTER, _SAMPLES, _CHANNELS, _TABLE_LISTENERS
+    global _SAMPLES, _CHANNELS, _TABLE_LISTENERS
 
     _CURRENT_SESSION = session
     _VIEWER = session.viewer
     _TABLES = session.tables
     _QC_RECORDS = session.qc_records
-    _RUNS = session.runs
-    _RUN_COUNTER = session.run_counter
     _SAMPLES = session.samples
     _CHANNELS = session.channels
     _TABLE_LISTENERS = session.table_listeners
@@ -942,7 +939,8 @@ def _restore_session_state_impl(
             except (IndexError, ValueError):
                 pass
     if max_run:
-        _RUN_COUNTER[0] = max(_RUN_COUNTER[0], max_run)
+        run_counter = current_session().run_counter
+        run_counter[0] = max(run_counter[0], max_run)
 
     for rec in qc_records or []:
         put_qc_record(

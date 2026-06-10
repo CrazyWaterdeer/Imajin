@@ -183,7 +183,7 @@ tests after each.
 - [x] **C2. recipes** → `current_session().recipes`. Touches `put_recipe`,
   `get_recipe`, `list_recipes`, `reset_recipes`. Delete `_RECIPES`.
   (tests: `test_recipe_import.py`)
-- [ ] **C3. runs** → `current_session().runs` and `.run_counter`. Touches
+- [x] **C3. runs** → `current_session().runs` and `.run_counter`. Touches
   `put_run`, `get_run`, `list_runs`, `reset_runs`, **and the run-counter
   continuation `_RUN_COUNTER[0] = max(...)` in `_restore_session_state_impl`
   (state.py:949).** Delete `_RUNS`, `_RUN_COUNTER`. (guarded by the C0
