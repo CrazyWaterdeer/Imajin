@@ -368,10 +368,14 @@ Done (Tier 1 — local & offline, no extra dependency):
   skeletons, then `classify_neuron_type` / `find_similar_neurons`. Registration-free
   (feature-vector based), so it needs no template and works on unregistered traces.
 
-Roadmap (Tier 2 — opt-in `uv sync --extra connectome`):
-- NBLAST spatial morphology comparison (`navis`) + template registration
-  (`navis-flybrains`) — the prerequisite for valid cross-dataset matching
-- Drosophila connectome lookup (neuPrint → FlyWire) via `query_connectome`
+Tier 2 — opt-in `uv sync --extra connectome` (partially built):
+- DONE: registration-free **topological persistence** descriptors (rotation/
+  translation-invariant) enrich matching when the extra is installed
+- DONE: NBLAST adapter (`navis`) + neuPrint backend scaffold; `query_connectome`
+  reports honest `backend_unavailable / needs_token / needs_registration` statuses
+- PENDING: live neuPrint lookup — blocked on an API token + network and on template
+  registration (`navis-flybrains`, confocal → hemibrain space), the prerequisite for
+  valid cross-dataset NBLAST; then FlyWire (CAVE auth)
 
 Out of scope:
 - MICrONS / Allen (mouse connectomes; this app targets Drosophila — `query_connectome`
