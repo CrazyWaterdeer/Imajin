@@ -218,7 +218,7 @@ tests after each.
 - [x] **C8. viewer** → `current_session().viewer` only. Simplify `set_viewer` to
   set `current_session().viewer`; `get_viewer` already reads it. Delete `_VIEWER`.
   (tests: `test_tools_view.py`)
-- [ ] **C9. notification machinery onto the session.** Add
+- [x] **C9. notification machinery onto the session.** Add
   `state_change_depth`/`pending_tables_changed` (and, if kept, pending reasons) as
   `AnalysisSession` fields; rewrite `_state_changed`, `_tables_changed`,
   `bulk_state_update` to use them. Behavior is identical for single-session usage

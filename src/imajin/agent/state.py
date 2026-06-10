@@ -26,12 +26,12 @@ class AnalysisSession:
     samples: dict[str, "SampleAnnotation"] = field(default_factory=dict)
     channels: dict[str, "ChannelEntry"] = field(default_factory=dict)
     table_listeners: list[Any] = field(default_factory=list)
+    state_change_depth: int = 0
+    pending_state_reasons: list[str] = field(default_factory=list)
+    pending_tables_changed: bool = False
 
 
 _CURRENT_SESSION = AnalysisSession()
-_STATE_CHANGE_DEPTH = 0
-_PENDING_STATE_REASONS: list[str] = []
-_PENDING_TABLES_CHANGED = False
 
 
 @dataclass
@@ -54,21 +54,19 @@ class QCRecord:
 
 
 def _state_changed(reason: str, *, tables_changed: bool = False) -> None:
-    global _PENDING_TABLES_CHANGED
-
-    if _STATE_CHANGE_DEPTH > 0:
-        _PENDING_STATE_REASONS.append(reason)
-        _PENDING_TABLES_CHANGED = _PENDING_TABLES_CHANGED or tables_changed
+    session = current_session()
+    if session.state_change_depth > 0:
+        session.pending_state_reasons.append(reason)
+        session.pending_tables_changed = session.pending_tables_changed or tables_changed
         return
     if tables_changed:
         _emit_tables_changed()
 
 
 def _tables_changed() -> None:
-    global _PENDING_TABLES_CHANGED
-
-    if _STATE_CHANGE_DEPTH > 0:
-        _PENDING_TABLES_CHANGED = True
+    session = current_session()
+    if session.state_change_depth > 0:
+        session.pending_tables_changed = True
         return
     _emit_tables_changed()
 
@@ -76,17 +74,16 @@ def _tables_changed() -> None:
 @contextmanager
 def bulk_state_update(reason: str | None = None):
     """Coalesce state-change notifications produced inside a bulk mutation."""
-    global _STATE_CHANGE_DEPTH, _PENDING_STATE_REASONS, _PENDING_TABLES_CHANGED
-
-    _STATE_CHANGE_DEPTH += 1
+    session = current_session()
+    session.state_change_depth += 1
     try:
         yield
     finally:
-        _STATE_CHANGE_DEPTH = max(0, _STATE_CHANGE_DEPTH - 1)
-        if _STATE_CHANGE_DEPTH == 0:
-            tables_changed = _PENDING_TABLES_CHANGED
-            _PENDING_STATE_REASONS = []
-            _PENDING_TABLES_CHANGED = False
+        session.state_change_depth = max(0, session.state_change_depth - 1)
+        if session.state_change_depth == 0:
+            tables_changed = session.pending_tables_changed
+            session.pending_state_reasons = []
+            session.pending_tables_changed = False
             if tables_changed:
                 _emit_tables_changed()
 
