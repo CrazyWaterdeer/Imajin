@@ -148,7 +148,7 @@ def test_results_root_uses_session_anchor_when_no_project(tmp_path, monkeypatch)
     fake_file.write_bytes(b"")
 
     monkeypatch.setattr(
-        "imajin.agent.state.list_files",
+        "imajin.session.list_files",
         lambda: [{"path": str(fake_file)}],
     )
     assert _results.results_root() == folder.absolute()
@@ -157,7 +157,7 @@ def test_results_root_uses_session_anchor_when_no_project(tmp_path, monkeypatch)
 def test_results_root_falls_back_to_user_root_when_no_anchor(tmp_path, monkeypatch):
     from imajin import results as _results
 
-    monkeypatch.setattr("imajin.agent.state.list_files", lambda: [])
+    monkeypatch.setattr("imajin.session.list_files", lambda: [])
     monkeypatch.setattr(_results, "user_results_root", lambda: tmp_path / "user_root")
     assert _results.results_root() == tmp_path / "user_root"
 

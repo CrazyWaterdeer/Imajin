@@ -245,7 +245,7 @@ tests after each.
 - [x] **C14. migrate `agent/` imports** (the actual sites are `context.py` and
   `review_checkpoint.py`; execution/provenance don't import state). Shim
   `agent/state.py` left untouched.
-- [ ] **C15. migrate root modules + coupled test patch targets.** The two
+- [x] **C15. migrate root modules + coupled test patch targets.** The two
   root-level `src/imajin/` consumers that Phase 2's directory buckets miss:
   `anchor.py` (function-local `from imajin.agent.state import list_files` at
   line 36 — also rewrite the `imajin.agent.state.list_files` reference in its
