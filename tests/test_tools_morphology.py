@@ -10,17 +10,36 @@ Everything here passes on the current code with only existing dependencies.
 """
 from __future__ import annotations
 
+import importlib.util
+
 import numpy as np
 import pytest
 
 from imajin import session as state
+from imajin.analysis import morphology_nblast
 from imajin.analysis.morphology_features import extract_feature_vector
 from imajin.analysis.morphology_match import match_against_library
+from imajin.analysis.morphology_nblast import nblast_against_references
 from imajin.analysis.morphology_reference import (
     append_reference,
     load_reference_library,
 )
 from imajin.tools import trace
+
+
+requires_navis = pytest.mark.skipif(
+    importlib.util.find_spec("navis") is None,
+    reason="navis not installed (uv sync --extra connectome)",
+)
+
+
+def _um_points(viewer, mask, name, scale=(0.4, 0.4)):
+    """Skeletonize a mask at a physical (micron) scale; return (points_um, units)."""
+    viewer.add_labels(mask, name=name, scale=scale)
+    skel_id = trace.skeletonize(name)["skeleton_id"]
+    entry = trace._entry(skel_id)
+    points = np.asarray(entry.skel.coordinates, dtype=float) * np.asarray(entry.record.spacing)
+    return points, entry.record.units
 
 
 # --------------------------------------------------------------------------- #
@@ -388,3 +407,43 @@ def test_specialist_prompt_advertises_local_classification() -> None:
 
     assert "add_reference_neuron" in NEURAL_TRACER_PROMPT
     assert "stubbed for now" not in NEURAL_TRACER_PROMPT
+
+
+# --------------------------------------------------------------------------- #
+# Tier 2: NBLAST adapter (navis optional; gated/degraded)
+# --------------------------------------------------------------------------- #
+def test_nblast_backend_unavailable_is_graceful(monkeypatch) -> None:
+    # forced absent backend ⇒ typed status, never an exception (runs without navis)
+    monkeypatch.setattr(morphology_nblast, "navis_available", lambda: False)
+    res = morphology_nblast.nblast_against_references(
+        np.zeros((5, 3)), ("um", "um", "um"), []
+    )
+    assert res["status"] == "backend_unavailable"
+
+
+@requires_navis
+def test_nblast_refuses_pixel_scale_data() -> None:
+    # NBLAST is micron-calibrated; pixel-scale (units None) must be refused
+    res = nblast_against_references(
+        np.zeros((10, 3)),
+        None,
+        [{"name": "r", "label": "x", "points": np.zeros((10, 3)), "units": ("um",)}],
+    )
+    assert res["status"] == "needs_microns"
+
+
+@requires_navis
+def test_nblast_self_match_ranks_highest(viewer) -> None:
+    trace.reset_skeletons()
+    pts_branched, units = _um_points(viewer, _branched_mask(), "nb_branched")
+    pts_linear, _ = _um_points(viewer, _straight_mask(), "nb_linear")
+    references = [
+        {"name": "branched", "label": "branched", "points": pts_branched, "units": units},
+        {"name": "linear", "label": "linear", "points": pts_linear, "units": units},
+    ]
+
+    res = nblast_against_references(pts_branched, units, references, k=2)
+
+    assert res["status"] == "ok"
+    # the co-located self (branched) must score highest
+    assert res["ranked"][0]["name"] == "branched"
