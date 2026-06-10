@@ -215,7 +215,7 @@ tests after each.
   `snapshot_session_state` (state.py:831), and `attach_sample_columns_to_table`
   (state.py:720–734) unless it was already migrated in C5.** Delete `_TABLES`,
   `_TABLE_LISTENERS`. (tests: `test_table_dock.py`, `test_tools_measure.py`)
-- [ ] **C8. viewer** → `current_session().viewer` only. Simplify `set_viewer` to
+- [x] **C8. viewer** → `current_session().viewer` only. Simplify `set_viewer` to
   set `current_session().viewer`; `get_viewer` already reads it. Delete `_VIEWER`.
   (tests: `test_tools_view.py`)
 - [ ] **C9. notification machinery onto the session.** Add

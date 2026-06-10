@@ -29,7 +29,6 @@ class AnalysisSession:
 
 
 _CURRENT_SESSION = AnalysisSession()
-_VIEWER: Any | None = _CURRENT_SESSION.viewer
 _STATE_CHANGE_DEPTH = 0
 _PENDING_STATE_REASONS: list[str] = []
 _PENDING_TABLES_CHANGED = False
@@ -417,10 +416,9 @@ def current_session() -> AnalysisSession:
 def set_current_session(session: AnalysisSession) -> None:
     """Replace the active session and refresh compatibility aliases."""
 
-    global _CURRENT_SESSION, _VIEWER
+    global _CURRENT_SESSION
 
     _CURRENT_SESSION = session
-    _VIEWER = session.viewer
 
 
 def reset_session(viewer: Any | None = None) -> AnalysisSession:
@@ -466,9 +464,7 @@ def canonical_channel_role(value: str | None) -> str:
 
 
 def set_viewer(v: Any) -> None:
-    global _VIEWER
-    _CURRENT_SESSION.viewer = v
-    _VIEWER = v
+    current_session().viewer = v
 
 
 def get_viewer() -> Any:
