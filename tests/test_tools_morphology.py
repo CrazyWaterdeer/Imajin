@@ -363,3 +363,28 @@ def test_find_similar_no_reference_is_graceful(viewer, tmp_path) -> None:
     res = trace.find_similar_neurons("any_id", reference=str(tmp_path / "none.csv"))
     assert res["status"] == "no_reference"
     assert res["matches"] == []
+
+
+# --------------------------------------------------------------------------- #
+# N6: specialist exposure + query_connectome honesty
+# --------------------------------------------------------------------------- #
+def test_specialist_exposes_new_morphology_tools() -> None:
+    from imajin.tools.registry import tools_for_anthropic
+
+    names = {t["name"] for t in tools_for_anthropic("neural_tracer")}
+    assert {"add_reference_neuron", "find_similar_neurons", "classify_neuron_type"} <= names
+
+
+def test_query_connectome_rejects_mouse_databases(viewer) -> None:
+    for db in ("microns", "allen"):
+        res = trace.query_connectome("any_id", db=db)
+        assert res["status"] == "off_domain"
+    # Drosophila DBs remain a Tier-2 not_implemented (not off-domain)
+    assert trace.query_connectome("any_id", db="neuprint")["status"] == "not_implemented"
+
+
+def test_specialist_prompt_advertises_local_classification() -> None:
+    from imajin.agent.specialists.neural_tracer import NEURAL_TRACER_PROMPT
+
+    assert "add_reference_neuron" in NEURAL_TRACER_PROMPT
+    assert "stubbed for now" not in NEURAL_TRACER_PROMPT

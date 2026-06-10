@@ -738,9 +738,9 @@ def export_neural_trace(
 
 
 @tool(
-    description="Query a connectome database for nearest reference neurons by morphology. "
-    "STUB — returns 'not implemented' until a target organism / database backend is "
-    "wired up (planned: FlyWire, neuPrint, navis/NBLAST plugins).",
+    description="Query an external connectome database (neuPrint/FlyWire, Drosophila) for "
+    "reference neurons by morphology. Tier-2 backend — currently returns "
+    "'not_implemented'. For local, offline morphology search use find_similar_neurons.",
     phase="6B",
     subagent="neural_tracer",
 )
@@ -749,15 +749,29 @@ def query_connectome(
     db: str = "neuprint",
     k: int = 10,
 ) -> dict[str, Any]:
-    if db not in {"flywire", "neuprint", "microns", "allen"}:
-        raise ValueError(f"unknown db {db!r}; expected flywire|neuprint|microns|allen")
+    db = db.lower().strip()
+    if db in {"microns", "allen"}:
+        return {
+            "skeleton_id": skeleton_id,
+            "db": db,
+            "matches": [],
+            "status": "off_domain",
+            "note": f"{db!r} is a mouse connectome; this app targets Drosophila. Not supported.",
+        }
+    if db not in {"flywire", "neuprint"}:
+        raise ValueError(
+            f"unknown db {db!r}; expected neuprint|flywire (microns/allen are mouse, off-domain)"
+        )
     return {
         "skeleton_id": skeleton_id,
         "db": db,
         "k": k,
         "matches": [],
         "status": "not_implemented",
-        "note": "Connectome backend deferred. Local trace/export is available; reference matching needs a plugin/backend.",
+        "note": (
+            "External connectome lookup is a Tier-2 backend (needs navis + template "
+            "registration + a DB token). For local morphology search use find_similar_neurons."
+        ),
     }
 
 

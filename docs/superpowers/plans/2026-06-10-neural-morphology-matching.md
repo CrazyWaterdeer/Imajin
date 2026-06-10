@@ -180,7 +180,7 @@ signatures; additions are `find_similar_neurons` and `add_reference_neuron`.
   `query_connectome`, which stays external/Tier 2). Same no-reference / no-skeleton
   ordering as N4. Tests: build → append → classify round-trip; ranking sanity.
 
-- [ ] **N6. Specialist prompt + keep `query_connectome` honest.** In
+- [x] **N6. Specialist prompt + keep `query_connectome` honest.** In
   `neural_tracer.py`: rewrite the "stubbed for now" paragraph — morphometric
   classification and nearest-neighbour search are **available locally/offline**;
   NBLAST + connectome DB lookups are Tier 2 (need `navis` + template registration).
