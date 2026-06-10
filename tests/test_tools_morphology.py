@@ -13,6 +13,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
+from imajin.analysis.morphology_features import extract_feature_vector
 from imajin.tools import trace
 
 
@@ -128,3 +129,54 @@ def test_toy_shapes_are_morphometrically_discriminable(
 
     # endpoint count tracks branchiness too
     assert by_label["bushy"]["n_endpoints"] > by_label["linear"]["n_endpoints"]
+
+
+# --------------------------------------------------------------------------- #
+# N1: feature extractor + unit guard
+# --------------------------------------------------------------------------- #
+def _descriptor_dict(length_unit: str, scale: float = 1.0) -> dict:
+    """Same topology at a given length scale; lengths multiply by ``scale``."""
+    return {
+        "total_length": 100.0 * scale,
+        "length_unit": length_unit,
+        "mean_branch_length": 20.0 * scale,
+        "median_branch_length": 18.0 * scale,
+        "n_branches": 5,
+        "n_endpoints": 4,
+        "n_junctions": 2,
+        "n_components": 1,
+        "n_terminal_branches": 3,
+        "n_internal_branches": 2,
+        "bbox_scaled": (40.0 * scale, 30.0 * scale, 0.0),
+        "skeleton_volume_occupancy": 0.05,
+    }
+
+
+def test_invariant_features_identical_across_units() -> None:
+    # the M1 guard: the same shape at pixel scale vs 0.5 um/px must yield
+    # identical scale-invariant features
+    fv_px = extract_feature_vector(_descriptor_dict("pixels", scale=1.0))
+    fv_um = extract_feature_vector(_descriptor_dict("um", scale=0.5))
+
+    assert fv_px["units_physical"] is False
+    assert fv_um["units_physical"] is True
+    assert fv_px["invariant_keys"] == fv_um["invariant_keys"]
+    for key in fv_px["invariant_keys"]:
+        assert fv_px["features"][key] == pytest.approx(fv_um["features"][key]), key
+
+
+def test_absolute_features_gated_on_physical_units() -> None:
+    fv_px = extract_feature_vector(_descriptor_dict("pixels"))
+    fv_um = extract_feature_vector(_descriptor_dict("um"))
+
+    for absolute in ("total_length_um", "mean_branch_length_um", "bbox_diagonal_um"):
+        assert absolute not in fv_px["features"]
+        assert absolute in fv_um["features"]
+    assert fv_um["features"]["bbox_diagonal_um"] == pytest.approx((40**2 + 30**2) ** 0.5)
+
+
+def test_feature_vector_from_real_descriptors(labeled_morphology_samples) -> None:
+    for sample in labeled_morphology_samples:
+        fv = extract_feature_vector(sample["descriptors"])
+        assert set(fv["invariant_keys"]).issubset(fv["features"])
+        assert all(np.isfinite(v) for v in fv["features"].values())

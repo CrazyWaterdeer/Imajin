@@ -130,7 +130,7 @@ signatures; additions are `find_similar_neurons` and `add_reference_neuron`.
 
 ### Phase 1 — Tier 1: morphometric matching (no new dependency)
 
-- [ ] **N1. Feature extractor + unit guard.** `analysis/morphology_features.py`:
+- [x] **N1. Feature extractor + unit guard.** `analysis/morphology_features.py`:
   `extract_feature_vector(descriptors, branch_df=None) -> {features: dict,
   units_physical: bool}`. **Scale-invariant core** (always present): n_branches,
   endpoint/junction counts, terminal_fraction, internal_fraction,
