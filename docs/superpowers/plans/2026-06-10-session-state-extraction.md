@@ -233,7 +233,7 @@ tests after each.
 
 ### Phase 2 — Relocate out of `agent/`
 
-- [ ] **C11. move + shim.** `git mv src/imajin/agent/state.py
+- [x] **C11. move + shim.** `git mv src/imajin/agent/state.py
   src/imajin/session.py`. Recreate `src/imajin/agent/state.py` as a one-line
   re-export shim: `from imajin.session import *  # noqa: F401,F403` (default star
   re-exports every public name; external code imports only public names, verified).
