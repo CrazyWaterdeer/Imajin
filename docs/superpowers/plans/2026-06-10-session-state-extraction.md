@@ -180,7 +180,7 @@ tests after each.
   direct `_FILES[...]` write in `_restore_session_state_impl` (state.py:879).**
   Delete `_FILES`. (tests: `test_session.py`, `test_phase2_workflow.py`, plus the
   C0 six-family restore round-trip)
-- [ ] **C2. recipes** → `current_session().recipes`. Touches `put_recipe`,
+- [x] **C2. recipes** → `current_session().recipes`. Touches `put_recipe`,
   `get_recipe`, `list_recipes`, `reset_recipes`. Delete `_RECIPES`.
   (tests: `test_recipe_import.py`)
 - [ ] **C3. runs** → `current_session().runs` and `.run_counter`. Touches

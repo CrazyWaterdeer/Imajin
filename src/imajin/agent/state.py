@@ -186,9 +186,6 @@ class AnalysisRecipe:
     review_mode: str = "auto"  # "auto" | "interactive"
 
 
-_RECIPES: dict[str, AnalysisRecipe] = _CURRENT_SESSION.recipes
-
-
 def put_recipe(
     name: str,
     target_channel: str | None = None,
@@ -209,7 +206,8 @@ def put_recipe(
         raise ValueError(
             f"review_mode must be 'auto' or 'interactive' (got {review_mode!r})"
         )
-    _RECIPES[name] = AnalysisRecipe(
+    recipes = current_session().recipes
+    recipes[name] = AnalysisRecipe(
         recipe_id=name,
         name=name,
         target_channel=target_channel,
@@ -228,17 +226,18 @@ def put_recipe(
 
 
 def get_recipe(name: str) -> AnalysisRecipe:
-    if name not in _RECIPES:
-        raise KeyError(f"Recipe {name!r} not found. Available: {list(_RECIPES)}")
-    return _RECIPES[name]
+    recipes = current_session().recipes
+    if name not in recipes:
+        raise KeyError(f"Recipe {name!r} not found. Available: {list(recipes)}")
+    return recipes[name]
 
 
 def list_recipes() -> list[dict[str, Any]]:
-    return [asdict(r) for r in _RECIPES.values()]
+    return [asdict(r) for r in current_session().recipes.values()]
 
 
 def reset_recipes() -> None:
-    _RECIPES.clear()
+    current_session().recipes.clear()
 
 
 @dataclass
@@ -428,14 +427,13 @@ def current_session() -> AnalysisSession:
 def set_current_session(session: AnalysisSession) -> None:
     """Replace the active session and refresh compatibility aliases."""
 
-    global _CURRENT_SESSION, _VIEWER, _TABLES, _QC_RECORDS, _RECIPES
+    global _CURRENT_SESSION, _VIEWER, _TABLES, _QC_RECORDS
     global _RUNS, _RUN_COUNTER, _SAMPLES, _CHANNELS, _TABLE_LISTENERS
 
     _CURRENT_SESSION = session
     _VIEWER = session.viewer
     _TABLES = session.tables
     _QC_RECORDS = session.qc_records
-    _RECIPES = session.recipes
     _RUNS = session.runs
     _RUN_COUNTER = session.run_counter
     _SAMPLES = session.samples
