@@ -404,6 +404,9 @@ def segment_3d_cells_auto(
             "segmentation_method": "auto_3d_cells",
             "selected_strategy": best.strategy,
             "selection_confidence": confidence,
+            # Alias to the shared vision-gate key (M1) so an ambiguous 3D
+            # candidate also surfaces its QC overlay to the agent.
+            "roi_confidence": "low" if confidence == "fail" else confidence,
             "selected_score": best.score,
             "candidate_summaries": [_candidate_summary(c) for c in candidates],
             "candidate_modes": candidate_modes or ["direct_3d", "plane_stitch"],
@@ -450,6 +453,7 @@ def segment_3d_cells_auto(
         "segmentation_method": "auto_3d_cells",
         "selected_strategy": best.strategy,
         "selection_confidence": confidence,
+        "roi_confidence": "low" if confidence == "fail" else confidence,
         "selected_score": float(best.score),
         "candidate_summaries": [_candidate_summary(c) for c in candidates],
         "n_objects": qc["n_objects"],
