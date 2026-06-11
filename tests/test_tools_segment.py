@@ -231,6 +231,39 @@ def test_segment_target_array_runs_headless() -> None:
     assert seg.roi_confidence in {"high", "medium", "low"}
 
 
+def test_auto_segment_target_recovers_and_reports_history(viewer) -> None:
+    rng = np.random.default_rng(0)
+    image = rng.normal(20.0, 1.0, (128, 128)).astype(np.float32)
+    image[40:54, 40:54] += 8.0
+    image[80:94, 70:84] += 8.0
+    viewer.add_image(image, name="target")
+
+    res = segment.auto_segment_target(
+        "target",
+        min_snr=18.0,  # too strict -> first pass finds nothing
+        min_size=30,
+        smoothing_sigma=0,
+        background_radius=16,
+        max_iters=3,
+    )
+
+    assert res["labels_layer"] == "target_objects"
+    assert res["n_objects"] == 2  # recovered the two blobs
+    assert res["n_iterations"] >= 1  # the loop corrected at least once
+    assert res["applied_params"]["min_snr"] < 18.0  # the bar was lowered
+    assert res["roi_confidence"] in {"high", "medium", "low"}
+    assert isinstance(res["correction_history"], list)
+    assert len(res["correction_history"]) >= 2
+    labels = np.asarray(viewer.layers[res["labels_layer"]].data)
+    assert labels.shape == image.shape
+
+
+def test_auto_segment_target_is_vision_hint() -> None:
+    from imajin.tools.registry import get_tool
+
+    assert get_tool("auto_segment_target").vision_hint is True
+
+
 def test_segment_target_objects_treats_unannotated_3d_as_z_stack(viewer) -> None:
     image = np.zeros((4, 64, 64), dtype=np.float32)
     image[1:4, 22:34, 24:36] = 90.0
