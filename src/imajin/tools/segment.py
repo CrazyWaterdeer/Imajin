@@ -1288,6 +1288,12 @@ def correct_roi(
         "threshold": new_result.get("threshold"),
         "threshold_scope": new_result.get("threshold_scope"),
         "qc_warnings": new_result.get("qc_warnings", []),
+        # Surface the corrected result's score + overlay (H3) so the agent-vision
+        # gate fires on the correction it just made -- the moment it most needs
+        # to see whether the ROI is now right.
+        "roi_score": new_result.get("roi_score"),
+        "roi_confidence": new_result.get("roi_confidence"),
+        "qc_png_path": new_result.get("qc_png_path"),
         "applied_params": {
             k: v for k, v in kwargs.items() if k not in {"image_layer"}
         },

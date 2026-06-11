@@ -140,6 +140,13 @@ def _anthropic_to_openai_messages(messages: list[dict[str, Any]]) -> list[dict[s
             elif btype == "tool_result":
                 content_val = block.get("content", "")
                 if isinstance(content_val, list):
+                    # OpenAI's `role: tool` messages are text-only, so a QC-overlay
+                    # image block attached to a tool_result (Phase A) is dropped here
+                    # and the agent runs text-only on this provider. TODO: to give
+                    # OpenAI-compat models eyes too, emit the image as a trailing
+                    # `role: user` message with an `image_url` data URL instead of
+                    # discarding it. Anthropic is the primary provider and handles
+                    # the image block natively, so this degradation is acceptable.
                     content_val = "".join(
                         b.get("text", "") for b in content_val if b.get("type") == "text"
                     )
