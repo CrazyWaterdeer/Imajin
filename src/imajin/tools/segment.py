@@ -32,8 +32,11 @@ from imajin.analysis.target_segmentation import (
 from imajin.analysis.segmentation_auto3d import (
     SegmentationCandidate as _SegmentationCandidate,
     build_auto3d_candidates as _build_auto3d_candidates,
+    confidence_from_score as _confidence_from_score,
     filter_labels_by_z_extent as _filter_labels_by_z_extent,
     rank_segmentation_labels as _rank_segmentation_labels,
+    roi_shape_metrics as _roi_shape_metrics,
+    score_roi_quality as _score_roi_quality,
     selection_confidence as _selection_confidence,
 )
 from imajin.agent.qt_dispatch import call_on_main
@@ -802,6 +805,19 @@ def segment_target_objects(
         )
         qc_warnings = saturation_warnings + threshold_warnings + qc_warnings
 
+    # Deterministic ROI-quality score on the *corrected* metrics (H2) so the
+    # agent-vision gate (Phase A) and corrections can reason about whether this
+    # ROI is too wide / too narrow without re-running QC on the raw image.
+    score_metrics = {**qc, **signal_qc, **_roi_shape_metrics(masks)}
+    roi_score = _score_roi_quality(
+        score_metrics,
+        [],
+        noise_sigma=noise_sigma,
+        ndim=masks.ndim,
+        has_multiple_z=(masks.ndim == 3 and masks.shape[0] > 1),
+    )
+    roi_confidence = _confidence_from_score(roi_score, score_metrics)
+
     out_name = f"{L.name}_objects"
     layer = call_on_main(
         add_labels_from_worker,
@@ -837,6 +853,8 @@ def segment_target_objects(
             "voxel_spacing": spacing,
             "axes": "ZYX" if data.ndim == 3 else "YX",
             "qc_warnings": qc_warnings,
+            "roi_score": roi_score,
+            "roi_confidence": roi_confidence,
             **qc,
             **signal_qc,
         },
@@ -911,6 +929,8 @@ def segment_target_objects(
         "object_area_median": qc["object_area_median"],
         "object_area_max": qc["object_area_max"],
         **signal_qc,
+        "roi_score": roi_score,
+        "roi_confidence": roi_confidence,
         "qc_warnings": qc_warnings,
         "qc_png_path": saved_qc_png,
         "qc_png_error": qc_png_error,

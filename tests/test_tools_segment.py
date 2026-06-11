@@ -203,6 +203,9 @@ def test_segment_target_objects_uses_local_background(viewer) -> None:
     assert labels[94, 52] > 0
     assert labels[30, 90] == 0
     assert res["top_bright_outside_fraction"] < 0.25
+    # ROI-quality fields surfaced for the agent-vision gate (C0.4)
+    assert isinstance(res["roi_score"], float)
+    assert res["roi_confidence"] in {"high", "medium"}  # a clean 2-object ROI is not ambiguous
 
 
 def test_segment_target_objects_treats_unannotated_3d_as_z_stack(viewer) -> None:

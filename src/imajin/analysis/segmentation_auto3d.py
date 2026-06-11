@@ -632,6 +632,22 @@ def confidence_from_score(score: float, metrics: dict[str, Any]) -> str:
     return "medium"
 
 
+def roi_shape_metrics(labels: np.ndarray) -> dict[str, float]:
+    """Bundle the label-shape fractions that :func:`score_roi_quality` consumes.
+
+    Lets the target-object path build the same metric set as auto3d candidate
+    ranking without duplicating the per-fraction helpers. For 2D inputs the
+    z-specific fractions are 0.
+    """
+    labels_arr = np.asarray(labels, dtype=np.int32)
+    return {
+        "single_plane_object_fraction": _single_plane_object_fraction(labels_arr),
+        "z_gap_object_fraction": _z_gap_object_fraction(labels_arr),
+        "tiny_object_fraction": _tiny_object_fraction(labels_arr),
+        "largest_to_median_object_ratio": _largest_to_median_ratio(labels_arr),
+    }
+
+
 def rank_segmentation_labels(
     image: np.ndarray,
     labels: np.ndarray,
