@@ -389,14 +389,17 @@ Out of scope:
 - What minimum group-level statistics should the first experiment report include?
 - Should project/session state be saved as JSON, SQLite, or another format?
 
-## Immediate Next Step
+## Metadata / channel cleanup — DONE
 
-Before adding more analysis features, implement the metadata/channel cleanup:
+The metadata/channel cleanup that gated later batch/report work is complete:
 
-1. metadata-first channel resolution
-2. confirmed vs suggested channel roles
-3. acquisition metadata in reports
-4. no filename hard-coding
-
-This prevents later batch/report functionality from being built on unstable
-assumptions.
+1. metadata-first channel resolution — `_layer_channel_metadata` +
+   `io/channel_metadata.py`; `resolve_target_channel` reads channel metadata.
+2. confirmed vs suggested channel roles — `reviewed_by_user` /
+   `needs_user_confirmation`; `detect_counterstain_channel` reports
+   `annotated` vs `inferred` confidence.
+3. acquisition metadata in reports — `generate_report` now emits an **Acquisition**
+   section (voxel size, axes/shape/dtype, per-channel color/wavelengths/bit depth)
+   from each file's `metadata_summary`; preflight validation already existed.
+4. no filename hard-coding — filename use is limited to format dispatch
+   (`.lsm` → loader); no channel semantics are inferred from filenames.

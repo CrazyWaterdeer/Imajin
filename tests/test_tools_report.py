@@ -248,3 +248,62 @@ def test_generate_report_auto_adds_statistics_summary(fake_session, tmp_path) ->
 def test_generate_report_rejects_bad_format(fake_session, tmp_path) -> None:
     with pytest.raises(ValueError, match="format must be"):
         report.generate_report(str(tmp_path / "x.pdf"), format="pdf")
+
+
+def test_generate_report_includes_acquisition_metadata(fake_session, tmp_path) -> None:
+    from imajin import session as state
+
+    state.put_file(
+        "/data/sample.lsm",
+        "sample.lsm",
+        file_type="lsm",
+        metadata_summary={
+            "file_type": "lsm",
+            "voxel_size_um": (0.5, 0.2, 0.2),
+            "axes": "CZYX",
+            "shape": (2, 5, 64, 64),
+            "dtype": "uint16",
+            "n_channels": 2,
+            "channel_names": ["DAPI", "GFP"],
+            "channel_metadata": [
+                {"name": "DAPI", "color": "uv", "emission_wavelength_nm": 460, "bit_depth": 12},
+                {"name": "GFP", "color": "green", "excitation_wavelength_nm": 488, "bit_depth": 12},
+            ],
+        },
+    )
+
+    out = tmp_path / "report.md"
+    res = report.generate_report(str(out), format="md")
+    body = out.read_text(encoding="utf-8")
+
+    assert "## Acquisition" in body
+    assert "sample.lsm" in body
+    assert "voxel size" in body and "0.5" in body and "0.2" in body
+    assert "DAPI" in body and "GFP" in body
+    assert "488" in body  # excitation wavelength surfaced for reproducibility
+    assert res["n_files"] == 1
+
+
+def test_acquisition_section_in_html(fake_session, tmp_path) -> None:
+    from imajin import session as state
+
+    state.put_file(
+        "/data/img.czi",
+        "img.czi",
+        metadata_summary={"file_type": "czi", "voxel_size_um": (0.3, 0.1, 0.1), "n_channels": 1},
+    )
+    out = tmp_path / "report.html"
+    report.generate_report(str(out), format="html")
+    body = out.read_text(encoding="utf-8")
+    assert "Acquisition" in body and "img.czi" in body
+
+
+def test_generate_report_omits_acquisition_without_metadata(fake_session, tmp_path) -> None:
+    from imajin import session as state
+
+    state.put_file("/data/plain.lsm", "plain.lsm")  # no metadata_summary recorded
+
+    out = tmp_path / "report.md"
+    report.generate_report(str(out), format="md")
+    body = out.read_text(encoding="utf-8")
+    assert "## Acquisition" not in body

@@ -340,6 +340,7 @@ def _render_neural_traces_markdown(
 def _render_report_html(
     records: list[dict[str, Any]],
     methods_md: str,
+    acquisition_md: str = "",
     samples_md: str = "",
     channels_md: str = "",
     stats_md: str = "",
@@ -361,6 +362,7 @@ def _render_report_html(
         "code{font-size:.9em}</style></head><body>"
         f"<h1>imajin session report</h1>"
         f"<pre>{escape(methods_md)}</pre>"
+        f"{'<pre>' + escape(acquisition_md) + '</pre>' if acquisition_md else ''}"
         f"{'<pre>' + escape(samples_md) + '</pre>' if samples_md else ''}"
         f"{'<pre>' + escape(channels_md) + '</pre>' if channels_md else ''}"
         f"{'<pre>' + escape(stats_md) + '</pre>' if stats_md else ''}"
@@ -407,6 +409,74 @@ def generate_methods(session_id: str | None = None) -> dict[str, Any]:
     }
 
 
+def _format_metric(value: Any) -> str:
+    if value is None:
+        return "—"
+    try:
+        return f"{float(value):g}"
+    except (TypeError, ValueError):
+        return str(value)
+
+
+def _format_voxel(voxel: Any) -> str | None:
+    if not voxel:
+        return None
+    try:
+        return " × ".join(f"{float(v):g}" for v in voxel) + " µm"
+    except (TypeError, ValueError):
+        return None
+
+
+def _render_acquisition_markdown(files: list[dict[str, Any]]) -> str:
+    """Surface per-file acquisition metadata (voxel size, channels, settings) for
+    reproducibility. Renders nothing when no file carries metadata."""
+    blocks: list[str] = []
+    for record in files:
+        md = record.get("metadata_summary") or {}
+        if not md:
+            continue
+        name = str(record.get("original_name") or record.get("file_id") or "file")
+
+        facts: list[str] = []
+        if md.get("file_type"):
+            facts.append(f"format {md['file_type']}")
+        voxel = _format_voxel(md.get("voxel_size_um"))
+        if voxel:
+            facts.append(f"voxel size {voxel}")
+        if md.get("axes") and md.get("shape") is not None:
+            facts.append(f"axes {md['axes']}, shape {tuple(md['shape'])}")
+        if md.get("dtype"):
+            facts.append(f"dtype {md['dtype']}")
+        if md.get("n_channels"):
+            facts.append(f"{md['n_channels']} channel(s)")
+
+        block = [f"### {name}", ""]
+        block.append("- " + "; ".join(facts) if facts else "- (no acquisition metadata recorded)")
+
+        channel_meta = md.get("channel_metadata") or []
+        if channel_meta:
+            block += [
+                "",
+                "| Channel | Color | Ex (nm) | Em (nm) | Bit depth |",
+                "|---|---|---|---|---|",
+            ]
+            for ch in channel_meta:
+                cells = [
+                    str(ch.get("name") or ch.get("channel_name") or "—"),
+                    str(ch.get("color") or "—"),
+                    _format_metric(ch.get("excitation_wavelength_nm") or ch.get("excitation")),
+                    _format_metric(ch.get("emission_wavelength_nm") or ch.get("emission")),
+                    _format_metric(ch.get("bit_depth")),
+                ]
+                block.append("| " + " | ".join(c.replace("|", "/") for c in cells) + " |")
+        block.append("")
+        blocks.append("\n".join(block))
+
+    if not blocks:
+        return ""
+    return "\n".join(["## Acquisition", ""] + blocks)
+
+
 @tool(
     description="Write a full session report to disk (HTML by default, or .md). Embeds "
     "the deterministic Methods paragraph plus an operations table from the provenance "
@@ -430,6 +500,8 @@ def generate_report(
 
     stats_generated = _stats.ensure_default_statistics(save_csv=True)
     stats_md = _render_statistics_markdown()
+    files = list_files()
+    acquisition_md = _render_acquisition_markdown(files)
     samples = list_samples()
     samples_md = _render_samples_markdown(samples)
     channels = list_channel_annotations()
@@ -445,6 +517,7 @@ def generate_report(
         out.write_text(
             _append_optional_markdown(
                 methods,
+                acquisition_md,
                 samples_md,
                 channels_md,
                 stats_md,
@@ -458,6 +531,7 @@ def generate_report(
             _render_report_html(
                 records,
                 methods,
+                acquisition_md,
                 samples_md,
                 channels_md,
                 stats_md,
@@ -472,6 +546,7 @@ def generate_report(
         "format": format,
         "session_id": session_id or provenance.current_session_id(),
         "n_records": len(records),
+        "n_files": len(files),
         "n_samples": len(samples),
         "n_channels": len(channels),
         "n_qc_records": len(qc_records),
