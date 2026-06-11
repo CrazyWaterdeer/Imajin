@@ -6,8 +6,10 @@ from PIL import Image
 
 from imajin.analysis.segmentation_auto3d import (
     SegmentationCandidate,
+    confidence_from_score,
     filter_labels_by_z_extent,
     rank_segmentation_labels,
+    score_roi_quality,
     selection_confidence,
     stitch_plane_labels,
 )
@@ -282,6 +284,50 @@ def test_auto3d_scoring_penalizes_extreme_merged_object() -> None:
     assert metrics["largest_to_median_object_ratio"] > 1000
     assert score < 60
     assert any("extreme merged object" in w for w in warnings)
+
+
+def test_score_roi_quality_zero_objects_is_floor() -> None:
+    warnings: list[str] = []
+    score = score_roi_quality(
+        {"n_objects": 0}, warnings, noise_sigma=1.0, ndim=2, has_multiple_z=False
+    )
+    assert score == -1000.0
+    assert any("zero" in w for w in warnings)
+
+
+def test_score_roi_quality_penalizes_over_wide_mask() -> None:
+    base = {"n_objects": 5, "top_bright_outside_fraction": 0.0}
+    narrow = score_roi_quality(
+        {**base, "mask_fraction": 0.05}, [], noise_sigma=1.0, ndim=2, has_multiple_z=False
+    )
+    wide = score_roi_quality(
+        {**base, "mask_fraction": 0.6}, [], noise_sigma=1.0, ndim=2, has_multiple_z=False
+    )
+    assert wide < narrow  # too-wide mask (background included) is penalised
+
+
+def test_score_roi_quality_penalizes_signal_outside_roi() -> None:
+    base = {"n_objects": 5, "mask_fraction": 0.1}
+    clean = score_roi_quality(
+        {**base, "top_bright_outside_fraction": 0.0}, [], noise_sigma=1.0, ndim=2,
+        has_multiple_z=False,
+    )
+    leaky = score_roi_quality(
+        {**base, "top_bright_outside_fraction": 0.5}, [], noise_sigma=1.0, ndim=2,
+        has_multiple_z=False,
+    )
+    assert leaky < clean  # bright signal outside the ROI (too narrow) is penalised
+
+
+def test_confidence_from_score_tiers() -> None:
+    good = {"n_objects": 12, "mask_fraction": 0.1, "largest_to_median_object_ratio": 2.0}
+    assert confidence_from_score(90.0, good) == "high"
+    assert confidence_from_score(65.0, good) == "medium"
+    assert confidence_from_score(40.0, good) == "low"
+    # zero objects and region-level merges are always low regardless of score (H1)
+    assert confidence_from_score(95.0, {"n_objects": 0}) == "low"
+    region = {"n_objects": 3, "mask_fraction": 0.2, "largest_to_median_object_ratio": 30.0}
+    assert confidence_from_score(95.0, region) == "low"
 
 
 def test_auto3d_confidence_accepts_stable_same_strategy_scores() -> None:

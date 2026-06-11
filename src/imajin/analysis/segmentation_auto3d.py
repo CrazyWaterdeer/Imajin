@@ -510,38 +510,34 @@ def filter_labels_by_z_extent(
     }
 
 
-def rank_segmentation_labels(
-    image: np.ndarray,
-    labels: np.ndarray,
+def score_roi_quality(
+    metrics: dict[str, Any],
+    warnings: list[str],
     *,
-    stitch_record: dict[str, Any] | None = None,
-) -> tuple[dict[str, Any], list[str], float]:
-    raw = np.asarray(image, dtype=np.float32)
-    labels_arr = np.asarray(labels, dtype=np.int32)
-    noise_sigma = robust_background_sigma(raw)
-    signal_qc, warnings = target_object_qc(
-        raw,
-        raw,
-        labels_arr,
-        noise_sigma=noise_sigma,
-    )
-    metrics = {
-        **label_qc(labels_arr),
-        **signal_qc,
-        "single_plane_object_fraction": _single_plane_object_fraction(labels_arr),
-        "z_gap_object_fraction": _z_gap_object_fraction(labels_arr),
-        "tiny_object_fraction": _tiny_object_fraction(labels_arr),
-        "largest_to_median_object_ratio": _largest_to_median_ratio(labels_arr),
-    }
-    if stitch_record:
-        metrics["ambiguous_stitch_pairs"] = int(stitch_record.get("ambiguous_stitch_pairs", 0))
-        metrics["stitch_edge_count"] = int(stitch_record.get("edge_count", 0))
-        metrics["plane_roi_count"] = int(stitch_record.get("plane_roi_count", 0))
+    noise_sigma: float,
+    ndim: int,
+    has_multiple_z: bool,
+) -> float:
+    """Deterministic ROI-quality score from a precomputed ``metrics`` dict.
 
+    Pure: it accesses no image and computes no QC itself. ``metrics`` must
+    already carry ``label_qc`` + ``target_object_qc`` fields plus the shape
+    fractions (single_plane / z_gap / tiny / largest_to_median). The function
+    mutates ``metrics`` to add ``inside_outside_separation_snr`` and appends QC
+    ``warnings`` in place, then returns the score.
+
+    Shared by auto3d candidate ranking (which scores on the raw image) and the
+    target-object single-shot/loop paths (which pass background-corrected
+    metrics) so the two scorers never drift. Callers own which image the
+    metrics were computed on — see H2 in the ROI-judgment plan: the target path
+    must pass corrected metrics, never call :func:`rank_segmentation_labels`
+    (which scores on raw).
+    """
     score = 100.0
     n_objects = int(metrics.get("n_objects", 0))
     if n_objects == 0:
-        return metrics, warnings + ["candidate produced zero 3D objects"], -1000.0
+        warnings.append("candidate produced zero 3D objects")
+        return -1000.0
 
     mask_fraction = float(metrics.get("mask_fraction", 0.0))
     if mask_fraction < 0.0002:
@@ -570,7 +566,7 @@ def rank_segmentation_labels(
             score += min(20.0, 3.0 * separation_snr)
 
     single_plane = float(metrics.get("single_plane_object_fraction", 0.0))
-    if labels_arr.ndim == 3 and labels_arr.shape[0] > 1:
+    if ndim == 3 and has_multiple_z:
         score -= 25.0 * single_plane
         if single_plane > 0.5:
             warnings.append("many objects appear in only one z plane")
@@ -609,7 +605,69 @@ def rank_segmentation_labels(
         score -= min(30.0, ambiguous * 4.0)
         warnings.append("plane stitching produced ambiguous one-to-many links")
 
-    return metrics, warnings, float(score)
+    return float(score)
+
+
+def confidence_from_score(score: float, metrics: dict[str, Any]) -> str:
+    """Single-shot ROI confidence tier ("high" / "medium" / "low").
+
+    Distinct from :func:`selection_confidence`, which ranks a *list* of
+    candidates and can never return "high" for a lone segmentation (H1 in the
+    plan). Used to gate vision attachment on a single tool result, so a clean
+    one-shot segmentation reads "high" and does not burn image tokens.
+
+    "low" when the score is poor or a critical structural warning applies
+    (zero objects, or a region-level merged blob); "high" when the score is
+    strong and no such warning applies; "medium" otherwise. Thresholds are
+    heuristic and flagged for tuning on real data.
+    """
+    n_objects = int(metrics.get("n_objects", 0))
+    largest_ratio = float(metrics.get("largest_to_median_object_ratio", 1.0))
+    mask_fraction = float(metrics.get("mask_fraction", 0.0))
+    region_level = largest_ratio > 15 and mask_fraction > 0.08
+    if n_objects == 0 or score < 55.0 or region_level:
+        return "low"
+    if score >= 75.0:
+        return "high"
+    return "medium"
+
+
+def rank_segmentation_labels(
+    image: np.ndarray,
+    labels: np.ndarray,
+    *,
+    stitch_record: dict[str, Any] | None = None,
+) -> tuple[dict[str, Any], list[str], float]:
+    raw = np.asarray(image, dtype=np.float32)
+    labels_arr = np.asarray(labels, dtype=np.int32)
+    noise_sigma = robust_background_sigma(raw)
+    signal_qc, warnings = target_object_qc(
+        raw,
+        raw,
+        labels_arr,
+        noise_sigma=noise_sigma,
+    )
+    metrics = {
+        **label_qc(labels_arr),
+        **signal_qc,
+        "single_plane_object_fraction": _single_plane_object_fraction(labels_arr),
+        "z_gap_object_fraction": _z_gap_object_fraction(labels_arr),
+        "tiny_object_fraction": _tiny_object_fraction(labels_arr),
+        "largest_to_median_object_ratio": _largest_to_median_ratio(labels_arr),
+    }
+    if stitch_record:
+        metrics["ambiguous_stitch_pairs"] = int(stitch_record.get("ambiguous_stitch_pairs", 0))
+        metrics["stitch_edge_count"] = int(stitch_record.get("edge_count", 0))
+        metrics["plane_roi_count"] = int(stitch_record.get("plane_roi_count", 0))
+
+    score = score_roi_quality(
+        metrics,
+        warnings,
+        noise_sigma=noise_sigma,
+        ndim=labels_arr.ndim,
+        has_multiple_z=labels_arr.ndim == 3 and labels_arr.shape[0] > 1,
+    )
+    return metrics, warnings, score
 
 
 def selection_confidence(candidates: list[SegmentationCandidate]) -> str:
