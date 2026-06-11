@@ -250,3 +250,171 @@ def segment_target_array(
         min_size=min_size,
         **threshold_kwargs,
     )
+
+
+# --- deterministic auto-correct loop (Phase B) ---
+
+_BG_PARAMS = (
+    "background_radius",
+    "background_method",
+    "background_percentile",
+    "smoothing_sigma",
+)
+# Params the loop may tune; also the identity used to detect oscillation/revisits.
+_TUNABLE = (
+    "min_snr",
+    "high_snr",
+    "auto_mask_hyperbright",
+    "threshold_clip_percentile",
+    "background_radius",
+    "smoothing_sigma",
+)
+
+
+def next_correction(metrics: dict[str, Any], params: dict[str, Any]) -> dict[str, Any] | None:
+    """Propose one parameter nudge for an off-target ROI, or ``None`` if none helps.
+
+    Reads the *corrected* QC metrics (H2) and returns only the params to change,
+    one directional move at a time so the loop can re-score and converge:
+
+    * nothing found  -> threshold too high, lower ``min_snr``
+    * signal outside the ROI (too narrow) -> lower ``min_snr`` / ``high_snr``
+    * ROI covers too much and signal is not leaking (too wide) -> raise
+      ``min_snr``, then mask hyper-bright autofluorescence/debris
+    * weak inside/outside separation (background-dominated) -> widen the
+      background estimate / smooth a little
+    """
+    n_objects = int(metrics.get("n_objects", 0))
+    mask_fraction = float(metrics.get("mask_fraction", 0.0))
+    bright_outside = float(metrics.get("top_bright_outside_fraction", 0.0))
+    sep_snr = float(metrics.get("inside_outside_separation_snr", 0.0))
+    min_snr = float(params.get("min_snr", 2.0))
+    high_snr = float(params.get("high_snr", 4.0))
+
+    if n_objects == 0:
+        # Nothing found: the bar is far too high. Halve min_snr (binary-search
+        # style) rather than nudging, so recovery is fast within a few iters.
+        if min_snr > 1.0:
+            return {"min_snr": max(1.0, round(min_snr / 2.0, 3))}
+        return None
+
+    if bright_outside > 0.25:
+        move: dict[str, Any] = {}
+        if min_snr > 1.0:
+            move["min_snr"] = max(1.0, round(min_snr - 0.5, 3))
+        if high_snr > min_snr + 1.0:
+            move["high_snr"] = round(high_snr - 1.0, 3)
+        return move or None
+
+    if mask_fraction > 0.45:
+        if min_snr < 5.0:
+            return {"min_snr": round(min_snr + 1.0, 3)}
+        if not bool(params.get("auto_mask_hyperbright", False)):
+            return {"auto_mask_hyperbright": True}
+        if params.get("threshold_clip_percentile") is None:
+            return {"threshold_clip_percentile": 99.0}
+        return None
+
+    if 0.0 < sep_snr < 1.0:
+        bg = int(params.get("background_radius", 48))
+        if bg < 128:
+            return {"background_radius": min(128, bg * 2)}
+        smooth = float(params.get("smoothing_sigma", 1.0))
+        if smooth < 3.0:
+            return {"smoothing_sigma": round(smooth + 1.0, 3)}
+        return None
+
+    return None
+
+
+def _prepare_kwargs(params: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "background_radius": int(params.get("background_radius", 48)),
+        "background_method": params.get("background_method", "opening"),
+        "background_percentile": float(params.get("background_percentile", 20.0)),
+        "smoothing_sigma": float(params.get("smoothing_sigma", 1.0)),
+    }
+
+
+def _threshold_kwargs(params: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "threshold_method": params.get("threshold_method", "auto"),
+        "threshold_percentile": float(params.get("threshold_percentile", 99.0)),
+        "threshold_clip_percentile": params.get("threshold_clip_percentile"),
+        "auto_mask_hyperbright": bool(params.get("auto_mask_hyperbright", False)),
+        "hyperbright_percentile": float(params.get("hyperbright_percentile", 99.5)),
+        "hyperbright_dilate_radius": int(params.get("hyperbright_dilate_radius", 2)),
+        "min_snr": float(params.get("min_snr", 2.0)),
+        "high_snr": float(params.get("high_snr", 4.0)),
+        "min_size": int(params["min_size"]),
+        "fill_holes": bool(params.get("fill_holes", True)),
+        "split_touching": bool(params.get("split_touching", False)),
+        "min_distance": int(params.get("min_distance", 20)),
+        "min_distance_um": params.get("min_distance_um"),
+    }
+
+
+def _param_key(params: dict[str, Any]) -> tuple:
+    return tuple((k, params.get(k)) for k in _TUNABLE)
+
+
+def _history_entry(seg: TargetSegmentation, params: dict[str, Any], move: dict[str, Any] | None) -> dict[str, Any]:
+    entry = {k: params.get(k) for k in _TUNABLE}
+    entry["score"] = float(seg.roi_score)
+    entry["confidence"] = seg.roi_confidence
+    entry["n_objects"] = int(seg.qc.get("n_objects", 0))
+    if move is not None:
+        entry["move"] = dict(move)
+    return entry
+
+
+def auto_correct_target(
+    raw: np.ndarray,
+    *,
+    spacing: tuple[float, ...] | None,
+    params: dict[str, Any],
+    boundary_mask: np.ndarray | None = None,
+    max_iters: int = 3,
+) -> tuple[TargetSegmentation, dict[str, Any], list[dict[str, Any]]]:
+    """Iteratively correct a target-object ROI until confident or out of moves.
+
+    Hill-climbs on :func:`next_correction`, re-scoring each try with the shared
+    ROI scorer. Reuses the corrected image across iterations and only recomputes
+    it when a background/smoothing param changes (M2). Keeps the best-scoring
+    candidate (no regression), refuses to revisit a parameter set (no
+    oscillation), and is bounded by ``max_iters``. Returns
+    ``(best_segmentation, best_params, history)``.
+
+    Target-objects only -- never wire this to expression-domain segmentation,
+    whose high coverage is expected (see the plan's residual-risk note).
+    """
+    params = dict(params)
+    corrected = prepare_corrected(raw, **_prepare_kwargs(params))
+    current = threshold_and_label(
+        corrected, raw, spacing=spacing, boundary_mask=boundary_mask, **_threshold_kwargs(params)
+    )
+    best, best_params = current, dict(params)
+    history = [_history_entry(current, params, None)]
+    tried = {_param_key(params)}
+
+    for _ in range(max_iters):
+        if current.roi_confidence == "high":
+            break
+        move = next_correction(current.score_metrics, params)
+        if not move:
+            break
+        params.update(move)
+        key = _param_key(params)
+        if key in tried:
+            break
+        tried.add(key)
+        if any(k in move for k in _BG_PARAMS):
+            corrected = prepare_corrected(raw, **_prepare_kwargs(params))
+        current = threshold_and_label(
+            corrected, raw, spacing=spacing, boundary_mask=boundary_mask, **_threshold_kwargs(params)
+        )
+        history.append(_history_entry(current, params, move))
+        if current.roi_score > best.roi_score:
+            best, best_params = current, dict(params)
+
+    return best, best_params, history
