@@ -4,6 +4,7 @@ import numpy as np
 import pytest
 from PIL import Image
 
+from imajin.analysis.segmentation import intersect_labels_with_mask
 from imajin.analysis.segmentation_auto3d import (
     SegmentationCandidate,
     confidence_from_score,
@@ -206,6 +207,28 @@ def test_segment_target_objects_uses_local_background(viewer) -> None:
     # ROI-quality fields surfaced for the agent-vision gate (C0.4)
     assert isinstance(res["roi_score"], float)
     assert res["roi_confidence"] in {"high", "medium"}  # a clean 2-object ROI is not ambiguous
+
+
+def test_segment_target_array_runs_headless() -> None:
+    # The pure pipeline (C0.3) runs without a viewer -- the loop + batch depend on this.
+    from imajin.analysis.target_pipeline import segment_target_array
+
+    image = np.zeros((128, 128), dtype=np.float32)
+    image[28:40, 24:36] = 120.0
+    image[88:102, 46:60] = 110.0
+
+    seg = segment_target_array(
+        image,
+        spacing=None,
+        background_radius=16,
+        smoothing_sigma=0.0,
+        min_size=30,
+        fill_holes=False,
+    )
+    assert int(seg.masks.max()) == 2
+    assert seg.masks.shape == image.shape
+    assert isinstance(seg.roi_score, float)
+    assert seg.roi_confidence in {"high", "medium", "low"}
 
 
 def test_segment_target_objects_treats_unannotated_3d_as_z_stack(viewer) -> None:
@@ -486,7 +509,7 @@ def test_intersect_labels_with_mask_zeros_outside() -> None:
     mask = np.zeros_like(labels, dtype=bool)
     mask[0:5, 0:5] = True
 
-    out = segment._intersect_labels_with_mask(labels, mask)
+    out = intersect_labels_with_mask(labels, mask)
 
     assert (out == 1).sum() == (labels == 1).sum()
     assert (out == 2).sum() == 0
@@ -499,7 +522,7 @@ def test_intersect_labels_with_mask_renumbers_when_requested() -> None:
 
     mask = np.ones_like(labels, dtype=bool)
 
-    out = segment._intersect_labels_with_mask(labels, mask, renumber=True)
+    out = intersect_labels_with_mask(labels, mask, renumber=True)
 
     unique = sorted(np.unique(out).tolist())
     assert unique == [0, 1, 2]

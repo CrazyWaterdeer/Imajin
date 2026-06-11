@@ -14,29 +14,23 @@ from imajin.analysis.domain_segmentation import (
 )
 from imajin.analysis.segmentation import (
     dilate_binary_um as _dilate_binary_um,
-    estimate_local_background as _estimate_local_background,
-    intersect_labels_with_mask as _intersect_labels_with_mask,
     label_qc as _label_qc,
     label_qc_warnings as _label_qc_warnings,
-    labels_from_binary as _labels_from_binary,
     min_size_from_physical as _min_size_from_physical,
     remove_small_binary_objects as _remove_small_binary_objects,
     segment_connected_regions as _segment_connected_regions,
-    target_object_qc as _target_object_qc,
     threshold_noise_floor as _threshold_noise_floor,
     voxel_spacing as _voxel_spacing,
 )
-from imajin.analysis.target_segmentation import (
-    target_threshold_for_scope as _target_threshold_for_scope,
+from imajin.analysis.target_pipeline import (
+    prepare_corrected as _prepare_corrected,
+    threshold_and_label as _threshold_and_label,
 )
 from imajin.analysis.segmentation_auto3d import (
     SegmentationCandidate as _SegmentationCandidate,
     build_auto3d_candidates as _build_auto3d_candidates,
-    confidence_from_score as _confidence_from_score,
     filter_labels_by_z_extent as _filter_labels_by_z_extent,
     rank_segmentation_labels as _rank_segmentation_labels,
-    roi_shape_metrics as _roi_shape_metrics,
-    score_roi_quality as _score_roi_quality,
     selection_confidence as _selection_confidence,
 )
 from imajin.agent.qt_dispatch import call_on_main
@@ -668,8 +662,6 @@ def segment_target_objects(
     qc_png_path: str | None = None,
     boundary_mask: str | None = None,
 ) -> dict[str, Any]:
-    from skimage import filters
-
     L = call_on_main(snapshot_layer, image_layer)
     data = materialize_array(L.data)
     saturation_warnings = _saturation_warnings(data, layer_name=L.name)
@@ -698,28 +690,13 @@ def segment_target_objects(
         ndim=raw.ndim,
     )
     effective_min_size = physical_min_size or max(16, min(512, int(round(xy_area * 0.00005))))
-    background = _estimate_local_background(
+    corrected_for_threshold = _prepare_corrected(
         raw,
-        radius=background_radius,
-        method=background_method,
-        percentile=background_percentile,
+        background_radius=background_radius,
+        background_method=background_method,
+        background_percentile=background_percentile,
+        smoothing_sigma=smoothing_sigma,
     )
-    corrected = raw - background
-    corrected[~np.isfinite(corrected)] = 0.0
-
-    if smoothing_sigma > 0:
-        sigma: float | tuple[float, ...]
-        if corrected.ndim == 3:
-            sigma = (0.0, float(smoothing_sigma), float(smoothing_sigma))
-        else:
-            sigma = float(smoothing_sigma)
-        corrected_for_threshold = filters.gaussian(
-            corrected,
-            sigma=sigma,
-            preserve_range=True,
-        ).astype(np.float32)
-    else:
-        corrected_for_threshold = corrected
 
     # Load the boundary mask early so it can be used as the hysteresis grow region.
     boundary_data_bool: np.ndarray | None = None
@@ -733,90 +710,38 @@ def segment_target_objects(
             )
         boundary_data_bool = _boundary_raw > 0
 
-    threshold, noise_sigma, threshold_scope, threshold_warnings = _target_threshold_for_scope(
+    # Pure threshold -> label -> QC -> score (extracted to analysis/target_pipeline
+    # so the single-shot tool, the auto-correct loop, and headless tests share one
+    # code path). The caller owns saturation warnings and the boundary-layer lookup.
+    seg = _threshold_and_label(
         corrected_for_threshold,
+        raw,
+        spacing=spacing,
         threshold_method=threshold_method,
         threshold_percentile=threshold_percentile,
-        min_snr=min_snr,
-        boundary_mask=boundary_data_bool,
-        clip_percentile=threshold_clip_percentile,
+        threshold_clip_percentile=threshold_clip_percentile,
         auto_mask_hyperbright=auto_mask_hyperbright,
         hyperbright_percentile=hyperbright_percentile,
         hyperbright_dilate_radius=hyperbright_dilate_radius,
-    )
-
-    high_threshold = max(float(threshold), float(high_snr) * float(noise_sigma))
-    if boundary_data_bool is not None:
-        scoped_threshold_image = np.where(
-            boundary_data_bool,
-            corrected_for_threshold,
-            -np.inf,
-        ).astype(np.float32, copy=False)
-        low_candidates = (scoped_threshold_image >= float(threshold)) & boundary_data_bool
-        high_seeds = (scoped_threshold_image >= high_threshold) & boundary_data_bool
-        if high_threshold > threshold and np.any(high_seeds):
-            binary = (
-                filters.apply_hysteresis_threshold(
-                    scoped_threshold_image,
-                    low=float(threshold),
-                    high=float(high_threshold),
-                )
-                & boundary_data_bool
-            )
-        else:
-            binary = low_candidates
-    elif high_threshold > threshold and np.any(corrected_for_threshold >= high_threshold):
-        binary = filters.apply_hysteresis_threshold(
-            corrected_for_threshold,
-            low=float(threshold),
-            high=float(high_threshold),
-        )
-    else:
-        binary = corrected_for_threshold > float(threshold)
-
-    masks = _labels_from_binary(
-        binary,
+        min_snr=min_snr,
+        high_snr=high_snr,
         min_size=effective_min_size,
         fill_holes=fill_holes,
         split_touching=split_touching,
         min_distance=min_distance,
         min_distance_um=min_distance_um,
-        spacing=spacing,
+        boundary_mask=boundary_data_bool,
     )
-    qc = _label_qc(masks)
-    signal_qc, qc_warnings = _target_object_qc(
-        raw,
-        corrected_for_threshold,
-        masks,
-        noise_sigma=noise_sigma,
-    )
-    qc_warnings = saturation_warnings + threshold_warnings + qc_warnings
-
-    if boundary_data_bool is not None:
-        masks = _intersect_labels_with_mask(
-            masks, boundary_data_bool, renumber=True
-        )
-        qc = _label_qc(masks)
-        signal_qc, qc_warnings = _target_object_qc(
-            raw,
-            corrected_for_threshold,
-            masks,
-            noise_sigma=noise_sigma,
-        )
-        qc_warnings = saturation_warnings + threshold_warnings + qc_warnings
-
-    # Deterministic ROI-quality score on the *corrected* metrics (H2) so the
-    # agent-vision gate (Phase A) and corrections can reason about whether this
-    # ROI is too wide / too narrow without re-running QC on the raw image.
-    score_metrics = {**qc, **signal_qc, **_roi_shape_metrics(masks)}
-    roi_score = _score_roi_quality(
-        score_metrics,
-        [],
-        noise_sigma=noise_sigma,
-        ndim=masks.ndim,
-        has_multiple_z=(masks.ndim == 3 and masks.shape[0] > 1),
-    )
-    roi_confidence = _confidence_from_score(roi_score, score_metrics)
+    masks = seg.masks
+    threshold = seg.threshold
+    high_threshold = seg.high_threshold
+    noise_sigma = seg.noise_sigma
+    threshold_scope = seg.threshold_scope
+    qc = seg.qc
+    signal_qc = seg.signal_qc
+    qc_warnings = saturation_warnings + seg.threshold_warnings + seg.qc_warnings
+    roi_score = seg.roi_score
+    roi_confidence = seg.roi_confidence
 
     out_name = f"{L.name}_objects"
     layer = call_on_main(
