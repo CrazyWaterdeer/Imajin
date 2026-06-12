@@ -149,3 +149,52 @@ def test_object_sizes_physical_flags_border_objects() -> None:
     assert border_mask.tolist() == [True, False]
     assert n_usable == 1  # only the interior object is usable
     assert sizes.shape == (2,)  # all sizes returned; caller masks
+
+
+# --- F0: synthetic size-distribution generators (calibration harness) ---
+# Reused by the distribution-flag tests (C) and the end-to-end validation (F1).
+
+
+def good_unimodal_sizes(n=50, base=20.0, cv=0.08, seed=0):
+    rng = np.random.default_rng(seed)
+    return base * (1.0 + cv * rng.standard_normal(n))
+
+
+def undersegmented_sizes(n=50, base=20.0, seed=0):
+    # half the objects are merged doublets (~2x) -> bimodal at +1.0 log2
+    rng = np.random.default_rng(seed)
+    singles = base * (1.0 + 0.05 * rng.standard_normal(n // 2))
+    doublets = 2.0 * base * (1.0 + 0.05 * rng.standard_normal(n - n // 2))
+    return np.concatenate([singles, doublets])
+
+
+def oversegmented_sizes(n=52, base=20.0, frac=0.25, seed=0):
+    # a fragment tail well below the median
+    rng = np.random.default_rng(seed)
+    k = int(round(n * frac))
+    main = base * (1.0 + 0.05 * rng.standard_normal(n - k))
+    frags = (base / 4.0) * (1.0 + 0.05 * rng.standard_normal(k))
+    return np.concatenate([main, frags])
+
+
+def broad_lognormal_sizes(n=50, base=20.0, sigma=0.4, seed=0):
+    # wide but *unimodal* biological spread — must NOT be flagged as error
+    rng = np.random.default_rng(seed)
+    return base * np.exp(sigma * rng.standard_normal(n))
+
+
+def test_f0_generators_have_their_intended_shape() -> None:
+    # Validates the harness the C / F1 tests rely on.
+    import numpy as np
+
+    under = undersegmented_sizes()
+    # two clusters ~2x apart
+    lo = under[under < 1.5 * 20.0]
+    hi = under[under >= 1.5 * 20.0]
+    assert len(lo) > 5 and len(hi) > 5
+
+    over = oversegmented_sizes()
+    assert np.mean(over < 20.0 / 2) > 0.2  # substantial small tail
+
+    broad = broad_lognormal_sizes()
+    assert broad.min() > 0 and broad.std() / broad.mean() > 0.2  # genuinely broad

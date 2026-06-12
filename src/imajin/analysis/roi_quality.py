@@ -34,6 +34,16 @@ _NEURON_HINTS = ("neuron", "skeleton", "trace", "process")
 MIN_DISTRIBUTION_N = 10
 _MIN_SPATIAL_SPREAD = 0.25  # fraction of each in-plane axis the centroids must span
 
+# --- v2.1 distribution-layer tunables (placeholders; calibrated by the F1 harness) ---
+# All thresholds operate on log2(size). A merged doublet is +1.0 log2 (2x); a
+# fragment tail sits well below the median.
+DIST_SMALL_TAIL_LOG2 = 1.0  # "small" = this many log2 units below the median
+DIST_SMALL_TAIL_FRACTION = 0.20  # fraction below that cutoff to flag over-segmentation
+DIST_BIMODAL_LOG2_GAP = 0.6  # interior log2 gap (with both sides substantial) = bimodal
+# F1 regression floors: the validation harness fails below these.
+VALIDATION_MIN_SENSITIVITY = 0.7
+VALIDATION_MIN_SPECIFICITY = 0.7
+
 
 def object_class(meta: dict[str, Any] | None) -> ObjectClass:
     """Classify a labels layer from its metadata.
