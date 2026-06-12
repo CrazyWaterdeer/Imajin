@@ -162,7 +162,9 @@ def object_sizes_physical(
         if 1 <= lab <= n:
             border_mask[lab - 1] = True
 
-    n_usable = int(np.count_nonzero(~border_mask))
+    # Usable = interior (non-border) AND actually present (relabeling can leave
+    # empty label ids with zero voxels; those are not objects).
+    n_usable = int(np.count_nonzero((~border_mask) & (sizes > 0)))
     return sizes, border_mask, n_usable
 
 

@@ -347,3 +347,79 @@ def test_assess_roi_medium_for_few_objects_even_if_structurally_strong() -> None
     out = assess_roi(labels, (1.0, 1.0), 95.0, _GOOD, obj_class="blob")
     assert out["roi_confidence"] == "medium"
     assert out["distribution_flag"] is None  # distribution layer not in route
+
+
+# --- F1: end-to-end validation of the distribution layer on mask perturbations ---
+
+
+def _good_grid(k=6, step=30, size=6, shape=(220, 220)):
+    labels = np.zeros(shape, dtype=np.int32)
+    label = 1
+    for y in range(20, 20 + k * step, step):
+        for x in range(20, 20 + k * step, step):
+            labels[y : y + size, x : x + size] = label
+            label += 1
+    return labels
+
+
+def _merge_pairs(mask, frac=0.4):
+    mask = mask.copy()
+    ids = list(range(1, int(mask.max()) + 1))
+    n_pairs = int(len(ids) * frac) // 2
+    for i in range(n_pairs):
+        a, b = ids[2 * i], ids[2 * i + 1]
+        mask[mask == b] = a  # 'a' now holds 2x the voxels (a merged doublet)
+    return mask
+
+
+def _split_objects(mask, frac=0.4):
+    mask = mask.copy()
+    next_id = int(mask.max()) + 1
+    ids = list(range(1, int(mask.max()) + 1))
+    for oid in ids[: int(len(ids) * frac)]:
+        coords = np.argwhere(mask == oid)
+        frag = coords[: max(1, len(coords) // 4)]  # peel off a ~1/4 fragment
+        mask[frag[:, 0], frag[:, 1]] = next_id
+        next_id += 1
+    return mask
+
+
+def _erode_all(mask):
+    from scipy import ndimage as ndi
+    from skimage import measure
+
+    eroded = ndi.binary_erosion(mask > 0, iterations=1)
+    return measure.label(eroded).astype(np.int32)
+
+
+def _dilate_all(mask):
+    from scipy import ndimage as ndi
+    from skimage import measure
+
+    dilated = ndi.binary_dilation(mask > 0, iterations=1)
+    return measure.label(dilated).astype(np.int32)
+
+
+def _flag_on(mask):
+    sizes, border, n_usable = object_sizes_physical(mask, spacing=(1.0, 1.0))
+    return distribution_flag(sizes[~border], n_eff=n_usable)["flag"]
+
+
+def test_f1_distribution_layer_sensitivity_and_specificity() -> None:
+    from imajin.analysis.roi_quality import (
+        VALIDATION_MIN_SENSITIVITY,
+        VALIDATION_MIN_SPECIFICITY,
+    )
+
+    good = _good_grid()
+    # positives: merge/split should be flagged
+    positives = [_merge_pairs(good), _split_objects(good)]
+    # negatives: clean and *uniform* erode/dilate must NOT be flagged
+    # (consistency != correctness — uniformly-wrong masks are the honest blind spot).
+    negatives = [good, _erode_all(good), _dilate_all(good)]
+
+    sens = np.mean([_flag_on(m) for m in positives])
+    spec = np.mean([not _flag_on(m) for m in negatives])
+
+    assert sens >= VALIDATION_MIN_SENSITIVITY, f"sensitivity {sens} below floor"
+    assert spec >= VALIDATION_MIN_SPECIFICITY, f"specificity {spec} below floor"
