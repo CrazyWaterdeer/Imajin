@@ -16,6 +16,8 @@ from typing import Any
 
 import numpy as np
 
+from imajin.analysis.segmentation_auto3d import confidence_from_score
+
 # Object classes the scorer routes on.
 ObjectClass = str  # "blob" | "domain" | "neuron" | "unclassified"
 
@@ -209,3 +211,83 @@ def distribution_flag(sizes_um: np.ndarray, *, n_eff: int) -> dict[str, Any]:
             }
 
     return {"flag": False, "reason": None, "metric": None, "abstained": False}
+
+
+def correction_materiality(
+    raw_qc: dict[str, Any],
+    corrected_qc: dict[str, Any],
+    *,
+    count_tol: float = 0.25,
+    size_tol: float = 0.5,
+) -> bool:
+    """True when the auto-correct loop moved the measurement materially.
+
+    Compares object count and median object size between the raw first pass and
+    the corrected mask; a material gap means the distribution layer must not
+    bless the corrected mask as "coherent" (it may be a correction artifact).
+    """
+    rn = int(raw_qc.get("n_objects", 0) or 0)
+    cn = int(corrected_qc.get("n_objects", 0) or 0)
+    if rn == 0:
+        return cn > 0
+    if abs(cn - rn) / rn > count_tol:
+        return True
+    rmed = float(raw_qc.get("object_area_median", 0.0) or 0.0)
+    cmed = float(corrected_qc.get("object_area_median", 0.0) or 0.0)
+    if rmed > 0 and abs(cmed - rmed) / rmed > size_tol:
+        return True
+    return False
+
+
+def roi_confidence_v2(
+    structural_score: float,
+    structural_metrics: dict[str, Any],
+    *,
+    route_layers: set[str],
+    n_eff: int,
+    obj_class: ObjectClass,
+    dist_flag: dict[str, Any] | None,
+    correction_gap: bool = False,
+) -> tuple[str, dict[str, Any]]:
+    """Evidence-based confidence ("high"/"medium"/"low") + the drivers behind it.
+
+    - `low` only on gross structural failure (Layer 1).
+    - `high` requires *positive* evidence: strong structural separation AND the
+      distribution layer was applicable, checked, and silent — so it is reserved
+      for numerous, distributed blobs. Domains / sparse fields / neurons (no
+      distribution layer) are capped at `medium`, closing v1's "absence of
+      penalty = high" hole.
+    - `medium` (→ show image) for a distribution flag, a material correction gap,
+      or simply insufficient positive evidence.
+    """
+    drivers: dict[str, Any] = {
+        "object_class": obj_class,
+        "structural_score": round(float(structural_score), 1),
+        "n_eff": int(n_eff),
+    }
+
+    struct_tier = confidence_from_score(structural_score, structural_metrics)
+    if struct_tier == "low":
+        drivers["driver"] = "structural_failure"
+        return "low", drivers
+
+    if dist_flag and dist_flag.get("flag"):
+        drivers["driver"] = dist_flag.get("reason") or "distribution_anomaly"
+        drivers["distribution_metric"] = dist_flag.get("metric")
+        return "medium", drivers
+
+    if correction_gap:
+        drivers["driver"] = "correction_changed_measurement"
+        return "medium", drivers
+
+    distribution_checked = (
+        "distribution" in route_layers
+        and dist_flag is not None
+        and not dist_flag.get("abstained", False)
+    )
+    if struct_tier == "high" and distribution_checked:
+        drivers["driver"] = "structural_strong_and_distribution_clean"
+        return "high", drivers
+
+    drivers["driver"] = "insufficient_positive_evidence"
+    return "medium", drivers

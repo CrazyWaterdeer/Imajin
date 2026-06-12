@@ -12,10 +12,12 @@ from __future__ import annotations
 import numpy as np
 
 from imajin.analysis.roi_quality import (
+    correction_materiality,
     distribution_flag,
     effective_object_count,
     object_class,
     object_sizes_physical,
+    roi_confidence_v2,
     route,
 )
 from imajin.analysis.segmentation_auto3d import confidence_from_score
@@ -248,3 +250,69 @@ def test_distribution_flag_is_only_ever_a_flag_never_a_confidence() -> None:
         assert set(res) == {"flag", "reason", "metric", "abstained"}
         assert isinstance(res["flag"], bool)
         assert res["reason"] in {None, "possible_undersegmentation", "possible_oversegmentation"}
+
+
+# --- D: confidence v2.1 mapping + correction materiality ---
+
+_GOOD = {"n_objects": 12, "mask_fraction": 0.1, "largest_to_median_object_ratio": 2.0}
+_CLEAN_FLAG = {"flag": False, "reason": None, "metric": None, "abstained": False}
+_BLOB_ROUTE = {"structural", "vision", "distribution"}
+
+
+def test_confidence_v2_high_needs_structure_and_clean_distribution() -> None:
+    conf, drivers = roi_confidence_v2(
+        90.0, _GOOD, route_layers=_BLOB_ROUTE, n_eff=12, obj_class="blob", dist_flag=_CLEAN_FLAG
+    )
+    assert conf == "high"
+    assert drivers["driver"] == "structural_strong_and_distribution_clean"
+
+
+def test_confidence_v2_domain_capped_at_medium_even_when_structurally_strong() -> None:
+    # No distribution layer in the route -> cannot earn high (closes v1 hole).
+    conf, _ = roi_confidence_v2(
+        95.0, _GOOD, route_layers={"structural", "vision"}, n_eff=1, obj_class="domain",
+        dist_flag=None,
+    )
+    assert conf == "medium"
+
+
+def test_confidence_v2_distribution_flag_routes_to_medium_never_low() -> None:
+    flag = {"flag": True, "reason": "possible_undersegmentation", "metric": 0.9, "abstained": False}
+    conf, drivers = roi_confidence_v2(
+        90.0, _GOOD, route_layers=_BLOB_ROUTE, n_eff=12, obj_class="blob", dist_flag=flag
+    )
+    assert conf == "medium"
+    assert drivers["driver"] == "possible_undersegmentation"
+
+
+def test_confidence_v2_gross_structural_failure_is_low() -> None:
+    conf, _ = roi_confidence_v2(
+        40.0, {"n_objects": 0}, route_layers=_BLOB_ROUTE, n_eff=0, obj_class="blob",
+        dist_flag=None,
+    )
+    assert conf == "low"
+
+
+def test_confidence_v2_abstained_distribution_cannot_be_high() -> None:
+    abstained = {"flag": False, "reason": None, "metric": None, "abstained": True}
+    conf, _ = roi_confidence_v2(
+        90.0, _GOOD, route_layers=_BLOB_ROUTE, n_eff=8, obj_class="blob", dist_flag=abstained
+    )
+    assert conf == "medium"  # we never actually checked the distribution
+
+
+def test_confidence_v2_material_correction_gap_is_medium() -> None:
+    conf, drivers = roi_confidence_v2(
+        90.0, _GOOD, route_layers=_BLOB_ROUTE, n_eff=12, obj_class="blob",
+        dist_flag=_CLEAN_FLAG, correction_gap=True,
+    )
+    assert conf == "medium"
+    assert drivers["driver"] == "correction_changed_measurement"
+
+
+def test_correction_materiality() -> None:
+    base = {"n_objects": 10, "object_area_median": 100.0}
+    assert correction_materiality(base, dict(base)) is False
+    assert correction_materiality(base, {"n_objects": 5, "object_area_median": 100.0}) is True
+    assert correction_materiality(base, {"n_objects": 10, "object_area_median": 200.0}) is True
+    assert correction_materiality({"n_objects": 0}, {"n_objects": 3}) is True
