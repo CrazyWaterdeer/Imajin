@@ -264,6 +264,34 @@ def test_auto_segment_target_is_vision_hint() -> None:
     assert get_tool("auto_segment_target").vision_hint is True
 
 
+def test_segment_target_objects_surfaces_v2_confidence_fields(viewer) -> None:
+    # Many distributed bright blobs -> the v2.1 distribution layer is active.
+    image = np.zeros((160, 160), dtype=np.float32)
+    for y in range(15, 150, 28):
+        for x in range(15, 150, 28):
+            image[y : y + 8, x : x + 8] = 150.0
+    viewer.add_image(image, name="dots")
+
+    res = segment.segment_target_objects(
+        "dots", background_radius=12, min_size=20, smoothing_sigma=0
+    )
+    assert res["n_objects"] >= 10
+    assert "distribution_flag" in res and res["distribution_flag"] is not None
+    assert res["confidence_drivers"]["driver"]  # non-empty reason
+    assert res["roi_confidence"] in {"high", "medium", "low"}
+
+
+def test_expression_domain_never_gets_distribution_layer(viewer) -> None:
+    img = np.zeros((128, 128), dtype=np.float32)
+    img[30:90, 30:90] = 50.0
+    viewer.add_image(img, name="dom")
+
+    res = segment.segment_expression_domain("dom")
+    # Domains are routed out of the distribution layer (structurally: the tool
+    # never computes it), so the field must be absent.
+    assert "distribution_flag" not in res
+
+
 def test_segment_target_objects_treats_unannotated_3d_as_z_stack(viewer) -> None:
     image = np.zeros((4, 64, 64), dtype=np.float32)
     image[1:4, 22:34, 24:36] = 90.0

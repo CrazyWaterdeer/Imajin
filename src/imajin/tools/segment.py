@@ -27,6 +27,7 @@ from imajin.analysis.target_pipeline import (
     prepare_corrected as _prepare_corrected,
     threshold_and_label as _threshold_and_label,
 )
+from imajin.analysis.roi_quality import assess_roi as _assess_roi
 from imajin.analysis.segmentation_auto3d import (
     SegmentationCandidate as _SegmentationCandidate,
     build_auto3d_candidates as _build_auto3d_candidates,
@@ -746,7 +747,12 @@ def segment_target_objects(
     signal_qc = seg.signal_qc
     qc_warnings = saturation_warnings + seg.threshold_warnings + seg.qc_warnings
     roi_score = seg.roi_score
-    roi_confidence = seg.roi_confidence
+    # v2.1: context-aware, evidence-based confidence (overrides the v1 structural
+    # tier). Single-shot target objects are always the "blob" class.
+    _v2 = _assess_roi(masks, spacing, roi_score, seg.score_metrics, obj_class="blob")
+    roi_confidence = _v2["roi_confidence"]
+    distribution_flag = _v2["distribution_flag"]
+    confidence_drivers = _v2["confidence_drivers"]
 
     out_name = f"{L.name}_objects"
     layer = call_on_main(
@@ -785,6 +791,8 @@ def segment_target_objects(
             "qc_warnings": qc_warnings,
             "roi_score": roi_score,
             "roi_confidence": roi_confidence,
+            "distribution_flag": distribution_flag,
+            "confidence_drivers": confidence_drivers,
             **qc,
             **signal_qc,
         },
@@ -861,6 +869,8 @@ def segment_target_objects(
         **signal_qc,
         "roi_score": roi_score,
         "roi_confidence": roi_confidence,
+        "distribution_flag": distribution_flag,
+        "confidence_drivers": confidence_drivers,
         "qc_warnings": qc_warnings,
         "qc_png_path": saved_qc_png,
         "qc_png_error": qc_png_error,
@@ -979,6 +989,25 @@ def auto_segment_target(
         "smoothing_sigma": best_params.get("smoothing_sigma"),
     }
 
+    # v2.1 confidence, comparing the corrected mask against the raw first pass so
+    # a material correction can't be silently blessed as coherent.
+    raw_qc = (
+        {
+            "n_objects": history[0].get("n_objects", 0),
+            "object_area_median": history[0].get("object_area_median"),
+        }
+        if history
+        else None
+    )
+    _v2 = _assess_roi(
+        masks, spacing, best.roi_score, best.score_metrics,
+        obj_class="blob", raw_qc=raw_qc, corrected_qc=qc,
+    )
+    roi_confidence = _v2["roi_confidence"]
+    distribution_flag = _v2["distribution_flag"]
+    confidence_drivers = _v2["confidence_drivers"]
+    correction_gap = _v2["correction_gap"]
+
     out_name = f"{L.name}_objects"
     layer = call_on_main(
         add_labels_from_worker,
@@ -1002,7 +1031,10 @@ def auto_segment_target(
             "axes": "ZYX" if data.ndim == 3 else "YX",
             "qc_warnings": qc_warnings,
             "roi_score": best.roi_score,
-            "roi_confidence": best.roi_confidence,
+            "roi_confidence": roi_confidence,
+            "distribution_flag": distribution_flag,
+            "confidence_drivers": confidence_drivers,
+            "correction_gap": correction_gap,
             "n_iterations": len(history) - 1,
             **qc,
             **signal_qc,
@@ -1057,7 +1089,10 @@ def auto_segment_target(
         "voxel_spacing": list(spacing) if spacing is not None else None,
         "axes": axes,
         "roi_score": best.roi_score,
-        "roi_confidence": best.roi_confidence,
+        "roi_confidence": roi_confidence,
+        "distribution_flag": distribution_flag,
+        "confidence_drivers": confidence_drivers,
+        "correction_gap": correction_gap,
         "n_iterations": len(history) - 1,
         "max_iters": max_iters,
         "applied_params": applied_params,

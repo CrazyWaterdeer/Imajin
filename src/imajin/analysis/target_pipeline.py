@@ -363,6 +363,7 @@ def _history_entry(seg: TargetSegmentation, params: dict[str, Any], move: dict[s
     entry["score"] = float(seg.roi_score)
     entry["confidence"] = seg.roi_confidence
     entry["n_objects"] = int(seg.qc.get("n_objects", 0))
+    entry["object_area_median"] = seg.qc.get("object_area_median")
     if move is not None:
         entry["move"] = dict(move)
     return entry

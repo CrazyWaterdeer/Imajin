@@ -455,3 +455,26 @@ def test_openai_translation_drops_tool_result_image() -> None:
     out = _anthropic_to_openai_messages(messages)
     tool_msgs = [m for m in out if m.get("role") == "tool"]
     assert tool_msgs and tool_msgs[0]["content"] == "ok"  # image dropped, text kept
+
+
+def test_overlay_escalation_budget_suppresses_repeats(tmp_path) -> None:
+    from PIL import Image
+
+    from imajin.agent.runner import _maybe_overlay_block
+
+    p = tmp_path / "qc.png"
+    Image.new("RGB", (64, 64)).save(p)
+
+    @tool(vision_hint=True)
+    def seg_budget() -> dict:
+        return {}
+
+    budget: dict[str, str] = {}
+    med = {"roi_confidence": "medium", "qc_png_path": str(p), "labels_layer": "L"}
+
+    assert _maybe_overlay_block("seg_budget", med, budget) is not None  # first time shows
+    assert _maybe_overlay_block("seg_budget", med, budget) is None  # repeat suppressed
+    worse = {"roi_confidence": "low", "qc_png_path": str(p), "labels_layer": "L"}
+    assert _maybe_overlay_block("seg_budget", worse, budget) is not None  # worsened -> shows
+    other = {"roi_confidence": "medium", "qc_png_path": str(p), "labels_layer": "M"}
+    assert _maybe_overlay_block("seg_budget", other, budget) is not None  # other layer independent
