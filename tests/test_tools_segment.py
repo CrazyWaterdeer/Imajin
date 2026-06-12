@@ -4,10 +4,13 @@ import numpy as np
 import pytest
 from PIL import Image
 
+from imajin.analysis.segmentation import intersect_labels_with_mask
 from imajin.analysis.segmentation_auto3d import (
     SegmentationCandidate,
+    confidence_from_score,
     filter_labels_by_z_extent,
     rank_segmentation_labels,
+    score_roi_quality,
     selection_confidence,
     stitch_plane_labels,
 )
@@ -201,6 +204,64 @@ def test_segment_target_objects_uses_local_background(viewer) -> None:
     assert labels[94, 52] > 0
     assert labels[30, 90] == 0
     assert res["top_bright_outside_fraction"] < 0.25
+    # ROI-quality fields surfaced for the agent-vision gate (C0.4)
+    assert isinstance(res["roi_score"], float)
+    assert res["roi_confidence"] in {"high", "medium"}  # a clean 2-object ROI is not ambiguous
+
+
+def test_segment_target_array_runs_headless() -> None:
+    # The pure pipeline (C0.3) runs without a viewer -- the loop + batch depend on this.
+    from imajin.analysis.target_pipeline import segment_target_array
+
+    image = np.zeros((128, 128), dtype=np.float32)
+    image[28:40, 24:36] = 120.0
+    image[88:102, 46:60] = 110.0
+
+    seg = segment_target_array(
+        image,
+        spacing=None,
+        background_radius=16,
+        smoothing_sigma=0.0,
+        min_size=30,
+        fill_holes=False,
+    )
+    assert int(seg.masks.max()) == 2
+    assert seg.masks.shape == image.shape
+    assert isinstance(seg.roi_score, float)
+    assert seg.roi_confidence in {"high", "medium", "low"}
+
+
+def test_auto_segment_target_recovers_and_reports_history(viewer) -> None:
+    rng = np.random.default_rng(0)
+    image = rng.normal(20.0, 1.0, (128, 128)).astype(np.float32)
+    image[40:54, 40:54] += 8.0
+    image[80:94, 70:84] += 8.0
+    viewer.add_image(image, name="target")
+
+    res = segment.auto_segment_target(
+        "target",
+        min_snr=18.0,  # too strict -> first pass finds nothing
+        min_size=30,
+        smoothing_sigma=0,
+        background_radius=16,
+        max_iters=3,
+    )
+
+    assert res["labels_layer"] == "target_objects"
+    assert res["n_objects"] == 2  # recovered the two blobs
+    assert res["n_iterations"] >= 1  # the loop corrected at least once
+    assert res["applied_params"]["min_snr"] < 18.0  # the bar was lowered
+    assert res["roi_confidence"] in {"high", "medium", "low"}
+    assert isinstance(res["correction_history"], list)
+    assert len(res["correction_history"]) >= 2
+    labels = np.asarray(viewer.layers[res["labels_layer"]].data)
+    assert labels.shape == image.shape
+
+
+def test_auto_segment_target_is_vision_hint() -> None:
+    from imajin.tools.registry import get_tool
+
+    assert get_tool("auto_segment_target").vision_hint is True
 
 
 def test_segment_target_objects_treats_unannotated_3d_as_z_stack(viewer) -> None:
@@ -282,6 +343,50 @@ def test_auto3d_scoring_penalizes_extreme_merged_object() -> None:
     assert metrics["largest_to_median_object_ratio"] > 1000
     assert score < 60
     assert any("extreme merged object" in w for w in warnings)
+
+
+def test_score_roi_quality_zero_objects_is_floor() -> None:
+    warnings: list[str] = []
+    score = score_roi_quality(
+        {"n_objects": 0}, warnings, noise_sigma=1.0, ndim=2, has_multiple_z=False
+    )
+    assert score == -1000.0
+    assert any("zero" in w for w in warnings)
+
+
+def test_score_roi_quality_penalizes_over_wide_mask() -> None:
+    base = {"n_objects": 5, "top_bright_outside_fraction": 0.0}
+    narrow = score_roi_quality(
+        {**base, "mask_fraction": 0.05}, [], noise_sigma=1.0, ndim=2, has_multiple_z=False
+    )
+    wide = score_roi_quality(
+        {**base, "mask_fraction": 0.6}, [], noise_sigma=1.0, ndim=2, has_multiple_z=False
+    )
+    assert wide < narrow  # too-wide mask (background included) is penalised
+
+
+def test_score_roi_quality_penalizes_signal_outside_roi() -> None:
+    base = {"n_objects": 5, "mask_fraction": 0.1}
+    clean = score_roi_quality(
+        {**base, "top_bright_outside_fraction": 0.0}, [], noise_sigma=1.0, ndim=2,
+        has_multiple_z=False,
+    )
+    leaky = score_roi_quality(
+        {**base, "top_bright_outside_fraction": 0.5}, [], noise_sigma=1.0, ndim=2,
+        has_multiple_z=False,
+    )
+    assert leaky < clean  # bright signal outside the ROI (too narrow) is penalised
+
+
+def test_confidence_from_score_tiers() -> None:
+    good = {"n_objects": 12, "mask_fraction": 0.1, "largest_to_median_object_ratio": 2.0}
+    assert confidence_from_score(90.0, good) == "high"
+    assert confidence_from_score(65.0, good) == "medium"
+    assert confidence_from_score(40.0, good) == "low"
+    # zero objects and region-level merges are always low regardless of score (H1)
+    assert confidence_from_score(95.0, {"n_objects": 0}) == "low"
+    region = {"n_objects": 3, "mask_fraction": 0.2, "largest_to_median_object_ratio": 30.0}
+    assert confidence_from_score(95.0, region) == "low"
 
 
 def test_auto3d_confidence_accepts_stable_same_strategy_scores() -> None:
@@ -437,7 +542,7 @@ def test_intersect_labels_with_mask_zeros_outside() -> None:
     mask = np.zeros_like(labels, dtype=bool)
     mask[0:5, 0:5] = True
 
-    out = segment._intersect_labels_with_mask(labels, mask)
+    out = intersect_labels_with_mask(labels, mask)
 
     assert (out == 1).sum() == (labels == 1).sum()
     assert (out == 2).sum() == 0
@@ -450,7 +555,7 @@ def test_intersect_labels_with_mask_renumbers_when_requested() -> None:
 
     mask = np.ones_like(labels, dtype=bool)
 
-    out = segment._intersect_labels_with_mask(labels, mask, renumber=True)
+    out = intersect_labels_with_mask(labels, mask, renumber=True)
 
     unique = sorted(np.unique(out).tolist())
     assert unique == [0, 1, 2]

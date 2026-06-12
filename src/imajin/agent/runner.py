@@ -191,8 +191,68 @@ def _compact_tool_result(tool_name: str, output: Any) -> str:
     return _stringify_output(fallback)
 
 
+def _maybe_overlay_block(tool_name: str, result: Any) -> dict | None:
+    """Return a QC-overlay image block when a vision-hint tool produced an
+    *ambiguous* ROI (Phase A, ambiguous-only gate), else ``None``.
+
+    Gated on ``roi_confidence`` so a confident segmentation stays text-only and
+    spends no image tokens; the overlay is what lets the agent judge too-wide
+    vs too-narrow ROIs and decide whether to correct or escalate.
+    """
+    if not isinstance(result, dict):
+        return None
+    if result.get("roi_confidence") not in {"low", "medium"}:
+        return None
+    qc_png_path = result.get("qc_png_path")
+    if not qc_png_path:
+        return None
+    # Defensive lookup (H4): an injected tool_caller may route names absent from
+    # the registry; get_tool raises KeyError, which would abort the whole turn.
+    from imajin.tools.registry import get_tool
+
+    try:
+        entry = get_tool(tool_name)
+    except KeyError:
+        return None
+    if not getattr(entry, "vision_hint", False):
+        return None
+    from imajin.agent.vision import overlay_image_block
+
+    return overlay_image_block(qc_png_path)
+
+
+def _tool_result_content(tool_name: str, result: Any) -> Any:
+    """Compacted text tool-result, plus a QC overlay image block when the result
+    is an ambiguous ROI from a vision-hint tool (Phase A)."""
+    text = _compact_tool_result(tool_name, result)
+    block = _maybe_overlay_block(tool_name, result)
+    if block is None:
+        return text
+    return [{"type": "text", "text": text}, block]
+
+
+_IMAGE_BLOCK_NOMINAL_CHARS = 1200
+
+
+def _strip_image_data(value: Any) -> Any:
+    """Replace base64 image blocks with a small placeholder for budgeting only.
+
+    Compaction (C A.3) must count an attached QC overlay as a fixed nominal
+    cost, not its full base64 length, so one overlay does not prematurely evict
+    recent text context. The real image still travels to the API untouched in
+    ``self.messages``; this copy is used only by :func:`_message_chars`.
+    """
+    if isinstance(value, dict):
+        if value.get("type") == "image":
+            return {"type": "image", "_nominal": "x" * _IMAGE_BLOCK_NOMINAL_CHARS}
+        return {k: _strip_image_data(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_strip_image_data(v) for v in value]
+    return value
+
+
 def _message_chars(message: dict[str, Any]) -> int:
-    return len(_stringify_output(message))
+    return len(_stringify_output(_strip_image_data(message)))
 
 
 def _is_tool_result_message(message: dict[str, Any]) -> bool:
@@ -442,7 +502,7 @@ class AgentRunner:
                         {
                             "type": "tool_result",
                             "tool_use_id": block["id"],
-                            "content": _compact_tool_result(block["name"], result),
+                            "content": _tool_result_content(block["name"], result),
                         }
                     )
                     yield ToolResult(

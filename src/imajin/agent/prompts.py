@@ -216,6 +216,16 @@ When the user's request matches one of these intents, run the full pipeline with
   default. This avoids over-trusting raw brightness when acquisition gain raises the
   background. If objects are merged, keep clusters as ROIs unless the user asks for
   object splitting. Use split_touching=True only when candidate separation is needed.
+- **ROI judgment (too wide / too narrow)**: segmentation results carry a
+  `roi_confidence` ("high"/"medium"/"low"). On "low"/"medium" the tool result also
+  attaches a QC overlay image (raw + mask) — look at it. If the mask floods background
+  (too wide) or misses bright signal (too narrow), call `correct_roi` with a named fix
+  (e.g. raise `min_snr` and turn on the hyper-bright mask for too-wide; lower `min_snr`
+  for too-narrow). If a single correction is not enough, open `review_target_roi` so the
+  user can mark add/remove regions. Prefer `auto_segment_target` (opt-in) when the user
+  wants hands-off accuracy or for batch/non-interactive runs: it self-corrects
+  deterministically and reports a `correction_history`. Do not auto-correct
+  `segment_expression_domain` results — high coverage is expected there.
 - **Auto 3D segmentation**: for Z-stacks where projection would bias intensity or prior
   QC is unstable, prefer `segment_3d_cells_auto`. It returns a 3D Labels layer and ranks
   direct 3D vs plane-wise z-stitch candidates; use projection only for QC/figures unless

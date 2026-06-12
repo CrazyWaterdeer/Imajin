@@ -14,20 +14,18 @@ from imajin.analysis.domain_segmentation import (
 )
 from imajin.analysis.segmentation import (
     dilate_binary_um as _dilate_binary_um,
-    estimate_local_background as _estimate_local_background,
-    intersect_labels_with_mask as _intersect_labels_with_mask,
     label_qc as _label_qc,
     label_qc_warnings as _label_qc_warnings,
-    labels_from_binary as _labels_from_binary,
     min_size_from_physical as _min_size_from_physical,
     remove_small_binary_objects as _remove_small_binary_objects,
     segment_connected_regions as _segment_connected_regions,
-    target_object_qc as _target_object_qc,
     threshold_noise_floor as _threshold_noise_floor,
     voxel_spacing as _voxel_spacing,
 )
-from imajin.analysis.target_segmentation import (
-    target_threshold_for_scope as _target_threshold_for_scope,
+from imajin.analysis.target_pipeline import (
+    auto_correct_target as _auto_correct_target,
+    prepare_corrected as _prepare_corrected,
+    threshold_and_label as _threshold_and_label,
 )
 from imajin.analysis.segmentation_auto3d import (
     SegmentationCandidate as _SegmentationCandidate,
@@ -406,6 +404,9 @@ def segment_3d_cells_auto(
             "segmentation_method": "auto_3d_cells",
             "selected_strategy": best.strategy,
             "selection_confidence": confidence,
+            # Alias to the shared vision-gate key (M1) so an ambiguous 3D
+            # candidate also surfaces its QC overlay to the agent.
+            "roi_confidence": "low" if confidence == "fail" else confidence,
             "selected_score": best.score,
             "candidate_summaries": [_candidate_summary(c) for c in candidates],
             "candidate_modes": candidate_modes or ["direct_3d", "plane_stitch"],
@@ -452,6 +453,7 @@ def segment_3d_cells_auto(
         "segmentation_method": "auto_3d_cells",
         "selected_strategy": best.strategy,
         "selection_confidence": confidence,
+        "roi_confidence": "low" if confidence == "fail" else confidence,
         "selected_score": float(best.score),
         "candidate_summaries": [_candidate_summary(c) for c in candidates],
         "n_objects": qc["n_objects"],
@@ -665,8 +667,6 @@ def segment_target_objects(
     qc_png_path: str | None = None,
     boundary_mask: str | None = None,
 ) -> dict[str, Any]:
-    from skimage import filters
-
     L = call_on_main(snapshot_layer, image_layer)
     data = materialize_array(L.data)
     saturation_warnings = _saturation_warnings(data, layer_name=L.name)
@@ -695,28 +695,13 @@ def segment_target_objects(
         ndim=raw.ndim,
     )
     effective_min_size = physical_min_size or max(16, min(512, int(round(xy_area * 0.00005))))
-    background = _estimate_local_background(
+    corrected_for_threshold = _prepare_corrected(
         raw,
-        radius=background_radius,
-        method=background_method,
-        percentile=background_percentile,
+        background_radius=background_radius,
+        background_method=background_method,
+        background_percentile=background_percentile,
+        smoothing_sigma=smoothing_sigma,
     )
-    corrected = raw - background
-    corrected[~np.isfinite(corrected)] = 0.0
-
-    if smoothing_sigma > 0:
-        sigma: float | tuple[float, ...]
-        if corrected.ndim == 3:
-            sigma = (0.0, float(smoothing_sigma), float(smoothing_sigma))
-        else:
-            sigma = float(smoothing_sigma)
-        corrected_for_threshold = filters.gaussian(
-            corrected,
-            sigma=sigma,
-            preserve_range=True,
-        ).astype(np.float32)
-    else:
-        corrected_for_threshold = corrected
 
     # Load the boundary mask early so it can be used as the hysteresis grow region.
     boundary_data_bool: np.ndarray | None = None
@@ -730,77 +715,38 @@ def segment_target_objects(
             )
         boundary_data_bool = _boundary_raw > 0
 
-    threshold, noise_sigma, threshold_scope, threshold_warnings = _target_threshold_for_scope(
+    # Pure threshold -> label -> QC -> score (extracted to analysis/target_pipeline
+    # so the single-shot tool, the auto-correct loop, and headless tests share one
+    # code path). The caller owns saturation warnings and the boundary-layer lookup.
+    seg = _threshold_and_label(
         corrected_for_threshold,
+        raw,
+        spacing=spacing,
         threshold_method=threshold_method,
         threshold_percentile=threshold_percentile,
-        min_snr=min_snr,
-        boundary_mask=boundary_data_bool,
-        clip_percentile=threshold_clip_percentile,
+        threshold_clip_percentile=threshold_clip_percentile,
         auto_mask_hyperbright=auto_mask_hyperbright,
         hyperbright_percentile=hyperbright_percentile,
         hyperbright_dilate_radius=hyperbright_dilate_radius,
-    )
-
-    high_threshold = max(float(threshold), float(high_snr) * float(noise_sigma))
-    if boundary_data_bool is not None:
-        scoped_threshold_image = np.where(
-            boundary_data_bool,
-            corrected_for_threshold,
-            -np.inf,
-        ).astype(np.float32, copy=False)
-        low_candidates = (scoped_threshold_image >= float(threshold)) & boundary_data_bool
-        high_seeds = (scoped_threshold_image >= high_threshold) & boundary_data_bool
-        if high_threshold > threshold and np.any(high_seeds):
-            binary = (
-                filters.apply_hysteresis_threshold(
-                    scoped_threshold_image,
-                    low=float(threshold),
-                    high=float(high_threshold),
-                )
-                & boundary_data_bool
-            )
-        else:
-            binary = low_candidates
-    elif high_threshold > threshold and np.any(corrected_for_threshold >= high_threshold):
-        binary = filters.apply_hysteresis_threshold(
-            corrected_for_threshold,
-            low=float(threshold),
-            high=float(high_threshold),
-        )
-    else:
-        binary = corrected_for_threshold > float(threshold)
-
-    masks = _labels_from_binary(
-        binary,
+        min_snr=min_snr,
+        high_snr=high_snr,
         min_size=effective_min_size,
         fill_holes=fill_holes,
         split_touching=split_touching,
         min_distance=min_distance,
         min_distance_um=min_distance_um,
-        spacing=spacing,
+        boundary_mask=boundary_data_bool,
     )
-    qc = _label_qc(masks)
-    signal_qc, qc_warnings = _target_object_qc(
-        raw,
-        corrected_for_threshold,
-        masks,
-        noise_sigma=noise_sigma,
-    )
-    qc_warnings = saturation_warnings + threshold_warnings + qc_warnings
-
-    if boundary_data_bool is not None:
-        masks = _intersect_labels_with_mask(
-            masks, boundary_data_bool, renumber=True
-        )
-        qc = _label_qc(masks)
-        signal_qc, qc_warnings = _target_object_qc(
-            raw,
-            corrected_for_threshold,
-            masks,
-            noise_sigma=noise_sigma,
-        )
-        qc_warnings = saturation_warnings + threshold_warnings + qc_warnings
+    masks = seg.masks
+    threshold = seg.threshold
+    high_threshold = seg.high_threshold
+    noise_sigma = seg.noise_sigma
+    threshold_scope = seg.threshold_scope
+    qc = seg.qc
+    signal_qc = seg.signal_qc
+    qc_warnings = saturation_warnings + seg.threshold_warnings + seg.qc_warnings
+    roi_score = seg.roi_score
+    roi_confidence = seg.roi_confidence
 
     out_name = f"{L.name}_objects"
     layer = call_on_main(
@@ -837,6 +783,8 @@ def segment_target_objects(
             "voxel_spacing": spacing,
             "axes": "ZYX" if data.ndim == 3 else "YX",
             "qc_warnings": qc_warnings,
+            "roi_score": roi_score,
+            "roi_confidence": roi_confidence,
             **qc,
             **signal_qc,
         },
@@ -910,6 +858,210 @@ def segment_target_objects(
         "object_area_min": qc["object_area_min"],
         "object_area_median": qc["object_area_median"],
         "object_area_max": qc["object_area_max"],
+        **signal_qc,
+        "roi_score": roi_score,
+        "roi_confidence": roi_confidence,
+        "qc_warnings": qc_warnings,
+        "qc_png_path": saved_qc_png,
+        "qc_png_error": qc_png_error,
+        "qc_png_skipped_reason": qc_png_skipped_reason,
+    }
+
+
+@tool(
+    description="Hands-off target-object segmentation that auto-corrects the ROI. "
+    "Runs the same pipeline as segment_target_objects, then deterministically "
+    "re-thresholds to fix a too-wide or too-narrow ROI (raising/lowering the SNR "
+    "bar, masking hyper-bright debris, widening the background estimate) until the "
+    "ROI-quality score is confident or the iteration budget is spent. Opt-in "
+    "alternative to segment_target_objects for batch/non-interactive accuracy; "
+    "returns the best ROI, the applied parameters, and the correction history. "
+    "Target objects only -- not for permissive expression domains, whose high "
+    "coverage is expected.",
+    phase="2",
+    vision_hint=True,
+    worker=True,
+)
+def auto_segment_target(
+    image_layer: str,
+    background_radius: int = 48,
+    background_method: str = "opening",
+    background_percentile: float = 20.0,
+    threshold_method: str = "auto",
+    threshold_percentile: float = 99.0,
+    min_snr: float = 2.0,
+    high_snr: float = 4.0,
+    min_size: int | None = None,
+    min_area_um2: float | None = None,
+    min_volume_um3: float | None = None,
+    smoothing_sigma: float = 1.0,
+    fill_holes: bool = True,
+    split_touching: bool = False,
+    min_distance: int = 20,
+    min_distance_um: float | None = None,
+    max_iters: int = 3,
+    save_qc_png: bool = True,
+    qc_png_path: str | None = None,
+    boundary_mask: str | None = None,
+) -> dict[str, Any]:
+    L = call_on_main(snapshot_layer, image_layer)
+    data = materialize_array(L.data)
+    saturation_warnings = _saturation_warnings(data, layer_name=L.name)
+
+    axes = _layer_axes_for_seg(L, data.ndim)
+    if "T" in axes:
+        raise ValueError(
+            f"auto_segment_target refuses to run on a time-series layer "
+            f"({axes}, shape {data.shape}). Use extract_timepoint or a per-frame "
+            "workflow first."
+        )
+    if data.ndim < 2 or data.ndim > 3:
+        raise ValueError(
+            f"auto_segment_target expects a 2D (YX) or 3D (ZYX) layer, got "
+            f"shape {data.shape}."
+        )
+
+    raw = np.asarray(data, dtype=np.float32)
+    spacing = _voxel_spacing(tuple(L.scale), raw.ndim)
+    xy_area = int(np.prod(raw.shape[-2:])) if raw.ndim >= 2 else int(raw.size)
+    physical_min_size = _min_size_from_physical(
+        min_size=min_size,
+        min_volume_um3=min_volume_um3,
+        min_area_um2=min_area_um2,
+        spacing=spacing,
+        ndim=raw.ndim,
+    )
+    effective_min_size = physical_min_size or max(16, min(512, int(round(xy_area * 0.00005))))
+
+    boundary_data_bool: np.ndarray | None = None
+    if boundary_mask is not None:
+        boundary_layer_snapshot = call_on_main(snapshot_layer, boundary_mask)
+        _boundary_raw = materialize_array(boundary_layer_snapshot.data)
+        if _boundary_raw.shape != raw.shape:
+            raise ValueError(
+                f"boundary_mask shape {_boundary_raw.shape} does not match "
+                f"target image shape {raw.shape}"
+            )
+        boundary_data_bool = _boundary_raw > 0
+
+    params: dict[str, Any] = {
+        "background_radius": background_radius,
+        "background_method": background_method,
+        "background_percentile": background_percentile,
+        "smoothing_sigma": smoothing_sigma,
+        "threshold_method": threshold_method,
+        "threshold_percentile": threshold_percentile,
+        "min_snr": min_snr,
+        "high_snr": high_snr,
+        "min_size": effective_min_size,
+        "fill_holes": fill_holes,
+        "split_touching": split_touching,
+        "min_distance": min_distance,
+        "min_distance_um": min_distance_um,
+    }
+    best, best_params, history = _auto_correct_target(
+        raw,
+        spacing=spacing,
+        params=params,
+        boundary_mask=boundary_data_bool,
+        max_iters=max_iters,
+    )
+    masks = best.masks
+    qc = best.qc
+    signal_qc = best.signal_qc
+    qc_warnings = saturation_warnings + best.threshold_warnings + best.qc_warnings
+    applied_params = {
+        "min_snr": best_params.get("min_snr"),
+        "high_snr": best_params.get("high_snr"),
+        "auto_mask_hyperbright": best_params.get("auto_mask_hyperbright", False),
+        "threshold_clip_percentile": best_params.get("threshold_clip_percentile"),
+        "background_radius": best_params.get("background_radius"),
+        "smoothing_sigma": best_params.get("smoothing_sigma"),
+    }
+
+    out_name = f"{L.name}_objects"
+    layer = call_on_main(
+        add_labels_from_worker,
+        masks,
+        name=out_name,
+        scale=tuple(L.scale),
+        metadata={
+            "source_layer": L.name,
+            **_source_metadata_from_layer(L),
+            "segmentation_method": "auto_target_objects",
+            "object_unit": "object_or_roi",
+            "threshold": best.threshold,
+            "high_threshold": best.high_threshold,
+            "noise_sigma": best.noise_sigma,
+            "threshold_scope": best.threshold_scope,
+            **applied_params,
+            "min_size": effective_min_size,
+            "requested_min_size": min_size,
+            "boundary_mask": boundary_mask,
+            "voxel_spacing": spacing,
+            "axes": "ZYX" if data.ndim == 3 else "YX",
+            "qc_warnings": qc_warnings,
+            "roi_score": best.roi_score,
+            "roi_confidence": best.roi_confidence,
+            "n_iterations": len(history) - 1,
+            **qc,
+            **signal_qc,
+        },
+    )
+
+    secondary_mask_array: np.ndarray | None = None
+    if boundary_data_bool is not None:
+        secondary_mask_array = boundary_data_bool.astype(np.int32)
+
+    saved_qc_png: str | None = None
+    qc_png_error: str | None = None
+    qc_png_skipped_reason: str | None = None
+    if save_qc_png:
+        try:
+            out_path = (
+                normalize_user_path(qc_png_path).resolve()
+                if qc_png_path
+                else _default_qc_png_path(layer.name, L)
+            )
+            saved_qc_png, qc_png_skipped_reason = _save_qc_png(
+                raw,
+                masks,
+                out_path,
+                labels_layer=layer.name,
+                source_layer=L.name,
+                method="auto_target_objects",
+                force=qc_png_path is not None,
+                secondary_outline_mask=secondary_mask_array,
+            )
+            if saved_qc_png:
+                try:
+                    layer.metadata["qc_png_path"] = saved_qc_png
+                except Exception:
+                    pass
+        except Exception as exc:  # noqa: BLE001
+            qc_png_error = f"{type(exc).__name__}: {exc}"
+
+    return {
+        "labels_layer": layer.name,
+        "object_unit": "object_or_roi",
+        "n_objects": qc["n_objects"],
+        "n_cells": qc["n_objects"],
+        "shape": qc["shape"],
+        "dtype": qc["dtype"],
+        "threshold": best.threshold,
+        "noise_sigma": best.noise_sigma,
+        "threshold_scope": best.threshold_scope,
+        "min_size": effective_min_size,
+        "requested_min_size": min_size,
+        "boundary_mask": boundary_mask,
+        "voxel_spacing": list(spacing) if spacing is not None else None,
+        "axes": axes,
+        "roi_score": best.roi_score,
+        "roi_confidence": best.roi_confidence,
+        "n_iterations": len(history) - 1,
+        "max_iters": max_iters,
+        "applied_params": applied_params,
+        "correction_history": history,
         **signal_qc,
         "qc_warnings": qc_warnings,
         "qc_png_path": saved_qc_png,
@@ -1268,6 +1420,12 @@ def correct_roi(
         "threshold": new_result.get("threshold"),
         "threshold_scope": new_result.get("threshold_scope"),
         "qc_warnings": new_result.get("qc_warnings", []),
+        # Surface the corrected result's score + overlay (H3) so the agent-vision
+        # gate fires on the correction it just made -- the moment it most needs
+        # to see whether the ROI is now right.
+        "roi_score": new_result.get("roi_score"),
+        "roi_confidence": new_result.get("roi_confidence"),
+        "qc_png_path": new_result.get("qc_png_path"),
         "applied_params": {
             k: v for k, v in kwargs.items() if k not in {"image_layer"}
         },

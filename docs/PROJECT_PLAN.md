@@ -403,3 +403,25 @@ The metadata/channel cleanup that gated later batch/report work is complete:
    from each file's `metadata_summary`; preflight validation already existed.
 4. no filename hard-coding — filename use is limited to format dispatch
    (`.lsm` → loader); no channel semantics are inferred from filenames.
+
+## Agent ROI judgment — DONE
+
+ROI selection is no longer a fixed one-shot threshold. A confidence-tiered hybrid
+lets segmentation self-correct, lets the agent *see* ambiguous results, and escalates
+to the existing user-review path:
+
+1. every target-object segmentation carries a deterministic `roi_score` /
+   `roi_confidence` from the shared `score_roi_quality` (the same scorer auto3d uses to
+   rank candidates), so "too wide" (`mask_fraction`) and "too narrow"
+   (`top_bright_outside_fraction`) are quantified, not guessed.
+2. on low/medium confidence the agent runner attaches the QC overlay image to the tool
+   result (Phase A, ambiguous-only), so the model judges the mask the way a human would
+   and calls `correct_roi` or `review_target_roi`.
+3. `auto_segment_target` (opt-in) runs a deterministic correct loop with no LLM in the
+   loop — for batch/headless accuracy; reports `correction_history`.
+
+Pure compute lives in `analysis/target_pipeline.py` (the Core Analysis Layer split that
+the Architecture Direction called for); `segment_target_objects` now delegates to it.
+Residual limitation: the score cannot tell "too wide" from a legitimately confluent
+target, so `auto_segment_target` is for sparse/punctate targets — dense domains should
+use single-shot + review.

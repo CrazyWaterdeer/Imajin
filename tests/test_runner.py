@@ -338,3 +338,120 @@ def test_runner_recovers_once_from_context_limit_error() -> None:
 
     assert any(isinstance(e, TextDelta) and e.text == "recovered" for e in events)
     assert len(provider.calls) == 2
+
+
+# --- Phase A: agent-vision wiring (ambiguous-only) ---
+
+
+def test_overlay_image_block_roundtrip(tmp_path) -> None:
+    from PIL import Image
+
+    from imajin.agent.vision import overlay_image_block
+
+    p = tmp_path / "qc.png"
+    Image.new("RGB", (800, 600)).save(p)
+
+    block = overlay_image_block(str(p), max_px=512)
+    assert block is not None
+    assert block["type"] == "image"
+    assert block["source"]["type"] == "base64"
+    assert block["source"]["media_type"] == "image/png"
+    assert len(block["source"]["data"]) > 0
+    # Missing / falsy paths degrade to None (headless-safe).
+    assert overlay_image_block(None) is None
+    assert overlay_image_block(str(tmp_path / "nope.png")) is None
+
+
+def test_maybe_overlay_block_gates_on_confidence_and_vision_hint(tmp_path) -> None:
+    from PIL import Image
+
+    from imajin.agent.runner import _maybe_overlay_block, _tool_result_content
+
+    p = tmp_path / "qc.png"
+    Image.new("RGB", (64, 64)).save(p)
+
+    @tool(vision_hint=True)
+    def seg_vision() -> dict:
+        return {}
+
+    @tool(vision_hint=False)
+    def plain_tool() -> dict:
+        return {}
+
+    low = {"roi_confidence": "low", "qc_png_path": str(p)}
+    high = {"roi_confidence": "high", "qc_png_path": str(p)}
+
+    assert _maybe_overlay_block("seg_vision", low) is not None
+    assert _maybe_overlay_block("seg_vision", high) is None  # confident -> no image
+    assert _maybe_overlay_block("seg_vision", {"roi_confidence": "low"}) is None  # no png
+    assert _maybe_overlay_block("plain_tool", low) is None  # not a vision tool
+    # Unregistered name must not raise (H4: injected tool_caller may route it).
+    assert _maybe_overlay_block("does_not_exist", low) is None
+
+    content = _tool_result_content("seg_vision", low)
+    assert isinstance(content, list)
+    assert content[0]["type"] == "text" and content[1]["type"] == "image"
+    assert isinstance(_tool_result_content("seg_vision", high), str)
+
+
+def test_message_chars_counts_image_nominally() -> None:
+    from imajin.agent.runner import _IMAGE_BLOCK_NOMINAL_CHARS, _message_chars
+
+    big_b64 = "A" * 500_000
+    msg = {
+        "role": "user",
+        "content": [
+            {
+                "type": "tool_result",
+                "tool_use_id": "t1",
+                "content": [
+                    {"type": "text", "text": "hello"},
+                    {
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type": "image/png",
+                            "data": big_b64,
+                        },
+                    },
+                ],
+            }
+        ],
+    }
+    chars = _message_chars(msg)
+    assert chars < 100_000  # base64 length is not counted
+    assert chars >= _IMAGE_BLOCK_NOMINAL_CHARS  # but the image still has a budget cost
+
+
+def test_openai_translation_drops_tool_result_image() -> None:
+    from imajin.agent.providers.openai_compat import _anthropic_to_openai_messages
+
+    messages = [
+        {
+            "role": "assistant",
+            "content": [{"type": "tool_use", "id": "t1", "name": "seg", "input": {}}],
+        },
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "t1",
+                    "content": [
+                        {"type": "text", "text": "ok"},
+                        {
+                            "type": "image",
+                            "source": {
+                                "type": "base64",
+                                "media_type": "image/png",
+                                "data": "ZZZ",
+                            },
+                        },
+                    ],
+                }
+            ],
+        },
+    ]
+    out = _anthropic_to_openai_messages(messages)
+    tool_msgs = [m for m in out if m.get("role") == "tool"]
+    assert tool_msgs and tool_msgs[0]["content"] == "ok"  # image dropped, text kept
