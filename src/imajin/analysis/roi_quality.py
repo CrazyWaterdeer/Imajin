@@ -162,3 +162,50 @@ def object_sizes_physical(
 
     n_usable = int(np.count_nonzero(~border_mask))
     return sizes, border_mask, n_usable
+
+
+def distribution_flag(sizes_um: np.ndarray, *, n_eff: int) -> dict[str, Any]:
+    """Layer 2 — a weak, biology-safe size-distribution anomaly flag.
+
+    Operates on log2(size) with robust stats. Returns only a flag (with the
+    offending metric); it is **never** a score delta and **never** yields
+    ``low``/``high`` — at most it routes to ``medium`` ("worth a look"). High
+    spread that is merely *broad and unimodal* (real biology) is not flagged;
+    only a fragment tail (over-segmentation) or a distinct ~2× secondary mode
+    (under-segmentation) is. Below ``MIN_DISTRIBUTION_N`` effective objects the
+    tests are low-power, so it **abstains** rather than asserting coherence.
+    """
+    sizes = np.asarray(sizes_um, dtype=float)
+    sizes = sizes[np.isfinite(sizes) & (sizes > 0)]
+    if int(n_eff) < MIN_DISTRIBUTION_N or sizes.size < MIN_DISTRIBUTION_N:
+        return {"flag": False, "reason": None, "metric": None, "abstained": True}
+
+    log2 = np.sort(np.log2(sizes))
+    med = float(np.median(log2))
+
+    # Over-segmentation: a substantial small-size tail.
+    small_frac = float(np.mean(log2 < med - DIST_SMALL_TAIL_LOG2))
+    if small_frac >= DIST_SMALL_TAIL_FRACTION:
+        return {
+            "flag": True,
+            "reason": "possible_oversegmentation",
+            "metric": round(small_frac, 3),
+            "abstained": False,
+        }
+
+    # Under-segmentation: a distinct secondary mode (largest interior gap with
+    # both sides substantial) — merged doublets sit ~+1.0 log2 (2×).
+    gaps = np.diff(log2)
+    if gaps.size:
+        k = int(np.argmax(gaps))
+        gap = float(gaps[k])
+        frac_low = (k + 1) / log2.size
+        if gap >= DIST_BIMODAL_LOG2_GAP and min(frac_low, 1.0 - frac_low) >= DIST_SMALL_TAIL_FRACTION:
+            return {
+                "flag": True,
+                "reason": "possible_undersegmentation",
+                "metric": round(gap, 3),
+                "abstained": False,
+            }
+
+    return {"flag": False, "reason": None, "metric": None, "abstained": False}

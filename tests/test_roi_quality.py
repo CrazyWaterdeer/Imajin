@@ -12,6 +12,7 @@ from __future__ import annotations
 import numpy as np
 
 from imajin.analysis.roi_quality import (
+    distribution_flag,
     effective_object_count,
     object_class,
     object_sizes_physical,
@@ -198,3 +199,52 @@ def test_f0_generators_have_their_intended_shape() -> None:
 
     broad = broad_lognormal_sizes()
     assert broad.min() > 0 and broad.std() / broad.mean() > 0.2  # genuinely broad
+
+
+# --- C: distribution anomaly flag (weak, medium-only) ---
+
+
+def test_distribution_flag_catches_undersegmentation() -> None:
+    res = distribution_flag(undersegmented_sizes(), n_eff=50)
+    assert res["flag"] is True
+    assert res["reason"] == "possible_undersegmentation"
+    assert res["abstained"] is False
+
+
+def test_distribution_flag_catches_oversegmentation() -> None:
+    res = distribution_flag(oversegmented_sizes(), n_eff=52)
+    assert res["flag"] is True
+    assert res["reason"] == "possible_oversegmentation"
+
+
+def test_distribution_flag_quiet_on_clean_unimodal() -> None:
+    res = distribution_flag(good_unimodal_sizes(), n_eff=50)
+    assert res["flag"] is False
+    assert res["abstained"] is False
+
+
+def test_distribution_flag_does_not_mistake_broad_biology_for_error() -> None:
+    # The central safety property: wide *unimodal* lognormal spread (real
+    # biology, e.g. lipid droplets under diet) must NOT be flagged.
+    res = distribution_flag(broad_lognormal_sizes(), n_eff=50)
+    assert res["flag"] is False
+
+
+def test_distribution_flag_abstains_below_min_n() -> None:
+    res = distribution_flag(good_unimodal_sizes(n=8), n_eff=8)
+    assert res["abstained"] is True
+    assert res["flag"] is False
+
+
+def test_distribution_flag_is_only_ever_a_flag_never_a_confidence() -> None:
+    # Spec-central: this layer never emits low/high and never a score.
+    for sizes, n in [
+        (undersegmented_sizes(), 50),
+        (oversegmented_sizes(), 52),
+        (good_unimodal_sizes(), 50),
+        (good_unimodal_sizes(n=8), 8),
+    ]:
+        res = distribution_flag(sizes, n_eff=n)
+        assert set(res) == {"flag", "reason", "metric", "abstained"}
+        assert isinstance(res["flag"], bool)
+        assert res["reason"] in {None, "possible_undersegmentation", "possible_oversegmentation"}
