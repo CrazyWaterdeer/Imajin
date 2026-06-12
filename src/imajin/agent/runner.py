@@ -191,7 +191,9 @@ def _compact_tool_result(tool_name: str, output: Any) -> str:
     return _stringify_output(fallback)
 
 
-def _maybe_overlay_block(tool_name: str, result: Any) -> dict | None:
+def _maybe_overlay_block(
+    tool_name: str, result: Any, budget: dict[str, str] | None = None
+) -> dict | None:
     """Return a QC-overlay image block when a vision-hint tool produced an
     *ambiguous* ROI (Phase A, ambiguous-only gate), else ``None``.
 
@@ -216,16 +218,30 @@ def _maybe_overlay_block(tool_name: str, result: Any) -> dict | None:
         return None
     if not getattr(entry, "vision_hint", False):
         return None
+    # Escalation budget (E2): skip if this ROI layer was already shown at >= this
+    # severity; re-attach only when confidence worsened (e.g. medium -> low), so
+    # v2.1's more-frequent "medium" doesn't re-show the same overlay every turn.
+    if budget is not None:
+        key = str(result.get("labels_layer") or tool_name)
+        conf = result.get("roi_confidence")
+        rank = {"low": 0, "medium": 1}
+        prev = budget.get(key)
+        if prev is not None and rank.get(conf, 1) >= rank.get(prev, 1):
+            return None
+        budget[key] = str(conf)
     from imajin.agent.vision import overlay_image_block
 
     return overlay_image_block(qc_png_path)
 
 
-def _tool_result_content(tool_name: str, result: Any) -> Any:
+def _tool_result_content(
+    tool_name: str, result: Any, budget: dict[str, str] | None = None
+) -> Any:
     """Compacted text tool-result, plus a QC overlay image block when the result
-    is an ambiguous ROI from a vision-hint tool (Phase A)."""
+    is an ambiguous ROI from a vision-hint tool (Phase A), subject to the
+    escalation budget (E2)."""
     text = _compact_tool_result(tool_name, result)
-    block = _maybe_overlay_block(tool_name, result)
+    block = _maybe_overlay_block(tool_name, result, budget)
     if block is None:
         return text
     return [{"type": "text", "text": text}, block]
@@ -338,6 +354,9 @@ class AgentRunner:
         self.max_loops = max_loops
         self.messages: list[dict[str, Any]] = []
         self._cancelled = False
+        # Escalation budget: last overlay confidence shown per ROI layer, so v2.1's
+        # more-frequent "medium" doesn't re-attach the same overlay every turn.
+        self._overlay_budget: dict[str, str] = {}
         # If unset, falls back to direct call_tool (suitable for tests/scripts).
         # In the GUI, chat dock injects a callable that marshals to the main
         # thread to avoid Qt threading violations.
@@ -502,7 +521,9 @@ class AgentRunner:
                         {
                             "type": "tool_result",
                             "tool_use_id": block["id"],
-                            "content": _tool_result_content(block["name"], result),
+                            "content": _tool_result_content(
+                                block["name"], result, self._overlay_budget
+                            ),
                         }
                     )
                     yield ToolResult(

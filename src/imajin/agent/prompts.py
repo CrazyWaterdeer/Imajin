@@ -226,6 +226,13 @@ When the user's request matches one of these intents, run the full pipeline with
   wants hands-off accuracy or for batch/non-interactive runs: it self-corrects
   deterministically and reports a `correction_history`. Do not auto-correct
   `segment_expression_domain` results — high coverage is expected there.
+- **Distribution flag vs confidence**: results may also carry `distribution_flag`
+  (`possible_undersegmentation` / `possible_oversegmentation`) and `confidence_drivers`.
+  The flag is a *possible* segmentation issue **worth a look** — not a phenotype verdict
+  and not an auto-correction trigger; broad biological size variation (e.g. lipid droplets
+  under diet) is expected and is not an error. Use `confidence_drivers` to explain to the
+  user *why* confidence was medium/low (a structural failure vs a distribution flag vs too
+  few objects to judge), and distinguish a distribution flag from a structural `low`.
 - **Auto 3D segmentation**: for Z-stacks where projection would bias intensity or prior
   QC is unstable, prefer `segment_3d_cells_auto`. It returns a 3D Labels layer and ranks
   direct 3D vs plane-wise z-stitch candidates; use projection only for QC/figures unless
