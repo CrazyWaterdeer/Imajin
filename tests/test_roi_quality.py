@@ -11,6 +11,12 @@ from __future__ import annotations
 
 import numpy as np
 
+from imajin.analysis.roi_quality import (
+    effective_object_count,
+    object_class,
+    object_sizes_physical,
+    route,
+)
 from imajin.analysis.segmentation_auto3d import confidence_from_score
 from imajin.tools import segment
 
@@ -62,3 +68,84 @@ def test_v1_correct_roi_exposes_confidence_and_overlay(viewer) -> None:
     assert res.get("ok") is True
     assert "roi_confidence" in res
     assert "qc_png_path" in res
+
+
+# --- A: Layer-0 routing ---
+
+
+def test_object_class_from_metadata() -> None:
+    assert object_class({"segmentation_method": "target_objects"}) == "blob"
+    assert object_class({"segmentation_method": "auto_target_objects"}) == "blob"
+    assert object_class({"segmentation_method": "expression_domain"}) == "domain"
+    assert object_class({"segmentation_method": "neuron_trace"}) == "neuron"
+    assert object_class({"object_unit": "object_or_roi"}) == "blob"  # fallback
+    assert object_class({"object_unit": "nucleus"}) == "blob"
+    assert object_class({}) == "unclassified"
+    assert object_class(None) == "unclassified"
+
+
+def test_effective_object_count_distinguishes_spread_from_clustered() -> None:
+    # 16 objects on a wide grid -> distributed
+    spread = np.zeros((128, 128), dtype=np.int32)
+    label = 1
+    for y in range(10, 120, 30):
+        for x in range(10, 120, 30):
+            spread[y : y + 4, x : x + 4] = label
+            label += 1
+    n, distributed = effective_object_count(spread)
+    assert n >= 12 and distributed is True
+
+    # same count crammed into one corner -> not distributed
+    clustered = np.zeros((128, 128), dtype=np.int32)
+    label = 1
+    for y in range(2, 26, 6):
+        for x in range(2, 26, 6):
+            clustered[y : y + 2, x : x + 2] = label
+            label += 1
+    n2, distributed2 = effective_object_count(clustered)
+    assert n2 >= 12 and distributed2 is False
+
+    # too few objects -> never "distributed"
+    assert effective_object_count(np.zeros((16, 16), dtype=np.int32)) == (0, False)
+
+
+def test_route_admits_distribution_only_for_numerous_distributed_blobs() -> None:
+    assert "distribution" in route("blob", 12, True)
+    assert "distribution" not in route("blob", 4, True)  # too few
+    assert "distribution" not in route("blob", 12, False)  # clustered
+    assert "distribution" not in route("domain", 50, True)  # domain never
+    assert "distribution" not in route("neuron", 50, True)  # arbor never
+    assert "distribution" not in route("unclassified", 50, True)  # conservative
+    # structural + vision are always available
+    for cls in ("blob", "domain", "neuron", "unclassified"):
+        assert {"structural", "vision"} <= route(cls, 50, True)
+
+
+# --- B: physical size extraction ---
+
+
+def test_object_sizes_physical_2d_area_with_spacing() -> None:
+    labels = np.zeros((64, 64), dtype=np.int32)
+    labels[20:30, 20:30] = 1  # 10x10 = 100 px, away from the border
+    sizes, border_mask, n_usable = object_sizes_physical(labels, spacing=(0.5, 0.5))
+    assert sizes.shape == (1,)
+    assert np.isclose(sizes[0], 100 * 0.25)  # 25 µm²
+    assert border_mask.tolist() == [False]
+    assert n_usable == 1
+
+
+def test_object_sizes_physical_3d_volume_anisotropic() -> None:
+    labels = np.zeros((6, 32, 32), dtype=np.int32)
+    labels[1:4, 10:14, 10:14] = 1  # 3*4*4 = 48 voxels, interior
+    sizes, _border, _n = object_sizes_physical(labels, spacing=(2.0, 0.5, 0.5))
+    assert np.isclose(sizes[0], 48 * (2.0 * 0.5 * 0.5))  # 24 µm³
+
+
+def test_object_sizes_physical_flags_border_objects() -> None:
+    labels = np.zeros((32, 32), dtype=np.int32)
+    labels[0:5, 0:5] = 1  # touches the top-left corner -> border
+    labels[15:20, 15:20] = 2  # interior
+    sizes, border_mask, n_usable = object_sizes_physical(labels)
+    assert border_mask.tolist() == [True, False]
+    assert n_usable == 1  # only the interior object is usable
+    assert sizes.shape == (2,)  # all sizes returned; caller masks
