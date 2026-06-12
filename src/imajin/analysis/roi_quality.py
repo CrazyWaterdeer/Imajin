@@ -291,3 +291,52 @@ def roi_confidence_v2(
 
     drivers["driver"] = "insufficient_positive_evidence"
     return "medium", drivers
+
+
+def assess_roi(
+    masks: np.ndarray,
+    spacing: tuple[float, ...] | None,
+    structural_score: float,
+    structural_metrics: dict[str, Any],
+    *,
+    obj_class: ObjectClass = "blob",
+    raw_qc: dict[str, Any] | None = None,
+    corrected_qc: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """End-to-end v2.1 verdict for one labelled mask.
+
+    Composes Layer 0 routing → size extraction → the distribution flag →
+    `roi_confidence_v2`, plus correction materiality when raw/corrected QC are
+    given. The single integration point so both tools (and any caller) stay
+    consistent. Returns `roi_confidence`, `distribution_flag`,
+    `confidence_drivers`, `correction_gap`.
+    """
+    n_eff, distributed = effective_object_count(masks)
+    layers = route(obj_class, n_eff, distributed)
+
+    dist_flag: dict[str, Any] | None = None
+    if "distribution" in layers:
+        sizes, border_mask, n_usable = object_sizes_physical(masks, spacing)
+        dist_flag = distribution_flag(sizes[~border_mask], n_eff=n_usable)
+
+    correction_gap = bool(
+        raw_qc is not None
+        and corrected_qc is not None
+        and correction_materiality(raw_qc, corrected_qc)
+    )
+
+    confidence, drivers = roi_confidence_v2(
+        structural_score,
+        structural_metrics,
+        route_layers=layers,
+        n_eff=n_eff,
+        obj_class=obj_class,
+        dist_flag=dist_flag,
+        correction_gap=correction_gap,
+    )
+    return {
+        "roi_confidence": confidence,
+        "distribution_flag": dist_flag,
+        "confidence_drivers": drivers,
+        "correction_gap": correction_gap,
+    }

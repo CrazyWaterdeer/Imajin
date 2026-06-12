@@ -12,6 +12,7 @@ from __future__ import annotations
 import numpy as np
 
 from imajin.analysis.roi_quality import (
+    assess_roi,
     correction_materiality,
     distribution_flag,
     effective_object_count,
@@ -316,3 +317,33 @@ def test_correction_materiality() -> None:
     assert correction_materiality(base, {"n_objects": 5, "object_area_median": 100.0}) is True
     assert correction_materiality(base, {"n_objects": 10, "object_area_median": 200.0}) is True
     assert correction_materiality({"n_objects": 0}, {"n_objects": 3}) is True
+
+
+# --- E1a: assess_roi integration ---
+
+
+def _grid_mask(k=4, step=30, size=4, shape=(128, 128)):
+    labels = np.zeros(shape, dtype=np.int32)
+    label = 1
+    for y in range(10, 10 + k * step, step):
+        for x in range(10, 10 + k * step, step):
+            labels[y : y + size, x : x + size] = label
+            label += 1
+    return labels
+
+
+def test_assess_roi_high_for_many_clean_distributed_blobs() -> None:
+    labels = _grid_mask()  # 16 uniform, distributed objects
+    out = assess_roi(labels, (1.0, 1.0), 90.0, _GOOD, obj_class="blob")
+    assert out["roi_confidence"] == "high"
+    assert out["distribution_flag"]["flag"] is False
+    assert out["confidence_drivers"]["driver"] == "structural_strong_and_distribution_clean"
+
+
+def test_assess_roi_medium_for_few_objects_even_if_structurally_strong() -> None:
+    labels = np.zeros((128, 128), dtype=np.int32)
+    labels[20:30, 20:30] = 1
+    labels[80:90, 80:90] = 2  # only 2 objects -> distribution can't be checked
+    out = assess_roi(labels, (1.0, 1.0), 95.0, _GOOD, obj_class="blob")
+    assert out["roi_confidence"] == "medium"
+    assert out["distribution_flag"] is None  # distribution layer not in route
