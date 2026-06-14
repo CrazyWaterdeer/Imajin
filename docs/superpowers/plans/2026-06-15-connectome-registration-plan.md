@@ -93,9 +93,16 @@ Reimplementing NBLAST/transforms/fetch; MANC/VNC, FlyWire/FANC, in-app CMTK/ANTs
 batch UI; any match as a definitive identification.
 
 ## Risks
-M1 may fail the gate → honest stop. GPL-v3 (navis) vs Imajin license → resolve before ship.
-flybrains assets + neuPrint network external → offline/failure paths required. Execution
-service has no resumability → don't over-promise.
+M1 may fail the gate → honest stop (it PASSED: firm GO). GPL-v3 (navis) vs Imajin license →
+resolve before ship. Execution service has no resumability → don't over-promise.
+
+**Bridge-asset prerequisite (verified 2026-06-15, real blocker for live warp):** the
+brain→hemibrain bridge (`JRC2018F→JRCFIB2018F`) is NOT available from the jefferislab CMTK
+set alone — it needs the **large JRC H5 inter-template transforms** (`download_jrc_transforms`,
+possibly ~GB) and likely the **CMTK binary** to apply CMTK-format registrations. So a real
+end-to-end warp needs a one-time asset+tooling setup; `warp_to_connectome_space` degrades to
+`needs_bridge_assets` until then. Confirm the minimal asset set + whether the CMTK binary is
+required before C5/C6 depend on a live bridge.
 
 ## Changelog — plan rev.1 (accepted Codex plan-review)
 #1 minimal QC gate moved into M1 (C3) so C4 tests the real path; #2 pre-registered go/no-go
