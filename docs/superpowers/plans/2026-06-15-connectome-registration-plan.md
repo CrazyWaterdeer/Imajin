@@ -76,11 +76,17 @@ fragment ~30% 0.569 / **0.875** — vs persistence collapsing to 0.208/0.472 and
 (≈chance). So the partial-trace failure that killed registration-free matching is handled by
 NBLAST → building the registration pipeline (which unlocks NBLAST) is justified.
 
-Caveats: (a) the 30%>50% non-monotonicity is single-random-subtree noise (n=72) — the
-*conclusion* is robust, the exact curve is not; (b) this is **within-hemibrain (EM↔EM)** —
-it proves NBLAST's fragment-robustness only. **Registration error + LM→EM cross-modality is
-NOT yet tested** — that is the proper C4 (inject registration/local-warp noise + held-out
-splits). This is therefore a *preliminary* GO; C4 remains the real gate before M2.
+**Registration-error tolerance (the real gate), `scripts/bench_nblast_regerror.py`:** inject
+per-node Gaussian displacement σ (conservative — real warps are smoother) + fragmentation,
+sweep σ. NBLAST is remarkably robust — at the realistic nc82 σ≈2 µm: full-query top-5 0.93,
+fragment~50% top-5 0.82; even at σ=8 µm (4× realistic) full top-5 0.93 (chance top-5 ≈ 0.40).
+So registration error in the realistic range barely dents recovery. **Firm GO.**
+
+Caveats: (a) the fragment-curve non-monotonicity is single-subtree noise — the conclusion is
+robust, the exact curve isn't; (b) all tests are within-hemibrain EM data; the true LM→EM gap
+(real nc82 traces, tracing bias) is the prospective expert-review validation (M2/C8) on real
+data — but every parametric stress test (fragment + registration error, conservative model)
+passes comfortably, so the pipeline build is justified.
 
 ## Non-goals
 Reimplementing NBLAST/transforms/fetch; MANC/VNC, FlyWire/FANC, in-app CMTK/ANTs automation,
