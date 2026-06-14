@@ -7,6 +7,7 @@ from imajin.analysis.connectome_registration import (
     connectome_backend_available,
     nblast_candidates,
     points_to_dotprops,
+    warp_to_connectome_space,
 )
 
 requires_backend = pytest.mark.skipif(
@@ -47,3 +48,17 @@ def test_nblast_candidates_ranks_morphologically_similar_higher() -> None:
 def test_nblast_candidates_empty_inputs() -> None:
     assert nblast_candidates(None, []) == []
     assert nblast_candidates(points_to_dotprops(_line(0), neuron_id=1), []) == []
+
+
+@requires_backend
+def test_warp_to_connectome_space_returns_typed_status() -> None:
+    # Robust to bridge-asset state: the brain->hemibrain bridge needs large JRC H5
+    # transforms that may not be downloaded, so a typed status is the contract.
+    out, status = warp_to_connectome_space(
+        np.array([[250.0, 180.0, 90.0]]), source="JRC2018F", target="JRCFIB2018F"
+    )
+    assert status in {"ok", "needs_bridge_assets"}
+    if status == "ok":
+        assert out.shape == (1, 3)
+    else:
+        assert out is None

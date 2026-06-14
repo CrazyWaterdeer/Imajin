@@ -26,6 +26,56 @@ def connectome_backend_available() -> bool:
     return navis_available() and importlib.util.find_spec("flybrains") is not None
 
 
+def download_bridge_assets(*, vnc: bool = False) -> None:
+    """Download + register the flybrains bridging registrations (one-time, large).
+
+    Required before :func:`warp_to_connectome_space` can bridge a trace into the
+    hemibrain (JRCFIB2018F) space. **Finding (2026-06-15): the jefferislab CMTK set
+    alone does NOT yield a JRC2018F→JRCFIB2018F path** — the JRC H5 inter-template
+    transforms (large, possibly ~GB) are also needed, so this downloads both. The
+    bridging transforms are an external asset supply chain (not bundled) — see the
+    Stage C design spec; this can be slow and needs network + disk budget.
+    """
+    import flybrains
+
+    flybrains.download_jefferislab_transforms()
+    flybrains.download_jrc_transforms()
+    if vnc:
+        flybrains.download_jrc_vnc_transforms()
+    flybrains.register_transforms()
+
+
+def warp_to_connectome_space(
+    points_um: np.ndarray,
+    *,
+    source: str = "JRC2018F",
+    target: str = "JRCFIB2018F",
+):
+    """Bridge trace points from a template space into the connectome's space.
+
+    ``source`` is the template the trace was registered into (JRC2018F for brain);
+    ``target`` is the connectome space (JRCFIB2018F = hemibrain). Returns
+    ``(warped_points | None, status)`` with a typed status: ``"ok"``,
+    ``"needs_bridge_assets"`` (no bridging path registered — run
+    :func:`download_bridge_assets`), or ``"backend_unavailable"``. The
+    sample→template registration itself is upstream/external.
+    """
+    if not connectome_backend_available():
+        return None, "backend_unavailable"
+    import navis
+
+    pts = np.asarray(points_um, dtype=float)
+    try:
+        out = navis.xform_brain(pts, source=source, target=target)
+        return np.asarray(out, dtype=float), "ok"
+    except Exception as exc:  # noqa: BLE001
+        msg = str(exc).lower()
+        # No path between spaces, or no bridging registrations downloaded at all.
+        if "nopath" in type(exc).__name__.lower() or "bridging" in msg:
+            return None, "needs_bridge_assets"
+        raise
+
+
 def points_to_dotprops(
     points_um: np.ndarray,
     *,
