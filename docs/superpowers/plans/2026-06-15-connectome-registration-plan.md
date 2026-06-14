@@ -67,6 +67,21 @@ the actual path, not a synthetic NBLAST toy. Brain → hemibrain only.
   traces-to-amortize-one-registration); a prospective **blinded expert-review** protocol on
   real data (Codex #9); name a maintainer + refresh cadence + minimal smoke-test corpus.
 
+## Preliminary go/no-go result (2026-06-15) — GO
+
+`scripts/bench_nblast_typeid.py` ran NBLAST on the SAME 72 hemibrain neurons / 9 types and
+fragmentation regimes as the persistence benchmark (apples-to-apples). NBLAST is far more
+fragmentation-robust: ceiling top-1 0.639 / top-5 0.944; fragment ~50% 0.472 / **0.806**;
+fragment ~30% 0.569 / **0.875** — vs persistence collapsing to 0.208/0.472 and 0.139/0.417
+(≈chance). So the partial-trace failure that killed registration-free matching is handled by
+NBLAST → building the registration pipeline (which unlocks NBLAST) is justified.
+
+Caveats: (a) the 30%>50% non-monotonicity is single-random-subtree noise (n=72) — the
+*conclusion* is robust, the exact curve is not; (b) this is **within-hemibrain (EM↔EM)** —
+it proves NBLAST's fragment-robustness only. **Registration error + LM→EM cross-modality is
+NOT yet tested** — that is the proper C4 (inject registration/local-warp noise + held-out
+splits). This is therefore a *preliminary* GO; C4 remains the real gate before M2.
+
 ## Non-goals
 Reimplementing NBLAST/transforms/fetch; MANC/VNC, FlyWire/FANC, in-app CMTK/ANTs automation,
 batch UI; any match as a definitive identification.
