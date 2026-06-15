@@ -52,6 +52,10 @@ dependencies = [
 connectome = [
     "navis>=1.10",
     "neuprint-python>=0.4",
+    # Drosophila template brains + bridging registrations (JRC2018F/JRCVNC2018F,
+    # hemibrain=JRCFIB2018F, FANC). Required for Stage C: warp a trace into a
+    # template and NBLAST against connectome neurons in the same space.
+    "flybrains>=0.2",
 ]
 
 [project.scripts]
