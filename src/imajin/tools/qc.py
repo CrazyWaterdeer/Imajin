@@ -376,6 +376,44 @@ def compute_timecourse_qc(table_name: str) -> dict[str, Any]:
 
 
 @tool(
+    description="Assess a calcium timecourse: gate defocus and lateral-motion frames, "
+    "report per-cell usable coverage, longest contiguous run, and missing fraction; "
+    "store a QC record. Detection only; does not correct motion.",
+    phase="6",
+    worker=True,
+)
+def assess_calcium_timecourse(table_name: str, movie_key: str, labels_key: str,
+                              coverage_floor: float = 0.5,
+                              min_run: int = 10) -> dict[str, Any]:
+    from imajin.analysis.calcium_qc import gate_traces
+
+    movie = _materialize(state.get_array(movie_key))
+    labels = _materialize(state.get_array(labels_key)).astype(np.int32)
+    gate = gate_traces(movie, labels)
+    coverage = {int(k): float(v) for k, v in gate.coverage.items()}
+    longest = {int(k): int(v) for k, v in gate.longest_run.items()}
+    missing = {int(k): float(v) for k, v in gate.missing_frac.items()}
+    rejected = [k for k in coverage
+                if coverage[k] < coverage_floor or longest[k] < min_run]
+    warnings: list[str] = []
+    if rejected:
+        warnings.append(
+            f"{len(rejected)} cell(s) rejected (coverage<{coverage_floor} "
+            f"or longest run<{min_run}): {rejected}"
+        )
+    metrics = {
+        "kind": "calcium_timecourse",
+        "table_name": table_name,
+        "coverage": coverage,
+        "longest_run": longest,
+        "missing_frac": missing,
+        "rejected": rejected,
+        "failed": False,
+    }
+    return _record(table_name, warnings, metrics)
+
+
+@tool(
     description="Create an additive outline image layer from a Labels layer for visual "
     "review of segmentation boundaries.",
     phase="6",
