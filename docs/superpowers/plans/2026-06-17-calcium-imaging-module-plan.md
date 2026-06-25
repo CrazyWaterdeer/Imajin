@@ -1126,7 +1126,7 @@ git commit -m "docs(calcium): manual-reference label spec + README v1 note"
 
 ## Known v1 simplifications (carried to v2 plan, not regressions)
 - Footprint = temporal-min-template-driven shifted ROI; Cellpose-cadence re-seg fallback deferred to v2.
-- IoU 0.7 / focus_z 3.0 / min_run 10 are starting defaults; Task 9's harness is where they get calibrated against trace-error impact before any real-data claim.
+- IoU 0.7 / min_run 10 are starting defaults; Task 9's harness is where they get calibrated against trace-error impact before any real-data claim. (focus_z calibrated to 4.0 during implementation: on clean synthetic data no frame's smoothed composite focus falls below −4 MAD, while σ≈4–5 defocus drops far past it.)
 - Stimulus-window-conditional coverage rejection deferred (needs stimulus metadata); the missingness *pattern* (missing_frac, longest_run) is reported now.
 
 ## Changelog
