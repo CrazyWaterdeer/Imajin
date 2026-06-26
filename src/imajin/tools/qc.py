@@ -414,6 +414,48 @@ def assess_calcium_timecourse(table_name: str, movie_key: str, labels_key: str,
 
 
 @tool(
+    description="v2 sparse motion correction: confidence-gated landmark tracking + ROI "
+    "relocation with neighbour interpolation; stores a corrected ΔF/F0 table and a QC "
+    "record with per-cell coverage. Degrades to gating when confidence fails.",
+    phase="6",
+    worker=True,
+)
+def correct_calcium_motion(table_name: str, movie_key: str, labels_key: str) -> dict[str, Any]:
+    import pandas as pd
+    from imajin.analysis.calcium_motion import correct_sparse, corrected_dff
+
+    movie = _materialize(state.get_array(movie_key))
+    labels = _materialize(state.get_array(labels_key)).astype(np.int32)
+    res = correct_sparse(movie, labels)
+    dff = corrected_dff(movie, labels, res)
+    rows = [
+        {"label": int(lbl), "time_index": t, "dff_corrected": float(v)}
+        for lbl, arr in dff.items()
+        for t, v in enumerate(arr)
+    ]
+    corrected_table = state.put_table(
+        f"{table_name}_motion_corrected", pd.DataFrame(rows),
+        spec={"tool": "correct_calcium_motion", "source_table": table_name},
+    )
+    coverage = {int(k): float(v.mean()) for k, v in res.usable.items()}
+    rejected = [k for k, c in coverage.items() if c < 0.5]
+    warnings: list[str] = []
+    if rejected:
+        warnings.append(
+            f"{len(rejected)} cell(s) below 50% usable coverage after correction: {rejected}"
+        )
+    metrics = {
+        "kind": "calcium_motion_correction",
+        "table_name": table_name,
+        "corrected_table": corrected_table,
+        "coverage": coverage,
+        "rejected": rejected,
+        "failed": False,
+    }
+    return _record(table_name, warnings, metrics)
+
+
+@tool(
     description="Create an additive outline image layer from a Labels layer for visual "
     "review of segmentation boundaries.",
     phase="6",

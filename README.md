@@ -55,7 +55,10 @@ happen.
 - **Calcium imaging (v1)**: rolling-percentile ΔF/F0, honest defocus +
   lateral-motion gating with per-cell coverage / longest-run / missing-fraction
   reporting (`assess_calcium_timecourse`), a ΔF/F0 raster heatmap, and a synthetic
-  ground-truth validation harness. Detection-only; motion correction is v2.
+  ground-truth validation harness. Plus **v2a** confidence-gated sparse motion
+  correction (`correct_calcium_motion`) — landmark tracking + ROI relocation with
+  neighbour-deformation interpolation — producing a corrected ΔF/F0 table; the
+  dense-warp path is v2b.
 - **Neural morphology**: an isolated advanced module — skeletonization, branch
   metrics, Sholl analysis, SWC/CSV export, and local **morphometric neuron-type
   classification / similarity search** against a labelled reference library you
