@@ -37,7 +37,12 @@ happen.
 - **Preprocessing**: rolling-ball background subtraction, percentile auto-
   contrast, Gaussian denoise. All scikit-image; per-channel.
 - **Segmentation**: Cellpose-SAM (`cpsam` generalist model) with 2D / 3D
-  toggle and GPU acceleration. Caches model weights between calls.
+  toggle and GPU acceleration. Caches model weights between calls. To restrict
+  detection to a hand-drawn region, draw a polygon / rectangle / ellipse on a
+  Shapes layer, run `boundary_mask_from_shapes(shapes_layer, reference_layer)`
+  (rasterised via napari, transform-aware, broadcast across Z for stacks), then
+  pass the result as `boundary_mask=` to `segment_target_objects` /
+  `auto_segment_target` / `segment_3d_cells_auto`.
 - **Measurement**: scikit-image `regionprops_table` per Labels layer with
   per-channel intensity columns, manual-edit-aware refresh, pandas
   `query`-style filter, group-by summary, and ROI intensity-over-time tables

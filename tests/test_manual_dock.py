@@ -21,3 +21,17 @@ def test_manual_dock_form_rebuilds_on_change(qtbot, viewer) -> None:
     if dock.tool_picker.count() >= 2:
         dock.tool_picker.setCurrentIndex(1)
         assert dock._current_widget is not first
+
+
+def test_layer_param_names_offers_boundary_mask_dropdown() -> None:
+    # The dock builds a layer dropdown for any param _layer_param_names returns.
+    # boundary_mask must be offered (it is a layer), but scalar params must not be.
+    import imajin.tools  # noqa: F401 - ensure @tool registration
+    from imajin.tools.registry import get_tool
+    from imajin.ui.manual_dock import _layer_param_names
+
+    entry = get_tool("segment_target_objects")
+    names = _layer_param_names(entry.func)
+    assert "image_layer" in names
+    assert "boundary_mask" in names
+    assert "min_snr" not in names
