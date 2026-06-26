@@ -52,6 +52,14 @@ happen.
   report generation and future batch summaries.
 - **Cell tracking**: `track_cells` via [btrack](https://github.com/quantumjot/btrack)
   on T-axis Labels.
+- **Calcium imaging (v1)**: rolling-percentile ΔF/F0, honest defocus +
+  lateral-motion gating with per-cell coverage / longest-run / missing-fraction
+  reporting (`assess_calcium_timecourse`), a ΔF/F0 raster heatmap, and a synthetic
+  ground-truth validation harness. Plus **v2a** confidence-gated sparse motion
+  correction (`correct_calcium_motion`) — landmark tracking + ROI relocation with
+  neighbour-deformation interpolation — producing a corrected ΔF/F0 table; and
+  **v2b** dense piecewise-affine warp (`stabilize_calcium_dense`) for dense sheets,
+  hull-bounded and gated by density/triangle/strain/fold checks.
 - **Neural morphology**: an isolated advanced module — skeletonization, branch
   metrics, Sholl analysis, SWC/CSV export, and local **morphometric neuron-type
   classification / similarity search** against a labelled reference library you

@@ -787,10 +787,14 @@ def normalize_timecourse(
         "baseline_subtract",
         "f_over_f0",
         "delta_f_over_f0",
+        "f_over_f0_rolling",
+        "delta_f_over_f0_rolling",
         "zscore",
         "minmax",
     ] = "delta_f_over_f0",
     baseline: tuple[float, float] | None = None,
+    f0_window: int | None = None,
+    f0_percentile: float = 10.0,
     group_cols: list[str] | None = None,
     time_col: str | None = None,
     label_col: str = "label",
@@ -805,6 +809,8 @@ def normalize_timecourse(
         "baseline_subtract": f"{value_col}_baseline_subtracted",
         "f_over_f0": f"{value_col}_f_over_f0",
         "delta_f_over_f0": f"{value_col}_delta_f_over_f0",
+        "f_over_f0_rolling": f"{value_col}_f_over_f0_rolling",
+        "delta_f_over_f0_rolling": f"{value_col}_delta_f_over_f0_rolling",
         "zscore": f"{value_col}_zscore",
         "minmax": f"{value_col}_minmax",
     }[method]
@@ -813,7 +819,22 @@ def normalize_timecourse(
     out[f"{out_col}_baseline"] = np.nan
     warnings: list[str] = []
 
-    if baseline is None:
+    rolling_methods = {"f_over_f0_rolling", "delta_f_over_f0_rolling"}
+
+    def _rolling_f0(values: np.ndarray, window: int, pct: float) -> np.ndarray:
+        n = len(values)
+        w = max(3, int(window) | 1)
+        half = w // 2
+        out_f0 = np.empty(n, dtype=float)
+        for i in range(n):
+            seg = values[max(0, i - half): min(n, i + half + 1)]
+            seg = seg[np.isfinite(seg)]
+            out_f0[i] = np.nanpercentile(seg, pct) if seg.size else np.nan
+        return out_f0
+
+    if method in rolling_methods:
+        baseline_times: set[float] = set()
+    elif baseline is None:
         unique_times = np.asarray(sorted(pd.unique(df[tcol])), dtype=float)
         n_base = max(1, int(np.ceil(len(unique_times) * 0.1)))
         baseline_times = set(unique_times[:n_base].tolist())
@@ -836,6 +857,14 @@ def normalize_timecourse(
     for _key, group in out.groupby(trace_cols, dropna=False, sort=False):
         idx = group.index
         vals = pd.to_numeric(group[value_col], errors="coerce").to_numpy(dtype=float)
+        if method in rolling_methods:
+            window = f0_window or max(3, (int(round(len(vals) * 0.1)) | 1))
+            f0_series = _rolling_f0(vals, window, f0_percentile)
+            out.loc[idx, f"{out_col}_baseline"] = f0_series
+            safe = np.where(f0_series != 0, f0_series, np.nan)
+            norm = vals / safe if method == "f_over_f0_rolling" else (vals - safe) / safe
+            out.loc[idx, out_col] = norm
+            continue
         times = pd.to_numeric(group[tcol], errors="coerce").to_numpy(dtype=float)
         base_mask = np.asarray([t in baseline_times for t in times], dtype=bool)
         base_vals = vals[base_mask & np.isfinite(vals)]

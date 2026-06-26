@@ -376,6 +376,133 @@ def compute_timecourse_qc(table_name: str) -> dict[str, Any]:
 
 
 @tool(
+    description="Assess a calcium timecourse: gate defocus and lateral-motion frames, "
+    "report per-cell usable coverage, longest contiguous run, and missing fraction; "
+    "store a QC record. Detection only; does not correct motion.",
+    phase="6",
+    worker=True,
+)
+def assess_calcium_timecourse(table_name: str, movie_key: str, labels_key: str,
+                              coverage_floor: float = 0.5,
+                              min_run: int = 10) -> dict[str, Any]:
+    from imajin.analysis.calcium_qc import gate_traces
+
+    movie = _materialize(state.get_array(movie_key))
+    labels = _materialize(state.get_array(labels_key)).astype(np.int32)
+    gate = gate_traces(movie, labels)
+    coverage = {int(k): float(v) for k, v in gate.coverage.items()}
+    longest = {int(k): int(v) for k, v in gate.longest_run.items()}
+    missing = {int(k): float(v) for k, v in gate.missing_frac.items()}
+    rejected = [k for k in coverage
+                if coverage[k] < coverage_floor or longest[k] < min_run]
+    warnings: list[str] = []
+    if rejected:
+        warnings.append(
+            f"{len(rejected)} cell(s) rejected (coverage<{coverage_floor} "
+            f"or longest run<{min_run}): {rejected}"
+        )
+    metrics = {
+        "kind": "calcium_timecourse",
+        "table_name": table_name,
+        "coverage": coverage,
+        "longest_run": longest,
+        "missing_frac": missing,
+        "rejected": rejected,
+        "failed": False,
+    }
+    return _record(table_name, warnings, metrics)
+
+
+@tool(
+    description="v2 sparse motion correction: confidence-gated landmark tracking + ROI "
+    "relocation with neighbour interpolation; stores a corrected ΔF/F0 table and a QC "
+    "record with per-cell coverage. Degrades to gating when confidence fails.",
+    phase="6",
+    worker=True,
+)
+def correct_calcium_motion(table_name: str, movie_key: str, labels_key: str) -> dict[str, Any]:
+    import pandas as pd
+    from imajin.analysis.calcium_motion import correct_sparse, corrected_dff
+
+    movie = _materialize(state.get_array(movie_key))
+    labels = _materialize(state.get_array(labels_key)).astype(np.int32)
+    res = correct_sparse(movie, labels)
+    dff = corrected_dff(movie, labels, res)
+    rows = [
+        {"label": int(lbl), "time_index": t, "dff_corrected": float(v)}
+        for lbl, arr in dff.items()
+        for t, v in enumerate(arr)
+    ]
+    corrected_table = state.put_table(
+        f"{table_name}_motion_corrected", pd.DataFrame(rows),
+        spec={"tool": "correct_calcium_motion", "source_table": table_name},
+    )
+    coverage = {int(k): float(v.mean()) for k, v in res.usable.items()}
+    rejected = [k for k, c in coverage.items() if c < 0.5]
+    warnings: list[str] = []
+    if rejected:
+        warnings.append(
+            f"{len(rejected)} cell(s) below 50% usable coverage after correction: {rejected}"
+        )
+    metrics = {
+        "kind": "calcium_motion_correction",
+        "table_name": table_name,
+        "corrected_table": corrected_table,
+        "coverage": coverage,
+        "rejected": rejected,
+        "failed": False,
+    }
+    return _record(table_name, warnings, metrics)
+
+
+@tool(
+    description="v2b dense motion correction: landmark-driven piecewise-affine warp "
+    "(gated by density/triangle/strain/fold; bounded to the landmark hull) stabilises the "
+    "movie, then measures fixed ROIs strictly inside the hull. Stores a corrected ΔF/F0 "
+    "table and reports valid-frame fraction. Warp is disabled (frames gated) when "
+    "under-constrained.",
+    phase="6",
+    worker=True,
+)
+def stabilize_calcium_dense(table_name: str, movie_key: str, labels_key: str) -> dict[str, Any]:
+    import pandas as pd
+    from imajin.analysis.calcium_motion import correct_sparse
+    from imajin.analysis.calcium_warp import dense_stabilize, dense_corrected_dff
+
+    movie = _materialize(state.get_array(movie_key))
+    labels = _materialize(state.get_array(labels_key)).astype(np.int32)
+    res = correct_sparse(movie, labels)
+    stab = dense_stabilize(movie, labels, res)
+    dff = dense_corrected_dff(stab["movie"], labels, stab["valid"])
+    rows = [
+        {"label": int(lbl), "time_index": t, "dff_corrected": float(v)}
+        for lbl, arr in dff.items()
+        for t, v in enumerate(arr)
+    ]
+    dense_table = state.put_table(
+        f"{table_name}_dense_corrected", pd.DataFrame(rows),
+        spec={"tool": "stabilize_calcium_dense", "source_table": table_name},
+    )
+    valid_fraction = float(np.mean(stab["valid"]))
+    warnings: list[str] = []
+    if valid_fraction < 0.5:
+        warnings.append(
+            f"dense warp valid on only {valid_fraction:.0%} of frames (under-constrained?)"
+        )
+    if not dff:
+        warnings.append("no cells strictly inside the landmark hull; nothing measured")
+    metrics = {
+        "kind": "calcium_dense_correction",
+        "table_name": table_name,
+        "dense_table": dense_table,
+        "valid_fraction": valid_fraction,
+        "n_interior_cells": len(dff),
+        "failed": False,
+    }
+    return _record(table_name, warnings, metrics)
+
+
+@tool(
     description="Create an additive outline image layer from a Labels layer for visual "
     "review of segmentation boundaries.",
     phase="6",

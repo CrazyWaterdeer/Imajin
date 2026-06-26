@@ -682,3 +682,56 @@ def plot_scatter(
         "fit_intercept": float(intercept) if np.isfinite(intercept) else np.nan,
         "groups": [str(g) for g in groups],
     }
+
+
+@tool(
+    description="ΔF/F0 raster/heatmap for a long-format calcium table: one row per "
+    "ROI (label), time on x, colour = ΔF/F0. Surveys many traces at once.",
+    phase="6",
+    worker=True,
+)
+def plot_dff_heatmap(
+    table_name: str,
+    value_col: str,
+    output_path: str | None = None,
+    format: Literal["svg", "pdf", "png"] = "png",
+    time_col: str | None = None,
+    title: str | None = None,
+) -> dict[str, Any]:
+    df = get_table(table_name)
+    if value_col not in df.columns:
+        raise ValueError(f"column {value_col!r} not found in columns: {list(df.columns)}")
+    if "label" not in df.columns:
+        raise ValueError("table has no 'label' column for the heatmap rows")
+    tcol = time_col or infer_time_column(df)
+    piv = (
+        df.pivot_table(index="label", columns=tcol, values=value_col, aggfunc="mean")
+        .sort_index()
+    )
+    if piv.empty:
+        raise ValueError("no rows available for the ΔF/F0 heatmap")
+
+    plt = _pyplot()
+    fig, ax = plt.subplots(figsize=(6.0, max(1.5, 0.3 * piv.shape[0])))
+    im = ax.imshow(piv.to_numpy(dtype=float), aspect="auto", interpolation="nearest",
+                   cmap="magma")
+    ax.set_xlabel(str(tcol))
+    ax.set_ylabel("ROI (label)")
+    ax.set_yticks(range(piv.shape[0]))
+    ax.set_yticklabels([str(i) for i in piv.index])
+    if title:
+        ax.set_title(title)
+    fig.colorbar(im, ax=ax, label=value_col)
+    fig.tight_layout()
+
+    out = _figure_path(f"{table_name}__{value_col}__dff_heatmap", output_path, format)
+    path = _save_figure(
+        fig,
+        out,
+        dpi=200,
+        metadata={"tool": "plot_dff_heatmap", "table_name": table_name,
+                  "value_col": value_col},
+    )
+    plt.close(fig)
+    return {"path": path, "format": format, "table_name": table_name,
+            "value_col": value_col, "n_traces": int(piv.shape[0])}

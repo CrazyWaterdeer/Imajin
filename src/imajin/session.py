@@ -20,6 +20,7 @@ class AnalysisSession:
 
     viewer: Any | None = None
     tables: dict[str, "TableEntry"] = field(default_factory=dict)
+    arrays: dict[str, Any] = field(default_factory=dict)
     qc_records: dict[str, "QCRecord"] = field(default_factory=dict)
     files: dict[str, "FileRecord"] = field(default_factory=dict)
     recipes: dict[str, "AnalysisRecipe"] = field(default_factory=dict)
@@ -656,6 +657,18 @@ def put_table(
     return name
 
 
+def put_array(key: str, arr: Any) -> str:
+    """Stash a raw ndarray on the session for headless tool handoff (e.g. the
+    movie/labels for calcium QC). In the GUI these usually come from napari
+    layer snapshots instead."""
+    current_session().arrays[key] = arr
+    return key
+
+
+def get_array(key: str) -> Any:
+    return current_session().arrays[key]
+
+
 def set_table(
     name: str, df: pd.DataFrame, spec: dict[str, Any] | None = None
 ) -> str:
@@ -679,6 +692,7 @@ def list_tables() -> list[str]:
 
 def reset_tables() -> None:
     current_session().tables.clear()
+    current_session().arrays.clear()
     _tables_changed()
 
 
