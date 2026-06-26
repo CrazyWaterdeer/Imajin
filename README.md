@@ -57,8 +57,9 @@ happen.
   reporting (`assess_calcium_timecourse`), a ΔF/F0 raster heatmap, and a synthetic
   ground-truth validation harness. Plus **v2a** confidence-gated sparse motion
   correction (`correct_calcium_motion`) — landmark tracking + ROI relocation with
-  neighbour-deformation interpolation — producing a corrected ΔF/F0 table; the
-  dense-warp path is v2b.
+  neighbour-deformation interpolation — producing a corrected ΔF/F0 table; and
+  **v2b** dense piecewise-affine warp (`stabilize_calcium_dense`) for dense sheets,
+  hull-bounded and gated by density/triangle/strain/fold checks.
 - **Neural morphology**: an isolated advanced module — skeletonization, branch
   metrics, Sholl analysis, SWC/CSV export, and local **morphometric neuron-type
   classification / similarity search** against a labelled reference library you

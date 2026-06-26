@@ -456,6 +456,53 @@ def correct_calcium_motion(table_name: str, movie_key: str, labels_key: str) -> 
 
 
 @tool(
+    description="v2b dense motion correction: landmark-driven piecewise-affine warp "
+    "(gated by density/triangle/strain/fold; bounded to the landmark hull) stabilises the "
+    "movie, then measures fixed ROIs strictly inside the hull. Stores a corrected ΔF/F0 "
+    "table and reports valid-frame fraction. Warp is disabled (frames gated) when "
+    "under-constrained.",
+    phase="6",
+    worker=True,
+)
+def stabilize_calcium_dense(table_name: str, movie_key: str, labels_key: str) -> dict[str, Any]:
+    import pandas as pd
+    from imajin.analysis.calcium_motion import correct_sparse
+    from imajin.analysis.calcium_warp import dense_stabilize, dense_corrected_dff
+
+    movie = _materialize(state.get_array(movie_key))
+    labels = _materialize(state.get_array(labels_key)).astype(np.int32)
+    res = correct_sparse(movie, labels)
+    stab = dense_stabilize(movie, labels, res)
+    dff = dense_corrected_dff(stab["movie"], labels, stab["valid"])
+    rows = [
+        {"label": int(lbl), "time_index": t, "dff_corrected": float(v)}
+        for lbl, arr in dff.items()
+        for t, v in enumerate(arr)
+    ]
+    dense_table = state.put_table(
+        f"{table_name}_dense_corrected", pd.DataFrame(rows),
+        spec={"tool": "stabilize_calcium_dense", "source_table": table_name},
+    )
+    valid_fraction = float(np.mean(stab["valid"]))
+    warnings: list[str] = []
+    if valid_fraction < 0.5:
+        warnings.append(
+            f"dense warp valid on only {valid_fraction:.0%} of frames (under-constrained?)"
+        )
+    if not dff:
+        warnings.append("no cells strictly inside the landmark hull; nothing measured")
+    metrics = {
+        "kind": "calcium_dense_correction",
+        "table_name": table_name,
+        "dense_table": dense_table,
+        "valid_fraction": valid_fraction,
+        "n_interior_cells": len(dff),
+        "failed": False,
+    }
+    return _record(table_name, warnings, metrics)
+
+
+@tool(
     description="Create an additive outline image layer from a Labels layer for visual "
     "review of segmentation boundaries.",
     phase="6",

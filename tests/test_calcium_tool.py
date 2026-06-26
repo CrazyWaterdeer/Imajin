@@ -36,3 +36,19 @@ def test_correct_calcium_motion_stores_corrected_table():
     assert res["metrics"]["corrected_table"] in state.list_tables()
     df = state.get_table(res["metrics"]["corrected_table"])
     assert {"label", "time_index", "dff_corrected"} <= set(df.columns)
+
+
+def test_stabilize_calcium_dense_stores_table():
+    pos16 = [(30, 30), (30, 65), (30, 100), (30, 135), (65, 30), (65, 135),
+             (100, 30), (100, 135), (135, 30), (135, 65), (135, 100), (135, 135),
+             (65, 65), (65, 100), (100, 65), (100, 100)]
+    rec = make_recording(n_frames=40, shape=(160, 160), n_cells=16, positions=pos16,
+                         seed=44, motion={"lateral_px": 6.0})
+    state.put_array("dmv", rec.movie)
+    state.put_array("dlb", rec.labels)
+    res = qc.stabilize_calcium_dense("d_tc", movie_key="dmv", labels_key="dlb")
+    assert res["metrics"]["dense_table"] in state.list_tables()
+    assert "valid_fraction" in res["metrics"]
+    df = state.get_table(res["metrics"]["dense_table"])
+    assert {"label", "time_index", "dff_corrected"} <= set(df.columns)
+    assert set(df["label"]) == {13, 14, 15, 16}      # interior cells only
