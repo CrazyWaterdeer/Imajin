@@ -22,7 +22,7 @@ def _layer_param_names(func) -> set[str]:
     for p in sig.parameters:
         if p == "layer" or p.endswith("_layer"):
             names.add(p)
-        elif p in {"image_a", "image_b", "mask"}:
+        elif p in {"image_a", "image_b", "mask", "boundary_mask"}:
             names.add(p)
     return names
 
