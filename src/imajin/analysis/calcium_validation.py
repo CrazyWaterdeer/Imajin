@@ -65,3 +65,71 @@ def run_v1_acceptance(rec) -> dict:
         "longest_run": {int(k): int(v) for k, v in gate.longest_run.items()},
         "passed": passed,
     }
+
+
+def _safe_corr(a, b):
+    a = np.nan_to_num(np.asarray(a, float))
+    b = np.asarray(b, float)
+    if a.size < 3 or np.std(a) == 0 or np.std(b) == 0:
+        return None
+    return float(np.corrcoef(a, b)[0, 1])
+
+
+def run_v2_acceptance(rec) -> dict:
+    """Score v2a sparse motion correction against synthetic ground truth."""
+    from imajin.analysis.calcium_motion import correct_sparse, corrected_dff
+
+    neg = rec.negative_label
+    res = correct_sparse(rec.movie, rec.labels)
+    dff = corrected_dff(rec.movie, rec.labels, res)
+    v1 = gate_traces(rec.movie, rec.labels)
+
+    resids, corrs, amp_ratios, conf_all, act_all = [], [], [], [], []
+    cov_fail = False
+    for lbl in rec.true_dff:
+        u = res.usable[lbl]
+        if u.sum() < 5:
+            cov_fail = True               # too-low coverage is a failure, not a skip
+        else:
+            err = np.hypot(*(res.positions[lbl] - rec.true_positions[lbl]).T)
+            resids.append(float(np.median(err[u])))
+        conf_all.append(res.confidence[lbl])
+        act_all.append(np.abs(np.nan_to_num(dff[lbl])))
+        if lbl == neg:
+            continue                      # exclude negative control from trace/amp
+        if u.sum() >= 5:
+            c = _safe_corr(dff[lbl][u], rec.true_dff[lbl][u])
+            if c is not None:
+                corrs.append(c)
+        for f in rec.event_frames[lbl]:
+            if 0 <= f < len(u) and u[f] and np.isfinite(dff[lbl][f]) and rec.true_dff[lbl][f] > 0:
+                amp_ratios.append(float(dff[lbl][f] / rec.true_dff[lbl][f]))
+
+    v1_cov = float(np.mean([v1.coverage[l] for l in rec.true_dff]))
+    v2_cov = float(np.mean([res.usable[l].mean() for l in rec.true_dff]))
+    coverage_gain_pp = (v2_cov - v1_cov) * 100.0
+
+    moving_neg_flat = True
+    if neg is not None:
+        u = res.usable[neg]
+        moving_neg_flat = bool(u.sum() >= 10 and
+                               negative_control_flat(np.nan_to_num(dff[neg][u], nan=0.0))["flat"])
+
+    cd = _safe_corr(np.concatenate(conf_all), np.concatenate(act_all))
+    cd = 0.0 if cd is None else cd
+
+    residual_median = float(np.median(resids)) if resids else np.inf
+    trace_corr = float(np.median(corrs)) if corrs else 0.0
+    amp_ratio = float(np.median(amp_ratios)) if amp_ratios else 0.0
+    passed = bool(not cov_fail and residual_median < 1.0 and trace_corr > 0.95
+                  and amp_ratio > 0.8 and coverage_gain_pp > 0
+                  and moving_neg_flat and abs(cd) < 0.2)
+    return {
+        "residual_median_px": residual_median,
+        "trace_corr_median": trace_corr,
+        "event_amp_ratio_median": amp_ratio,
+        "coverage_gain_pp": float(coverage_gain_pp),
+        "moving_negative_flat": moving_neg_flat,
+        "confidence_dynamics_corr": float(cd),
+        "passed": passed,
+    }

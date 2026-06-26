@@ -166,6 +166,7 @@ def corrected_dff(movie, labels, result, *, window=41, pct=10.0) -> dict:
     for lbl in (int(v) for v in np.unique(labels) if v != 0):
         roi = labels == lbl
         rad = float(np.sqrt(np.count_nonzero(roi) / np.pi))
+        core = max(2.0, rad - 1.5)        # sample the cell core: robust to sub-pixel residual
         pos = result.positions[lbl]
         usable = result.usable[lbl]
         inten = np.full(T, np.nan)
@@ -173,7 +174,7 @@ def corrected_dff(movie, labels, result, *, window=41, pct=10.0) -> dict:
             if not usable[t]:
                 continue
             cy, cx = pos[t]
-            m = (yy - cy) ** 2 + (xx - cx) ** 2 <= rad ** 2
+            m = (yy - cy) ** 2 + (xx - cx) ** 2 <= core ** 2
             if m.any():
                 inten[t] = float(movie[t][m].mean())
         f0 = np.full(T, np.nan)
