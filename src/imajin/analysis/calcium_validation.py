@@ -133,3 +133,38 @@ def run_v2_acceptance(rec) -> dict:
         "confidence_dynamics_corr": float(cd),
         "passed": passed,
     }
+
+
+def run_v2b_acceptance(rec) -> dict:
+    """Score v2b dense warp correction against synthetic ground truth."""
+    from imajin.analysis.calcium_motion import correct_sparse
+    from imajin.analysis.calcium_warp import dense_stabilize, dense_corrected_dff
+
+    neg = rec.negative_label
+    res = correct_sparse(rec.movie, rec.labels)
+    stab = dense_stabilize(rec.movie, rec.labels, res)
+    dff = dense_corrected_dff(stab["movie"], rec.labels, stab["valid"])
+    v = stab["valid"]
+
+    corrs = []
+    for lbl in dff:
+        if lbl == neg or v.sum() < 5:
+            continue
+        c = _safe_corr(dff[lbl][v], rec.true_dff[lbl][v])
+        if c is not None:
+            corrs.append(c)
+
+    moving_neg_flat = True
+    if neg in dff:                       # neg measured only if it is interior
+        moving_neg_flat = bool(v.sum() >= 10 and
+                               negative_control_flat(np.nan_to_num(dff[neg][v], nan=0.0))["flat"])
+
+    valid_fraction = float(v.mean())
+    trace_corr = float(np.median(corrs)) if corrs else 0.0
+    passed = bool(valid_fraction > 0.8 and trace_corr > 0.95 and moving_neg_flat)
+    return {
+        "valid_fraction": valid_fraction,
+        "trace_corr_median": trace_corr,
+        "moving_negative_flat": moving_neg_flat,
+        "passed": passed,
+    }
