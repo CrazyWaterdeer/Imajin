@@ -212,6 +212,44 @@ def resolve_boundary_mask(
     )
 
 
+def boundary_bbox_slices(
+    yx_mask_2d: np.ndarray,
+    raw_shape: tuple[int, ...],
+    margin: int,
+) -> tuple[slice, ...] | None:
+    """YX bounding box of a 2D mask, expanded by ``margin`` and clipped to ``raw_shape``.
+
+    Leading (Z) axes get a full slice. Returns ``None`` when the mask is empty or already
+    spans the whole YX frame -- the caller then runs the normal whole-frame path. The mask
+    must be the original 2D ROI (never ``any(axis=0)`` over a broadcast view).
+    """
+    m = np.asarray(yx_mask_2d, dtype=bool)
+    ys, xs = np.where(m)
+    if ys.size == 0:
+        return None
+    H, W = int(raw_shape[-2]), int(raw_shape[-1])
+    margin = max(0, int(margin))
+    y0 = max(0, int(ys.min()) - margin)
+    y1 = min(H, int(ys.max()) + 1 + margin)
+    x0 = max(0, int(xs.min()) - margin)
+    x1 = min(W, int(xs.max()) + 1 + margin)
+    if (y0, x0, y1, x1) == (0, 0, H, W):
+        return None
+    lead = (slice(None),) * (len(raw_shape) - 2)
+    return (*lead, slice(y0, y1), slice(x0, x1))
+
+
+def scatter_labels_to_full(
+    cropped_labels: np.ndarray,
+    full_shape: tuple[int, ...],
+    slices: tuple[slice, ...],
+) -> np.ndarray:
+    """Place a cropped int label image back into a full-size zero array."""
+    out = np.zeros(tuple(int(s) for s in full_shape), dtype=np.int32)
+    out[slices] = np.asarray(cropped_labels, dtype=np.int32)
+    return out
+
+
 def dilate_binary_um(
     binary: np.ndarray,
     *,
