@@ -57,6 +57,7 @@ def _precompute_domain_layer(
     domain_options: dict[str, Any] | None,
     counterstain_layer: str | None,
     cell_diameter_um: float | None,
+    boundary_mask: str | None = None,
 ) -> str:
     from imajin.tools import channels as _channels_pre
     from imajin.tools.segment import segment_expression_domain as _seg_dom
@@ -83,6 +84,8 @@ def _precompute_domain_layer(
     d_opts.setdefault("smooth_sigma_um", 0.75)
     d_opts.setdefault("max_components", 128)
     d_opts.setdefault("save_qc_png", False)
+    if boundary_mask is not None:
+        d_opts["boundary_mask"] = boundary_mask
     domain_pre = _seg_dom(
         image_layer=target_layer,
         **_filtered_kwargs(_seg_dom, d_opts),

@@ -550,6 +550,55 @@ def test_two_tier_keeps_active_region_inside_larger_domain(viewer) -> None:
     )
 
 
+def test_two_tier_region_mask_constrains_both_tiers(viewer) -> None:
+    from imajin.tools.workflows import analyze_target_cells
+
+    img = np.zeros((200, 200), dtype=np.float32)
+    img[30:60, 30:60] = 250.0  # inside the ROI
+    img[140:170, 140:170] = 250.0  # outside the ROI
+    viewer.add_image(img, name="rep_region", scale=(0.5, 0.5))
+    roi = np.zeros((200, 200), dtype=np.int32)
+    roi[0:100, 0:100] = 1
+    viewer.add_labels(roi, name="region")
+
+    res = analyze_target_cells(
+        target="rep_region",
+        region_mask="region",
+        domain_strategy="noise_floor",
+        domain_options={"k_mad": 5.0, "min_area_um2": 1.0},
+    )
+    assert res["ok"] is True
+    cells = np.asarray(viewer.layers[res["cells_layer"]].data)
+    domain = np.asarray(viewer.layers[res["domain_layer"]].data)
+    assert (cells[140:170, 140:170] == 0).all(), "no cells outside the ROI"
+    assert (domain[140:170, 140:170] == 0).all(), "no domain outside the ROI"
+    assert (cells[30:60, 30:60] > 0).any(), "cells found inside the ROI"
+
+
+def test_region_mask_rejected_for_method_without_boundary(viewer) -> None:
+    from imajin.tools.workflows import analyze_target_cells
+
+    viewer.add_image(np.zeros((64, 64), dtype=np.float32), name="x_rm")
+    viewer.add_labels(np.ones((64, 64), dtype=np.int32), name="roi_x")
+    res = analyze_target_cells(
+        target="x_rm", region_mask="roi_x", segmentation_method="cellpose_sam"
+    )
+    assert res["ok"] is False and res["stage"] == "region_mask"
+
+
+def test_region_mask_conflicts_with_explicit_boundary_mask(viewer) -> None:
+    from imajin.tools.workflows import analyze_target_cells
+
+    viewer.add_image(np.zeros((64, 64), dtype=np.float32), name="y_rm")
+    viewer.add_labels(np.ones((64, 64), dtype=np.int32), name="roi_y")
+    res = analyze_target_cells(
+        target="y_rm",
+        region_mask="roi_y",
+        segmentation_options={"boundary_mask": "roi_y"},
+    )
+    assert res["ok"] is False and res["stage"] == "region_mask"
+
+
 def test_analyze_target_cells_single_tier_writes_new_layout_bundle(
     viewer, tmp_path, monkeypatch
 ) -> None:
