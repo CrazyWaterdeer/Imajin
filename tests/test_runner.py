@@ -478,3 +478,39 @@ def test_overlay_escalation_budget_suppresses_repeats(tmp_path) -> None:
     assert _maybe_overlay_block("seg_budget", worse, budget) is not None  # worsened -> shows
     other = {"roi_confidence": "medium", "qc_png_path": str(p), "labels_layer": "M"}
     assert _maybe_overlay_block("seg_budget", other, budget) is not None  # other layer independent
+
+
+def test_runtime_prompt_includes_batch_progress() -> None:
+    from imajin import session as state
+
+    state.reset_runs()
+    state.current_session().files.clear()
+    runner = AgentRunner(_ScriptedProvider([]), "BASE")
+    assert "Batch progress" not in runner._runtime_system_prompt()
+
+    state.put_run(
+        sample_id="f1", file_id="/data/f1.lsm",
+        recipe_id="interactive:target_objects:two_tier",
+        status="complete", table_names=["f1_two_tier"],
+    )
+    prompt = runner._runtime_system_prompt()
+    assert "Batch progress" in prompt and "f1_two_tier" in prompt
+    state.reset_runs()
+
+
+def test_ledger_injected_even_when_viewer_context_empty(monkeypatch) -> None:
+    from imajin import session as state
+    from imajin.agent import context as ctx
+
+    state.reset_runs()
+    state.current_session().files.clear()
+    monkeypatch.setattr(ctx, "summarize_viewer_state", lambda *a, **k: "")
+    state.put_run(
+        sample_id="f", file_id="/d/f.lsm", recipe_id="interactive:x:single",
+        status="complete", table_names=["t"],
+    )
+    runner = AgentRunner(_ScriptedProvider([]), "BASE")
+    prompt = runner._runtime_system_prompt()
+    assert "Current session context" not in prompt  # viewer context empty
+    assert "Batch progress" in prompt  # ledger still injected independently
+    state.reset_runs()

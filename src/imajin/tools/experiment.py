@@ -544,6 +544,20 @@ def list_experiment() -> dict[str, Any]:
 
 
 @tool(
+    description="Return batch analysis progress: which files have been analysed "
+    "(with their result table), which are still pending, which failed, and the next "
+    "pending file. Use this to continue a multi-file batch without re-analysing a "
+    "finished file or re-asking for a known path. A file is 'pending' only if it was "
+    "registered (register_files); otherwise the universe is unknown.",
+    phase="3",
+)
+def get_batch_progress() -> dict[str, Any]:
+    from imajin.agent.context import batch_progress_data
+
+    return batch_progress_data()
+
+
+@tool(
     description="Create or replace a reusable analysis recipe. Captures target "
     "channel, segmentation/measurement/preprocessing settings, and optional "
     "time-course or colocalization parameters so the same pipeline can be applied "

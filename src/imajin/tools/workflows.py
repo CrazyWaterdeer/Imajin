@@ -16,10 +16,13 @@ from imajin.session import (
     AmbiguousChannelError,
     get_layer as _get_layer,
     get_table,
+    list_runs as _list_runs,
+    put_run as _put_run,
     put_table,
     resolve_target_channel,
 )
 from imajin.tools.batch_runner import BatchRecipeRunner
+from imajin.tools.files import _layer_source_path
 from imajin.tools import measure as _measure
 from imajin.tools._workflow_outputs import (
     _bundle_qc_png_path,
@@ -34,6 +37,56 @@ from imajin.tools._workflow_steps import (
 )
 from imajin.tools.napari_ops import snapshot_layer
 from imajin.tools.registry import tool
+
+
+def _run_label(file_key: str) -> str:
+    """Short display label for an analysis key (file stem, or the layer name)."""
+    if "/" in file_key or "\\" in file_key:
+        return Path(file_key).stem
+    return file_key
+
+
+def _latest_complete_run(file_key: str, recipe_key: str) -> dict[str, Any] | None:
+    """The stored result of the newest *complete* interactive run for this key."""
+    for rec in reversed(_list_runs()):
+        if (
+            rec.get("file_id") == file_key
+            and rec.get("recipe_id") == recipe_key
+            and rec.get("status") == "complete"
+        ):
+            result = (rec.get("summary") or {}).get("result")
+            if isinstance(result, dict):
+                return dict(result)
+    return None
+
+
+def _record_interactive_run(
+    file_key: str, recipe_key: str, status: str, result: dict[str, Any]
+) -> None:
+    """Record an AnalysisRun for the interactive path so the batch-progress ledger
+    and the re-run guard share one source of truth with the batch runner."""
+    table = result.get("primary_table_name") or result.get("table_name")
+    layers = [
+        name
+        for name in (
+            result.get("cells_layer") or result.get("labels_layer"),
+            result.get("domain_layer"),
+        )
+        if name
+    ]
+    _put_run(
+        sample_id=_run_label(file_key),
+        file_id=file_key,
+        recipe_id=recipe_key,
+        status=status,
+        table_names=[table] if table else [],
+        layer_names=layers,
+        summary={
+            "n_cells": result.get("n_cells") or result.get("n_objects"),
+            "method": recipe_key,
+            "result": result,
+        },
+    )
 
 
 @tool(
@@ -65,6 +118,8 @@ def analyze_target_cells(
     cell_diameter_um: float | None = None,
     review_mode: str = "auto",
     review_timeout_s: float | None = None,
+    rerun: bool = False,
+    batch_managed: bool = False,
 ) -> dict[str, Any]:
     warnings: list[str] = []
     report_progress(stage="resolve_target", message="Resolving target channel.")
@@ -85,6 +140,30 @@ def analyze_target_cells(
             "confirm by annotating the channel."
         )
 
+    # Resolve the analysis identity from the ORIGINAL target (before preprocessing)
+    # so the re-run guard short-circuits a duplicate before any heavy work runs.
+    method = _normalize_segmentation_method(segmentation_method)
+    mode = "two_tier" if domain_strategy is not None else "single"
+    orig_snapshot = call_on_main(snapshot_layer, target_layer)
+    analysis_file_key = _layer_source_path(orig_snapshot) or target_layer
+    analysis_recipe_key = f"interactive:{method}:{mode}"
+
+    if not batch_managed and not rerun:
+        prior_result = _latest_complete_run(analysis_file_key, analysis_recipe_key)
+        if prior_result is not None:
+            prior_table = (
+                prior_result.get("primary_table_name")
+                or prior_result.get("table_name")
+            )
+            return {
+                **prior_result,
+                "already_analysed": True,
+                "message": (
+                    f"{_run_label(analysis_file_key)} was already analysed "
+                    f"(table {prior_table}); pass rerun=True to recompute."
+                ),
+            }
+
     seg_input_layer, pre_step, pre_record = _run_preprocess_step(
         target_layer,
         preprocess,
@@ -93,8 +172,6 @@ def analyze_target_cells(
     snapshot = call_on_main(snapshot_layer, seg_input_layer)
     axes = _layer_axes(snapshot)
     use_3d = _decide_3d(do_3D, axes, getattr(snapshot.data, "ndim", 2))
-
-    method = _normalize_segmentation_method(segmentation_method)
 
     # A hand-drawn ROI (region_mask) constrains BOTH tiers to inside the region.
     if region_mask is not None:
@@ -150,7 +227,7 @@ def analyze_target_cells(
         diameter=diameter,
     )
     if seg_result.get("empty_mask", False):
-        return {
+        empty_result = {
             "ok": False,
             "stage": "segment",
             "error": f"{method} produced zero objects on the target channel; "
@@ -167,6 +244,12 @@ def analyze_target_cells(
             "segmentation_method": method,
             "warnings": warnings,
         }
+        if not batch_managed:
+            # Record a failed run so the ledger shows it; a failed run never blocks a retry.
+            _record_interactive_run(
+                analysis_file_key, analysis_recipe_key, "failed", empty_result
+            )
+        return empty_result
 
     review_record: dict[str, Any] | None = None
     if review_mode == "interactive":
@@ -337,7 +420,7 @@ def analyze_target_cells(
             seg_result.get("qc_png_path"),
         )
 
-        return {
+        _two_tier_result = {
             "ok": True,
             "target_channel": target_layer,
             "target_source": resolution.source,
@@ -371,8 +454,13 @@ def analyze_target_cells(
                 + list(domain_result.get("domain_warnings", []))
             ),
         }
+        if not batch_managed:
+            _record_interactive_run(
+                analysis_file_key, analysis_recipe_key, "complete", _two_tier_result
+            )
+        return _two_tier_result
 
-    return {
+    _single_result = {
         "ok": True,
         "target_channel": target_layer,
         "target_source": resolution.source,
@@ -408,6 +496,12 @@ def analyze_target_cells(
         "review": review_record,
         "warnings": warnings,
     }
+    if not batch_managed:
+        _record_interactive_run(
+            analysis_file_key, analysis_recipe_key, "complete", _single_result
+        )
+    return _single_result
+
 
 @tool(
     description="Apply a stored analysis recipe to one or more annotated samples. "

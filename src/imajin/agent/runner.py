@@ -363,16 +363,30 @@ class AgentRunner:
         self._tool_caller = tool_caller
 
     def _runtime_system_prompt(self) -> str:
+        from imajin.agent.qt_dispatch import call_on_main
+
+        prompt = self.system_prompt
+        # Viewer state and the batch-progress ledger are independent: a failure or
+        # emptiness in one must not suppress the other, and the ledger does not need
+        # a viewer. Both are rebuilt every turn from durable session state, so message
+        # compaction can never erase them.
         try:
             from imajin.agent.context import summarize_viewer_state
-            from imajin.agent.qt_dispatch import call_on_main
 
             context = call_on_main(summarize_viewer_state)
         except Exception:
             context = ""
-        if not context:
-            return self.system_prompt
-        return f"{self.system_prompt}\n\nCurrent session context:\n{context}"
+        if context:
+            prompt = f"{prompt}\n\nCurrent session context:\n{context}"
+        try:
+            from imajin.agent.context import summarize_batch_progress
+
+            ledger = call_on_main(summarize_batch_progress)
+        except Exception:
+            ledger = None
+        if ledger:
+            prompt = f"{prompt}\n\nBatch progress:\n{ledger}"
+        return prompt
 
     def cancel(self) -> None:
         self._cancelled = True
