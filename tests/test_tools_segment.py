@@ -782,6 +782,79 @@ def test_segment_target_objects_default_unchanged(viewer) -> None:
     assert (labels[40:60, 40:60] > 0).any()
 
 
+def test_resolve_boundary_mask_broadcasts_2d_over_3d() -> None:
+    from imajin.analysis.segmentation import resolve_boundary_mask
+
+    b2d = np.zeros((100, 100), dtype=np.int32)
+    b2d[0:50, 0:50] = 1
+
+    # exact 2D match -> normal writable array
+    m2 = resolve_boundary_mask(b2d, (100, 100))
+    assert m2.shape == (100, 100) and m2.dtype == bool and m2[10, 10] and not m2[60, 60]
+    assert m2.flags.writeable is True
+
+    # 2D ROI applied across Z of a 3D stack -> read-only broadcast view (no Z*Y*X copy)
+    m3 = resolve_boundary_mask(b2d, (5, 100, 100))
+    assert m3.shape == (5, 100, 100)
+    assert m3.flags.writeable is False
+    for z in range(5):
+        assert np.array_equal(m3[z], m2)
+
+    # incompatible XY -> error
+    with pytest.raises(ValueError):
+        resolve_boundary_mask(np.ones((50, 50), np.int32), (5, 100, 100))
+    # exact 3D match still works
+    b3d = np.zeros((5, 100, 100), dtype=np.int32)
+    b3d[:, 0:50, 0:50] = 1
+    assert resolve_boundary_mask(b3d, (5, 100, 100)).shape == (5, 100, 100)
+
+
+def test_segment_target_objects_2d_roi_on_3d_stack(viewer) -> None:
+    # A 2D ROI drawn on a MIP must constrain segmentation of the matching 3D stack
+    # (the user's real workflow). Bright blob inside the ROI on every Z, one outside.
+    img = np.zeros((5, 100, 100), dtype=np.float32)
+    img[:, 10:30, 10:30] = 200.0
+    img[:, 60:80, 60:80] = 200.0
+    viewer.add_image(img, name="stack")
+    roi2d = np.zeros((100, 100), dtype=np.int32)
+    roi2d[0:50, 0:50] = 1
+    viewer.add_labels(roi2d, name="roi2d")  # 2D, as produced from a MIP
+
+    res = segment.segment_target_objects(
+        "stack",
+        boundary_mask="roi2d",
+        background_radius=0,
+        smoothing_sigma=0,
+        min_size=20,
+        save_qc_png=False,
+    )
+    labels = np.asarray(viewer.layers[res["labels_layer"]].data)
+    assert labels.shape == (5, 100, 100)
+    assert (labels[:, 10:30, 10:30] > 0).any(), "inside-ROI blob kept through the stack"
+    assert (labels[:, 60:80, 60:80] == 0).all(), "outside-ROI blob dropped on every Z"
+    assert res["threshold_scope"] == "boundary_mask"
+    assert any("broadcast across all 5 Z" in w for w in res["qc_warnings"])
+
+
+def test_segment_3d_cells_auto_2d_roi_clips_to_boundary(viewer) -> None:
+    # auto3d candidates (threshold + plane-stitch) must be hard-clipped to a 2D ROI
+    # broadcast across Z -- fill_holes/morphology must not leak labels outside.
+    img = np.zeros((4, 80, 80), dtype=np.float32)
+    img[:, 12:24, 12:24] = 220.0  # inside ROI
+    img[:, 55:70, 55:70] = 220.0  # outside ROI
+    viewer.add_image(img, name="stack3d")
+    roi2d = np.zeros((80, 80), dtype=np.int32)
+    roi2d[0:40, 0:40] = 1
+    viewer.add_labels(roi2d, name="roi3d")
+
+    res = segment.segment_3d_cells_auto(
+        "stack3d", boundary_mask="roi3d", min_z_planes=1, save_qc_png=False
+    )
+    labels = np.asarray(viewer.layers[res["labels_layer"]].data)
+    assert labels.shape == (4, 80, 80)
+    assert (labels[:, 55:70, 55:70] == 0).all(), "no labels outside the 2D ROI on any Z"
+
+
 def test_qc_png_renders_secondary_outline(tmp_path) -> None:
     image = np.zeros((64, 64), dtype=np.float32)
     image[20:30, 20:30] = 100.0

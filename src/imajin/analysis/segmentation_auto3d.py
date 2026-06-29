@@ -7,6 +7,7 @@ import numpy as np
 
 from imajin.analysis.segmentation import (
     estimate_local_background,
+    intersect_labels_with_mask,
     label_qc,
     labels_from_binary,
     min_size_from_physical,
@@ -406,6 +407,11 @@ def build_auto3d_candidates(
     stitch_max_area_ratio: float = 3.0,
     min_z_planes: int | None = 2,
 ) -> list[SegmentationCandidate]:
+    if boundary_mask is not None and boundary_mask.shape != image.shape:
+        raise ValueError(
+            f"boundary_mask shape {boundary_mask.shape} must match image shape "
+            f"{image.shape}; resolve it (resolve_boundary_mask) before calling."
+        )
     modes = candidate_modes or ["direct_3d", "plane_stitch"]
     variants = _candidate_variants(base_options)
     candidates: list[SegmentationCandidate] = []
@@ -423,6 +429,13 @@ def build_auto3d_candidates(
                 labels,
                 min_z_planes=min_z_planes,
             )
+            if boundary_mask is not None:
+                # Hard-clip to the boundary: fill_holes/morphology can spill a label
+                # across the masked edge, and unlike target_pipeline the per-strategy
+                # threshold has no final intersect.
+                labels = intersect_labels_with_mask(
+                    labels, boundary_mask, renumber=True
+                )
             candidates.append(
                 _candidate_from_labels(
                     "direct_3d",
@@ -448,6 +461,13 @@ def build_auto3d_candidates(
                 labels,
                 min_z_planes=min_z_planes,
             )
+            if boundary_mask is not None:
+                # Hard-clip to the boundary: fill_holes/morphology can spill a label
+                # across the masked edge, and unlike target_pipeline the per-strategy
+                # threshold has no final intersect.
+                labels = intersect_labels_with_mask(
+                    labels, boundary_mask, renumber=True
+                )
             candidates.append(
                 _candidate_from_labels(
                     "plane_stitch",

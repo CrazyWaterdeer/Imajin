@@ -206,8 +206,10 @@ def _build_boundary_mask_from_layers(
     description="Convert a hand-drawn napari Shapes layer (polygon/rectangle/ellipse) "
     "into a boundary Labels mask matching a reference image, so segmentation can be "
     "constrained to inside the drawn region by passing the result as boundary_mask. "
-    "Open shapes (line/path) are ignored. For a 3D ZYX reference the region is "
-    "broadcast across every Z plane. Draw the shape on the same image you will segment.",
+    "Open shapes (line/path) are ignored. Typical use: draw the ROI on a 2D "
+    "max-projection (MIP) and pass that MIP as reference_layer; the 2D mask is applied "
+    "across all Z when you then segment the matching 3D stack. Drawing directly on a "
+    "3D layer also works (the region is broadcast across Z here).",
     phase="2",
     llm=True,
     worker=False,

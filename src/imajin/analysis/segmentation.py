@@ -182,6 +182,36 @@ def intersect_labels_with_mask(
     return remap[out]
 
 
+def resolve_boundary_mask(
+    boundary_raw: np.ndarray, target_shape: tuple[int, ...]
+) -> np.ndarray:
+    """Boolean boundary mask aligned to ``target_shape``.
+
+    An exact-shape match returns a normal (writable) boolean array. A 2D ``(Y, X)``
+    mask against a 3D ``(Z, Y, X)`` target is broadcast across Z and returned as a
+    **read-only** broadcast view (no Z*Y*X copy, matching :func:`_broadcast_region`
+    in ``interactive_roi``); every consumer only reads the mask. Broadcasting lets an
+    ROI or expression domain drawn on a max-intensity projection apply through the
+    whole stack -- the common workflow, since drawing on a 2D MIP is far easier than
+    on a 3D volume. Any other shape combination is rejected.
+    """
+    b = np.asarray(boundary_raw) > 0
+    target_shape = tuple(int(s) for s in target_shape)
+    if b.shape == target_shape:
+        return b
+    if b.ndim == 2 and len(target_shape) == 3 and b.shape == target_shape[-2:]:
+        return np.broadcast_to(b[None, :, :], target_shape)
+    expected = (
+        f"(Z, Y, X)={target_shape} or 2D (Y, X)={target_shape[-2:]}"
+        if len(target_shape) == 3
+        else f"(Y, X)={target_shape}"
+    )
+    raise ValueError(
+        f"boundary_mask shape {b.shape} is not compatible with target image shape "
+        f"{target_shape}; expected {expected} (e.g. an ROI drawn on the max projection)."
+    )
+
+
 def dilate_binary_um(
     binary: np.ndarray,
     *,

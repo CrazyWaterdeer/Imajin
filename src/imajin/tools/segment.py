@@ -14,10 +14,12 @@ from imajin.analysis.domain_segmentation import (
 )
 from imajin.analysis.segmentation import (
     dilate_binary_um as _dilate_binary_um,
+    intersect_labels_with_mask as _intersect_labels_with_mask,
     label_qc as _label_qc,
     label_qc_warnings as _label_qc_warnings,
     min_size_from_physical as _min_size_from_physical,
     remove_small_binary_objects as _remove_small_binary_objects,
+    resolve_boundary_mask as _resolve_boundary_mask,
     segment_connected_regions as _segment_connected_regions,
     threshold_noise_floor as _threshold_noise_floor,
     voxel_spacing as _voxel_spacing,
@@ -298,12 +300,12 @@ def segment_3d_cells_auto(
     if boundary_mask is not None:
         boundary_layer_snapshot = call_on_main(snapshot_layer, boundary_mask)
         boundary_raw = materialize_array(boundary_layer_snapshot.data)
-        if boundary_raw.shape != raw.shape:
-            raise ValueError(
-                f"boundary_mask shape {boundary_raw.shape} does not match "
-                f"target image shape {raw.shape}"
+        # A 2D ROI/domain drawn on the MIP is broadcast across Z for this 3D stack.
+        boundary_data_bool = _resolve_boundary_mask(boundary_raw, raw.shape)
+        if boundary_data_bool.ndim == 3 and boundary_raw.ndim == 2:
+            saturation_warnings.append(
+                f"boundary_mask is a 2D ROI broadcast across all {raw.shape[0]} Z planes"
             )
-        boundary_data_bool = boundary_raw > 0
 
     base_options = {
         "background_radius": background_radius,
@@ -357,6 +359,12 @@ def segment_3d_cells_auto(
             cellpose_labels,
             min_z_planes=min_z_planes,
         )
+        if boundary_data_bool is not None:
+            # Cellpose runs on the full raw stack; clip it to the ROI so an
+            # out-of-boundary Cellpose win cannot keep labels outside the region.
+            cellpose_labels = _intersect_labels_with_mask(
+                cellpose_labels, boundary_data_bool, renumber=True
+            )
         cp_metrics, cp_warnings, cp_score = _rank_segmentation_labels(raw, cellpose_labels)
         candidates.append(
             _SegmentationCandidate(
@@ -709,12 +717,12 @@ def segment_target_objects(
     if boundary_mask is not None:
         boundary_layer_snapshot = call_on_main(snapshot_layer, boundary_mask)
         _boundary_raw = materialize_array(boundary_layer_snapshot.data)
-        if _boundary_raw.shape != raw.shape:
-            raise ValueError(
-                f"boundary_mask shape {_boundary_raw.shape} does not match "
-                f"target image shape {raw.shape}"
+        # A 2D ROI/domain drawn on the MIP is broadcast across Z for a 3D stack.
+        boundary_data_bool = _resolve_boundary_mask(_boundary_raw, raw.shape)
+        if boundary_data_bool.ndim == 3 and _boundary_raw.ndim == 2:
+            saturation_warnings.append(
+                f"boundary_mask is a 2D ROI broadcast across all {raw.shape[0]} Z planes"
             )
-        boundary_data_bool = _boundary_raw > 0
 
     # Pure threshold -> label -> QC -> score (extracted to analysis/target_pipeline
     # so the single-shot tool, the auto-correct loop, and headless tests share one
@@ -801,8 +809,11 @@ def segment_target_objects(
     secondary_mask_array: np.ndarray | None = None
     if boundary_mask is not None:
         bm_snapshot = call_on_main(snapshot_layer, boundary_mask)
-        bm_data = materialize_array(bm_snapshot.data)
-        secondary_mask_array = (bm_data > 0).astype(np.int32)
+        bm_bool = materialize_array(bm_snapshot.data) > 0
+        # QC overlay is drawn on the 2D projection; keep the outline 2D.
+        secondary_mask_array = (
+            bm_bool if bm_bool.ndim == 2 else np.any(bm_bool, axis=0)
+        ).astype(np.int32)
 
     saved_qc_png: str | None = None
     qc_png_error: str | None = None
@@ -947,12 +958,12 @@ def auto_segment_target(
     if boundary_mask is not None:
         boundary_layer_snapshot = call_on_main(snapshot_layer, boundary_mask)
         _boundary_raw = materialize_array(boundary_layer_snapshot.data)
-        if _boundary_raw.shape != raw.shape:
-            raise ValueError(
-                f"boundary_mask shape {_boundary_raw.shape} does not match "
-                f"target image shape {raw.shape}"
+        # A 2D ROI/domain drawn on the MIP is broadcast across Z for a 3D stack.
+        boundary_data_bool = _resolve_boundary_mask(_boundary_raw, raw.shape)
+        if boundary_data_bool.ndim == 3 and _boundary_raw.ndim == 2:
+            saturation_warnings.append(
+                f"boundary_mask is a 2D ROI broadcast across all {raw.shape[0]} Z planes"
             )
-        boundary_data_bool = _boundary_raw > 0
 
     params: dict[str, Any] = {
         "background_radius": background_radius,
@@ -1043,7 +1054,13 @@ def auto_segment_target(
 
     secondary_mask_array: np.ndarray | None = None
     if boundary_data_bool is not None:
-        secondary_mask_array = boundary_data_bool.astype(np.int32)
+        # boundary_data_bool may be a Z-broadcast view; project to a 2D outline so
+        # the QC overlay stays small instead of materialising a Z*Y*X int32 array.
+        secondary_mask_array = (
+            boundary_data_bool
+            if boundary_data_bool.ndim == 2
+            else np.any(boundary_data_bool, axis=0)
+        ).astype(np.int32)
 
     saved_qc_png: str | None = None
     qc_png_error: str | None = None
