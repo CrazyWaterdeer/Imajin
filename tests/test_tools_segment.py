@@ -926,6 +926,63 @@ def test_target_objects_skips_crop_for_global_operators(viewer, monkeypatch) -> 
     assert not called, "auto_mask_hyperbright (global) must skip the crop"
 
 
+def test_expression_domain_boundary_mask_constrains_to_roi(viewer) -> None:
+    img = np.zeros((80, 80), dtype=np.float32)
+    img[10:30, 10:30] = 500.0  # inside the ROI
+    img[55:75, 55:75] = 500.0  # outside the ROI
+    viewer.add_image(img, name="rep")
+    roi = np.zeros((80, 80), dtype=np.int32)
+    roi[0:40, 0:40] = 1
+    viewer.add_labels(roi, name="roi_d")
+
+    res = segment.segment_expression_domain(
+        "rep", boundary_mask="roi_d", min_area_um2=0.0, save_qc_png=False
+    )
+    labels = np.asarray(viewer.layers[res["labels_layer"]].data)
+    assert (labels[55:75, 55:75] == 0).all(), "no domain outside the ROI"
+    assert (labels[10:30, 10:30] > 0).any(), "domain inside the ROI"
+    assert res["threshold_scope"] == "boundary_mask"
+
+    full = segment.segment_expression_domain("rep", min_area_um2=0.0, save_qc_png=False)
+    assert res["domain_voxels"] < full["domain_voxels"], "ROI domain is smaller than full-frame"
+
+
+def test_expression_domain_clips_component_crossing_roi(viewer) -> None:
+    # A bright bar straddling the ROI edge: only the in-ROI part is kept (clip before
+    # component cleanup), not the whole connected object.
+    img = np.zeros((80, 80), dtype=np.float32)
+    img[30:50, 20:60] = 500.0  # spans x=20..59, crossing the ROI edge at x=40
+    viewer.add_image(img, name="bar")
+    roi = np.zeros((80, 80), dtype=np.int32)
+    roi[:, 0:40] = 1  # left half only
+    viewer.add_labels(roi, name="lhalf")
+
+    res = segment.segment_expression_domain(
+        "bar", boundary_mask="lhalf", min_area_um2=0.0, save_qc_png=False
+    )
+    labels = np.asarray(viewer.layers[res["labels_layer"]].data)
+    assert (labels[30:50, 20:40] > 0).any(), "in-ROI part of the bar kept"
+    assert (labels[30:50, 40:60] == 0).all(), "out-of-ROI part of the bar clipped"
+
+
+def test_expression_domain_boundary_2d_roi_on_3d(viewer) -> None:
+    zyx = np.zeros((3, 60, 60), dtype=np.float32)
+    zyx[:, 10:25, 10:25] = 500.0  # inside ROI, all Z
+    zyx[:, 40:55, 40:55] = 500.0  # outside ROI
+    viewer.add_image(zyx, name="rep3d")
+    roi = np.zeros((60, 60), dtype=np.int32)
+    roi[0:30, 0:30] = 1
+    viewer.add_labels(roi, name="roi3d_d")
+
+    res = segment.segment_expression_domain(
+        "rep3d", boundary_mask="roi3d_d", min_area_um2=0.0, save_qc_png=False
+    )
+    labels = np.asarray(viewer.layers[res["labels_layer"]].data)
+    assert labels.shape == (3, 60, 60)
+    assert (labels[:, 40:55, 40:55] == 0).all(), "no domain outside the 2D ROI on any Z"
+    assert (labels[:, 10:25, 10:25] > 0).any()
+
+
 def test_qc_png_renders_secondary_outline(tmp_path) -> None:
     image = np.zeros((64, 64), dtype=np.float32)
     image[20:30, 20:30] = 100.0

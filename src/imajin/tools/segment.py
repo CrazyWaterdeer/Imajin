@@ -1190,6 +1190,7 @@ def segment_expression_domain(
     dilation_um: float = 0.0,
     save_qc_png: bool = True,
     qc_png_path: str | None = None,
+    boundary_mask: str | None = None,
 ) -> dict[str, Any]:
     if threshold_strategy != "noise_floor":
         raise ValueError(
@@ -1213,17 +1214,37 @@ def segment_expression_domain(
         )
 
     spacing = _voxel_spacing(tuple(L.scale), raw.ndim)
+    boundary_bool: np.ndarray | None = None
+    boundary_outline_2d: np.ndarray | None = None
+    if boundary_mask is not None:
+        _bnd_snapshot = call_on_main(snapshot_layer, boundary_mask)
+        _bnd_raw = materialize_array(_bnd_snapshot.data)
+        boundary_bool = _resolve_boundary_mask(_bnd_raw, raw.shape)
+        boundary_outline_2d = (
+            (_bnd_raw > 0) if _bnd_raw.ndim == 2 else np.any(_bnd_raw > 0, axis=0)
+        ).astype(np.int32)
+
     threshold_image = _smooth_domain_image(
         raw,
         spacing=spacing,
         smooth_sigma_um=smooth_sigma_um,
     )
-    threshold = _threshold_noise_floor(
-        threshold_image, k_mad=k_mad, dark_percentile=dark_percentile
-    )
-    binary = np.isfinite(raw) & np.isfinite(threshold_image) & (
-        threshold_image > threshold
-    )
+    if boundary_bool is not None:
+        # ROI-local noise floor: estimate it from the smoothed values *inside* the ROI
+        # only (finite raw + finite smoothed), so signal outside the drawn region can't
+        # shift the threshold, and clip the domain to the ROI from the start.
+        inside = boundary_bool & np.isfinite(raw) & np.isfinite(threshold_image)
+        threshold = _threshold_noise_floor(
+            threshold_image[inside], k_mad=k_mad, dark_percentile=dark_percentile
+        )
+        binary = inside & (threshold_image > threshold)
+    else:
+        threshold = _threshold_noise_floor(
+            threshold_image, k_mad=k_mad, dark_percentile=dark_percentile
+        )
+        binary = np.isfinite(raw) & np.isfinite(threshold_image) & (
+            threshold_image > threshold
+        )
 
     counterstain_used = False
     counterstain_warnings: list[str] = []
@@ -1271,6 +1292,9 @@ def segment_expression_domain(
 
     if dilation_um > 0 and spacing is not None:
         binary = _dilate_binary_um(binary, spacing=spacing, radius_um=dilation_um)
+        if boundary_bool is not None:
+            # Dilation must not grow the domain back outside the ROI.
+            binary = binary & boundary_bool
 
     labels, component_stats, component_warnings = _filter_domain_components(
         binary,
@@ -1364,6 +1388,8 @@ def segment_expression_domain(
             "min_component_fraction": float(min_component_fraction),
             "merge_components": bool(merge_components),
             **component_stats,
+            "boundary_mask": boundary_mask,
+            "threshold_scope": "boundary_mask" if boundary_bool is not None else "global",
             "empty_mask": False,
         },
     )
@@ -1386,6 +1412,7 @@ def segment_expression_domain(
                 source_layer=L.name,
                 method="expression_domain",
                 force=qc_png_path is not None,
+                secondary_outline_mask=boundary_outline_2d,
             )
             if saved_qc_png:
                 try:
@@ -1409,6 +1436,8 @@ def segment_expression_domain(
         "qc_png_path": saved_qc_png,
         "qc_png_error": qc_png_error,
         "qc_png_skipped_reason": qc_png_skipped_reason,
+        "boundary_mask": boundary_mask,
+        "threshold_scope": "boundary_mask" if boundary_bool is not None else "global",
         "empty_mask": False,
     }
 
