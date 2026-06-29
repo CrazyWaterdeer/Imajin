@@ -599,6 +599,60 @@ def test_region_mask_conflicts_with_explicit_boundary_mask(viewer) -> None:
     assert res["ok"] is False and res["stage"] == "region_mask"
 
 
+def test_analyze_target_cells_rerun_guard(viewer, monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("IMAJIN_RESULTS_DIR", str(tmp_path))
+    img = np.zeros((80, 80), dtype=np.float32)
+    img[20:50, 20:50] = 250.0
+    viewer.add_image(img, name="rg_rep", scale=(0.5, 0.5))
+    viewer.layers["rg_rep"].metadata["source_path"] = str(tmp_path / "rg_rep.lsm")
+
+    first = workflows.analyze_target_cells(target="rg_rep")
+    assert first["ok"] is True and not first.get("already_analysed")
+    assert any(
+        r["recipe_id"].startswith("interactive:") and r["status"] == "complete"
+        for r in state.list_runs()
+    ), "interactive analysis recorded a complete AnalysisRun"
+
+    # Second call: the guard must short-circuit BEFORE any heavy step runs.
+    def _boom(*a, **k):
+        raise AssertionError("re-ran a finished analysis")
+
+    monkeypatch.setattr(workflows, "_run_preprocess_step", _boom)
+    monkeypatch.setattr(workflows, "_run_segmentation_step", _boom)
+    monkeypatch.setattr(workflows, "_precompute_domain_layer", _boom)
+
+    again = workflows.analyze_target_cells(target="rg_rep")
+    assert again["ok"] is True and again["already_analysed"] is True
+    assert "rerun=True" in again["message"]
+    # rerun=True bypasses the guard -> _boom fires, proving it tried to recompute.
+    with pytest.raises(AssertionError):
+        workflows.analyze_target_cells(target="rg_rep", rerun=True)
+
+
+def test_failed_run_does_not_block_retry(viewer, monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("IMAJIN_RESULTS_DIR", str(tmp_path))
+    img = np.zeros((64, 64), dtype=np.float32)
+    img[20:45, 20:45] = 300.0
+    viewer.add_image(img, name="blank_rep", scale=(0.5, 0.5))
+    viewer.layers["blank_rep"].metadata["source_path"] = str(tmp_path / "blank.lsm")
+
+    # Force an empty mask: a min_size larger than the whole image removes every
+    # object -> a recorded *failed* run.
+    r1 = workflows.analyze_target_cells(
+        target="blank_rep", segmentation_options={"min_size": 10_000_000}
+    )
+    assert r1["ok"] is False
+    assert any(
+        r["status"] == "failed" and r["recipe_id"].startswith("interactive:")
+        for r in state.list_runs()
+    )
+
+    # Retry with normal params and no rerun: a failed run must not block.
+    r2 = workflows.analyze_target_cells(target="blank_rep")
+    assert not r2.get("already_analysed"), "a failed run must not block a retry"
+    assert r2["ok"] is True
+
+
 def test_analyze_target_cells_single_tier_writes_new_layout_bundle(
     viewer, tmp_path, monkeypatch
 ) -> None:
