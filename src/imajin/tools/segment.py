@@ -13,9 +13,11 @@ from imajin.analysis.domain_segmentation import (
     smooth_domain_image as _smooth_domain_image,
 )
 from imajin.analysis.segmentation import (
+    boundary_bbox_slices as _boundary_bbox_slices,
     dilate_binary_um as _dilate_binary_um,
     intersect_labels_with_mask as _intersect_labels_with_mask,
     label_qc as _label_qc,
+    scatter_labels_to_full as _scatter_labels_to_full,
     label_qc_warnings as _label_qc_warnings,
     min_size_from_physical as _min_size_from_physical,
     remove_small_binary_objects as _remove_small_binary_objects,
@@ -704,16 +706,10 @@ def segment_target_objects(
         ndim=raw.ndim,
     )
     effective_min_size = physical_min_size or max(16, min(512, int(round(xy_area * 0.00005))))
-    corrected_for_threshold = _prepare_corrected(
-        raw,
-        background_radius=background_radius,
-        background_method=background_method,
-        background_percentile=background_percentile,
-        smoothing_sigma=smoothing_sigma,
-    )
-
-    # Load the boundary mask early so it can be used as the hysteresis grow region.
+    # Load + resolve the boundary BEFORE background correction, so the expensive
+    # pipeline can run on just the ROI bounding box when that is safe.
     boundary_data_bool: np.ndarray | None = None
+    _boundary_raw: np.ndarray | None = None
     if boundary_mask is not None:
         boundary_layer_snapshot = call_on_main(snapshot_layer, boundary_mask)
         _boundary_raw = materialize_array(boundary_layer_snapshot.data)
@@ -724,12 +720,50 @@ def segment_target_objects(
                 f"boundary_mask is a 2D ROI broadcast across all {raw.shape[0]} Z planes"
             )
 
-    # Pure threshold -> label -> QC -> score (extracted to analysis/target_pipeline
-    # so the single-shot tool, the auto-correct loop, and headless tests share one
-    # code path). The caller owns saturation warnings and the boundary-layer lookup.
+    # Crop to the ROI bbox only when the background is a *local* operator
+    # (radius > 0) and no *global* hyperbright mask is requested -- then the label
+    # mask inside the ROI is identical to the full-frame result, just faster. The
+    # margin (2*radius for opening + 4*sigma gaussian kernel + pad) keeps the
+    # corrected image exact inside the ROI. min_size stays full-frame-derived.
+    crop_slices = None
+    if (
+        boundary_data_bool is not None
+        and _boundary_raw is not None
+        and background_radius > 0
+        and not auto_mask_hyperbright
+    ):
+        yx2d = (
+            (_boundary_raw > 0)
+            if _boundary_raw.ndim == 2
+            else np.any(_boundary_raw > 0, axis=0)
+        )
+        margin = 2 * int(background_radius) + int(np.ceil(4.0 * float(smoothing_sigma))) + 8
+        crop_slices = _boundary_bbox_slices(yx2d, raw.shape, margin)
+        if crop_slices is not None:
+            saturation_warnings.append(
+                "segmentation computed inside the ROI bounding box (cropped) for speed"
+            )
+
+    raw_work = raw[crop_slices] if crop_slices is not None else raw
+    boundary_work = (
+        boundary_data_bool[crop_slices]
+        if (crop_slices is not None and boundary_data_bool is not None)
+        else boundary_data_bool
+    )
+
+    corrected_for_threshold = _prepare_corrected(
+        raw_work,
+        background_radius=background_radius,
+        background_method=background_method,
+        background_percentile=background_percentile,
+        smoothing_sigma=smoothing_sigma,
+    )
+
+    # Pure threshold -> label -> QC -> score (shared with the auto-correct loop and
+    # headless tests). The caller owns saturation warnings and the boundary lookup.
     seg = _threshold_and_label(
         corrected_for_threshold,
-        raw,
+        raw_work,
         spacing=spacing,
         threshold_method=threshold_method,
         threshold_percentile=threshold_percentile,
@@ -744,14 +778,21 @@ def segment_target_objects(
         split_touching=split_touching,
         min_distance=min_distance,
         min_distance_um=min_distance_um,
-        boundary_mask=boundary_data_bool,
+        boundary_mask=boundary_work,
     )
-    masks = seg.masks
+    if crop_slices is not None:
+        # Place the cropped labels back into the full frame and recompute label QC
+        # there so shape / n_objects / areas are correct for the layer; signal_qc
+        # (mask_fraction, inside/outside separation) stays ROI-local by design.
+        masks = _scatter_labels_to_full(seg.masks, raw.shape, crop_slices)
+        qc = _label_qc(masks)
+    else:
+        masks = seg.masks
+        qc = seg.qc
     threshold = seg.threshold
     high_threshold = seg.high_threshold
     noise_sigma = seg.noise_sigma
     threshold_scope = seg.threshold_scope
-    qc = seg.qc
     signal_qc = seg.signal_qc
     qc_warnings = saturation_warnings + seg.threshold_warnings + seg.qc_warnings
     roi_score = seg.roi_score
@@ -1149,6 +1190,7 @@ def segment_expression_domain(
     dilation_um: float = 0.0,
     save_qc_png: bool = True,
     qc_png_path: str | None = None,
+    boundary_mask: str | None = None,
 ) -> dict[str, Any]:
     if threshold_strategy != "noise_floor":
         raise ValueError(
@@ -1172,17 +1214,37 @@ def segment_expression_domain(
         )
 
     spacing = _voxel_spacing(tuple(L.scale), raw.ndim)
+    boundary_bool: np.ndarray | None = None
+    boundary_outline_2d: np.ndarray | None = None
+    if boundary_mask is not None:
+        _bnd_snapshot = call_on_main(snapshot_layer, boundary_mask)
+        _bnd_raw = materialize_array(_bnd_snapshot.data)
+        boundary_bool = _resolve_boundary_mask(_bnd_raw, raw.shape)
+        boundary_outline_2d = (
+            (_bnd_raw > 0) if _bnd_raw.ndim == 2 else np.any(_bnd_raw > 0, axis=0)
+        ).astype(np.int32)
+
     threshold_image = _smooth_domain_image(
         raw,
         spacing=spacing,
         smooth_sigma_um=smooth_sigma_um,
     )
-    threshold = _threshold_noise_floor(
-        threshold_image, k_mad=k_mad, dark_percentile=dark_percentile
-    )
-    binary = np.isfinite(raw) & np.isfinite(threshold_image) & (
-        threshold_image > threshold
-    )
+    if boundary_bool is not None:
+        # ROI-local noise floor: estimate it from the smoothed values *inside* the ROI
+        # only (finite raw + finite smoothed), so signal outside the drawn region can't
+        # shift the threshold, and clip the domain to the ROI from the start.
+        inside = boundary_bool & np.isfinite(raw) & np.isfinite(threshold_image)
+        threshold = _threshold_noise_floor(
+            threshold_image[inside], k_mad=k_mad, dark_percentile=dark_percentile
+        )
+        binary = inside & (threshold_image > threshold)
+    else:
+        threshold = _threshold_noise_floor(
+            threshold_image, k_mad=k_mad, dark_percentile=dark_percentile
+        )
+        binary = np.isfinite(raw) & np.isfinite(threshold_image) & (
+            threshold_image > threshold
+        )
 
     counterstain_used = False
     counterstain_warnings: list[str] = []
@@ -1230,6 +1292,9 @@ def segment_expression_domain(
 
     if dilation_um > 0 and spacing is not None:
         binary = _dilate_binary_um(binary, spacing=spacing, radius_um=dilation_um)
+        if boundary_bool is not None:
+            # Dilation must not grow the domain back outside the ROI.
+            binary = binary & boundary_bool
 
     labels, component_stats, component_warnings = _filter_domain_components(
         binary,
@@ -1323,6 +1388,8 @@ def segment_expression_domain(
             "min_component_fraction": float(min_component_fraction),
             "merge_components": bool(merge_components),
             **component_stats,
+            "boundary_mask": boundary_mask,
+            "threshold_scope": "boundary_mask" if boundary_bool is not None else "global",
             "empty_mask": False,
         },
     )
@@ -1345,6 +1412,7 @@ def segment_expression_domain(
                 source_layer=L.name,
                 method="expression_domain",
                 force=qc_png_path is not None,
+                secondary_outline_mask=boundary_outline_2d,
             )
             if saved_qc_png:
                 try:
@@ -1368,6 +1436,8 @@ def segment_expression_domain(
         "qc_png_path": saved_qc_png,
         "qc_png_error": qc_png_error,
         "qc_png_skipped_reason": qc_png_skipped_reason,
+        "boundary_mask": boundary_mask,
+        "threshold_scope": "boundary_mask" if boundary_bool is not None else "global",
         "empty_mask": False,
     }
 

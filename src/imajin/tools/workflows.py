@@ -44,7 +44,10 @@ from imajin.tools.registry import tool
     "'rolling_ball' / 'auto_contrast' / 'gaussian_denoise' to apply one preprocessing "
     "step before segmentation. Returns labels layer, measurement table, object count, "
     "and QC metrics. Counterstain channels are not auto-selected — annotate them as "
-    "'counterstain' first if you only have one target channel.",
+    "'counterstain' first if you only have one target channel. Pass region_mask=<a "
+    "boundary Labels layer, e.g. from boundary_mask_from_shapes> to constrain BOTH the "
+    "expression domain and the cells to inside a hand-drawn region (target_objects / "
+    "auto_3d_cells only); the heavy compute is cropped to that region.",
     phase="2",
     worker=True,
 )
@@ -55,6 +58,7 @@ def analyze_target_cells(
     preprocess: str | None = None,
     segmentation_method: str = "target_objects",
     segmentation_options: dict[str, Any] | None = None,
+    region_mask: str | None = None,
     domain_strategy: str | None = None,
     domain_options: dict[str, Any] | None = None,
     counterstain_layer: str | None = None,
@@ -90,7 +94,30 @@ def analyze_target_cells(
     axes = _layer_axes(snapshot)
     use_3d = _decide_3d(do_3D, axes, getattr(snapshot.data, "ndim", 2))
 
-    # Tier-1: pre-compute expression domain before Tier-2 segmentation.
+    method = _normalize_segmentation_method(segmentation_method)
+
+    # A hand-drawn ROI (region_mask) constrains BOTH tiers to inside the region.
+    if region_mask is not None:
+        if method not in {"target_objects", "auto_3d_cells"}:
+            return {
+                "ok": False,
+                "stage": "region_mask",
+                "error": f"region_mask only works with segmentation_method "
+                f"'target_objects' or 'auto_3d_cells' (got {method!r}); "
+                "cellpose_sam / intensity_regions have no boundary support.",
+            }
+        if "boundary_mask" in (segmentation_options or {}):
+            return {
+                "ok": False,
+                "stage": "region_mask",
+                "error": "pass the ROI via region_mask OR "
+                "segmentation_options['boundary_mask'], not both.",
+            }
+
+    # Tier-1: pre-compute expression domain before Tier-2 segmentation. When a
+    # region_mask is given the domain is ROI-constrained, so it is measured only
+    # inside the drawn region and Tier-2 (which uses the domain as its boundary) is
+    # transitively constrained too.
     pre_computed_domain_layer: str | None = None
     if domain_strategy is not None:
         pre_computed_domain_layer = _precompute_domain_layer(
@@ -99,9 +126,8 @@ def analyze_target_cells(
             domain_options=domain_options,
             counterstain_layer=counterstain_layer,
             cell_diameter_um=cell_diameter_um,
+            boundary_mask=region_mask,
         )
-
-    method = _normalize_segmentation_method(segmentation_method)
 
     _check_analysis_memory_budget(seg_input_layer, data=snapshot.data, method=method)
 
@@ -113,6 +139,9 @@ def analyze_target_cells(
         seg_options.setdefault("boundary_mask", pre_computed_domain_layer)
         seg_options.setdefault("min_snr", 1.6)
         seg_options.setdefault("high_snr", 3.2)
+    elif region_mask is not None:
+        # Single-tier: constrain Tier-2 directly to the ROI.
+        seg_options.setdefault("boundary_mask", region_mask)
     seg_result = _run_segmentation_step(
         method=method,
         seg_input_layer=seg_input_layer,

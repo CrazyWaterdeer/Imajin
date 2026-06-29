@@ -855,6 +855,134 @@ def test_segment_3d_cells_auto_2d_roi_clips_to_boundary(viewer) -> None:
     assert (labels[:, 55:70, 55:70] == 0).all(), "no labels outside the 2D ROI on any Z"
 
 
+def test_target_objects_crop_matches_no_crop(viewer, monkeypatch) -> None:
+    # The ROI bbox-crop must give the SAME label mask as the full-frame path, and the
+    # cropped call must actually see a smaller YX array.
+    img = np.zeros((4, 200, 200), dtype=np.float32)
+    img[:, 30:50, 30:50] = 300.0  # inside the ROI
+    img[:, 150:170, 150:170] = 300.0  # outside the ROI
+    viewer.add_image(img, name="stack")
+    roi = np.zeros((200, 200), dtype=np.int32)
+    roi[0:100, 0:100] = 1
+    viewer.add_labels(roi, name="roi")
+
+    seen: dict[str, tuple] = {}
+    real_prep = segment._prepare_corrected
+
+    def spy_prep(arr, **kw):
+        seen["shape"] = tuple(arr.shape)
+        return real_prep(arr, **kw)
+
+    monkeypatch.setattr(segment, "_prepare_corrected", spy_prep)
+    res = segment.segment_target_objects(
+        "stack", boundary_mask="roi", background_radius=24, smoothing_sigma=1,
+        min_size=50, save_qc_png=False,
+    )
+    labels_crop = np.asarray(viewer.layers[res["labels_layer"]].data).copy()
+    assert tuple(res["shape"]) == (4, 200, 200), "labels layer keeps full shape"
+    assert (labels_crop > 0).any(), "expected a non-empty in-ROI result"
+    assert (labels_crop[:, 150:170, 150:170] == 0).all()
+    assert seen["shape"][-1] < 200 and seen["shape"][-2] < 200, "cropped call saw smaller YX"
+
+    # No-crop oracle: same ROI, force the bbox helper to None (NOT a whole-frame
+    # boundary, which would change the threshold scope).
+    obj = viewer.layers[res["labels_layer"]]
+    viewer.layers.remove(obj)
+    monkeypatch.setattr(segment, "_prepare_corrected", real_prep)
+    monkeypatch.setattr(segment, "_boundary_bbox_slices", lambda *a, **k: None)
+    res2 = segment.segment_target_objects(
+        "stack", boundary_mask="roi", background_radius=24, smoothing_sigma=1,
+        min_size=50, save_qc_png=False,
+    )
+    labels_full = np.asarray(viewer.layers[res2["labels_layer"]].data)
+    assert np.array_equal(labels_crop > 0, labels_full > 0), "crop mask == no-crop mask"
+    assert res["n_objects"] == res2["n_objects"]
+
+
+def test_target_objects_skips_crop_for_global_operators(viewer, monkeypatch) -> None:
+    img = np.zeros((100, 100), dtype=np.float32)
+    img[20:40, 20:40] = 300.0
+    viewer.add_image(img, name="im")
+    roi = np.zeros((100, 100), dtype=np.int32)
+    roi[0:50, 0:50] = 1
+    viewer.add_labels(roi, name="r")
+
+    called: list[int] = []
+    real = segment._boundary_bbox_slices
+    monkeypatch.setattr(
+        segment, "_boundary_bbox_slices",
+        lambda *a, **k: (called.append(1), real(*a, **k))[1],
+    )
+    # radius=0 -> global percentile background -> crop must be skipped.
+    segment.segment_target_objects(
+        "im", boundary_mask="r", background_radius=0, min_size=30, save_qc_png=False
+    )
+    assert not called, "radius<=0 (global background) must skip the crop"
+    # hyperbright mask is a global percentile -> crop must be skipped.
+    segment.segment_target_objects(
+        "im", boundary_mask="r", background_radius=12, auto_mask_hyperbright=True,
+        min_size=30, save_qc_png=False,
+    )
+    assert not called, "auto_mask_hyperbright (global) must skip the crop"
+
+
+def test_expression_domain_boundary_mask_constrains_to_roi(viewer) -> None:
+    img = np.zeros((80, 80), dtype=np.float32)
+    img[10:30, 10:30] = 500.0  # inside the ROI
+    img[55:75, 55:75] = 500.0  # outside the ROI
+    viewer.add_image(img, name="rep")
+    roi = np.zeros((80, 80), dtype=np.int32)
+    roi[0:40, 0:40] = 1
+    viewer.add_labels(roi, name="roi_d")
+
+    res = segment.segment_expression_domain(
+        "rep", boundary_mask="roi_d", min_area_um2=0.0, save_qc_png=False
+    )
+    labels = np.asarray(viewer.layers[res["labels_layer"]].data)
+    assert (labels[55:75, 55:75] == 0).all(), "no domain outside the ROI"
+    assert (labels[10:30, 10:30] > 0).any(), "domain inside the ROI"
+    assert res["threshold_scope"] == "boundary_mask"
+
+    full = segment.segment_expression_domain("rep", min_area_um2=0.0, save_qc_png=False)
+    assert res["domain_voxels"] < full["domain_voxels"], "ROI domain is smaller than full-frame"
+
+
+def test_expression_domain_clips_component_crossing_roi(viewer) -> None:
+    # A bright bar straddling the ROI edge: only the in-ROI part is kept (clip before
+    # component cleanup), not the whole connected object.
+    img = np.zeros((80, 80), dtype=np.float32)
+    img[30:50, 20:60] = 500.0  # spans x=20..59, crossing the ROI edge at x=40
+    viewer.add_image(img, name="bar")
+    roi = np.zeros((80, 80), dtype=np.int32)
+    roi[:, 0:40] = 1  # left half only
+    viewer.add_labels(roi, name="lhalf")
+
+    res = segment.segment_expression_domain(
+        "bar", boundary_mask="lhalf", min_area_um2=0.0, save_qc_png=False
+    )
+    labels = np.asarray(viewer.layers[res["labels_layer"]].data)
+    assert (labels[30:50, 20:40] > 0).any(), "in-ROI part of the bar kept"
+    assert (labels[30:50, 40:60] == 0).all(), "out-of-ROI part of the bar clipped"
+
+
+def test_expression_domain_boundary_2d_roi_on_3d(viewer) -> None:
+    zyx = np.zeros((3, 60, 60), dtype=np.float32)
+    zyx[:, 10:25, 10:25] = 500.0  # inside ROI, all Z
+    zyx[:, 40:55, 40:55] = 500.0  # outside ROI
+    viewer.add_image(zyx, name="rep3d")
+    roi = np.zeros((60, 60), dtype=np.int32)
+    roi[0:30, 0:30] = 1
+    viewer.add_labels(roi, name="roi3d_d")
+
+    res = segment.segment_expression_domain(
+        "rep3d", boundary_mask="roi3d_d", min_area_um2=0.0, save_qc_png=False
+    )
+    labels = np.asarray(viewer.layers[res["labels_layer"]].data)
+    assert labels.shape == (3, 60, 60)
+    assert (labels[:, 40:55, 40:55] == 0).all(), "no domain outside the 2D ROI on any Z"
+    assert (labels[:, 10:25, 10:25] > 0).any()
+
+
 def test_qc_png_renders_secondary_outline(tmp_path) -> None:
     image = np.zeros((64, 64), dtype=np.float32)
     image[20:30, 20:30] = 100.0
