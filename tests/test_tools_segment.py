@@ -855,6 +855,77 @@ def test_segment_3d_cells_auto_2d_roi_clips_to_boundary(viewer) -> None:
     assert (labels[:, 55:70, 55:70] == 0).all(), "no labels outside the 2D ROI on any Z"
 
 
+def test_target_objects_crop_matches_no_crop(viewer, monkeypatch) -> None:
+    # The ROI bbox-crop must give the SAME label mask as the full-frame path, and the
+    # cropped call must actually see a smaller YX array.
+    img = np.zeros((4, 200, 200), dtype=np.float32)
+    img[:, 30:50, 30:50] = 300.0  # inside the ROI
+    img[:, 150:170, 150:170] = 300.0  # outside the ROI
+    viewer.add_image(img, name="stack")
+    roi = np.zeros((200, 200), dtype=np.int32)
+    roi[0:100, 0:100] = 1
+    viewer.add_labels(roi, name="roi")
+
+    seen: dict[str, tuple] = {}
+    real_prep = segment._prepare_corrected
+
+    def spy_prep(arr, **kw):
+        seen["shape"] = tuple(arr.shape)
+        return real_prep(arr, **kw)
+
+    monkeypatch.setattr(segment, "_prepare_corrected", spy_prep)
+    res = segment.segment_target_objects(
+        "stack", boundary_mask="roi", background_radius=24, smoothing_sigma=1,
+        min_size=50, save_qc_png=False,
+    )
+    labels_crop = np.asarray(viewer.layers[res["labels_layer"]].data).copy()
+    assert tuple(res["shape"]) == (4, 200, 200), "labels layer keeps full shape"
+    assert (labels_crop > 0).any(), "expected a non-empty in-ROI result"
+    assert (labels_crop[:, 150:170, 150:170] == 0).all()
+    assert seen["shape"][-1] < 200 and seen["shape"][-2] < 200, "cropped call saw smaller YX"
+
+    # No-crop oracle: same ROI, force the bbox helper to None (NOT a whole-frame
+    # boundary, which would change the threshold scope).
+    obj = viewer.layers[res["labels_layer"]]
+    viewer.layers.remove(obj)
+    monkeypatch.setattr(segment, "_prepare_corrected", real_prep)
+    monkeypatch.setattr(segment, "_boundary_bbox_slices", lambda *a, **k: None)
+    res2 = segment.segment_target_objects(
+        "stack", boundary_mask="roi", background_radius=24, smoothing_sigma=1,
+        min_size=50, save_qc_png=False,
+    )
+    labels_full = np.asarray(viewer.layers[res2["labels_layer"]].data)
+    assert np.array_equal(labels_crop > 0, labels_full > 0), "crop mask == no-crop mask"
+    assert res["n_objects"] == res2["n_objects"]
+
+
+def test_target_objects_skips_crop_for_global_operators(viewer, monkeypatch) -> None:
+    img = np.zeros((100, 100), dtype=np.float32)
+    img[20:40, 20:40] = 300.0
+    viewer.add_image(img, name="im")
+    roi = np.zeros((100, 100), dtype=np.int32)
+    roi[0:50, 0:50] = 1
+    viewer.add_labels(roi, name="r")
+
+    called: list[int] = []
+    real = segment._boundary_bbox_slices
+    monkeypatch.setattr(
+        segment, "_boundary_bbox_slices",
+        lambda *a, **k: (called.append(1), real(*a, **k))[1],
+    )
+    # radius=0 -> global percentile background -> crop must be skipped.
+    segment.segment_target_objects(
+        "im", boundary_mask="r", background_radius=0, min_size=30, save_qc_png=False
+    )
+    assert not called, "radius<=0 (global background) must skip the crop"
+    # hyperbright mask is a global percentile -> crop must be skipped.
+    segment.segment_target_objects(
+        "im", boundary_mask="r", background_radius=12, auto_mask_hyperbright=True,
+        min_size=30, save_qc_png=False,
+    )
+    assert not called, "auto_mask_hyperbright (global) must skip the crop"
+
+
 def test_qc_png_renders_secondary_outline(tmp_path) -> None:
     image = np.zeros((64, 64), dtype=np.float32)
     image[20:30, 20:30] = 100.0
