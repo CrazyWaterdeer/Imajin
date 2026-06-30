@@ -2,7 +2,12 @@ from __future__ import annotations
 
 from typing import Any
 
-from imajin.session import get_table, get_viewer
+from imajin.session import (
+    get_file as _get_file,
+    get_table,
+    get_viewer,
+    list_runs as _list_runs,
+)
 from imajin.paths import normalize_user_path
 from imajin.tools.layers import remove_layers_by_name as _remove_layers_by_name
 from imajin.tools.registry import tool
@@ -33,6 +38,97 @@ def _layer_names_for_source_path(path: str) -> list[str]:
         if _layer_source_path(layer) == wanted:
             names.append(str(layer.name))
     return names
+
+
+def _complete_file_paths() -> set[str]:
+    """Canonical source paths of every *complete* analysis run, resolving registered
+    file_ids to their path and ignoring runs keyed by a bare layer name."""
+    paths: set[str] = set()
+    for run in _list_runs():
+        if run.get("status") != "complete":
+            continue
+        fid = run.get("file_id")
+        if not fid:
+            continue
+        try:
+            paths.add(_canonical_path_text(_get_file(fid).path))
+            continue
+        except KeyError:
+            pass
+        if "/" in str(fid) or "\\" in str(fid):
+            try:
+                paths.add(_canonical_path_text(str(fid)))
+            except Exception:
+                pass
+    return paths
+
+
+def _file_layer_tree(canonical_path: str) -> list[str]:
+    """Names of every layer belonging to ``canonical_path``: layers with that
+    source_path plus their ``metadata.source_layer`` descendants, but never a layer
+    whose own source_path is a *different* file (guards against name reuse crossing
+    into another file's tree)."""
+    layers = list(get_viewer().layers)
+    own = {layer.name: _layer_source_path(layer) for layer in layers}
+    tree = {name for name, sp in own.items() if sp == canonical_path}
+    changed = True
+    while changed:
+        changed = False
+        for layer in layers:
+            if layer.name in tree:
+                continue
+            if own[layer.name] is not None and own[layer.name] != canonical_path:
+                continue  # belongs to a different file
+            md = getattr(layer, "metadata", None)
+            parent = md.get("source_layer") if isinstance(md, dict) else None
+            if parent in tree:
+                tree.add(layer.name)
+                changed = True
+    return [layer.name for layer in layers if layer.name in tree]
+
+
+@tool(
+    description="Step to the next file in a MANUAL one-file-at-a-time workflow: unload "
+    "the layers of the currently-loaded ANALYSED file(s) to free memory, then load "
+    "`path`. Use this (not plain load_file) when stepping through large files one by one "
+    "so finished files do not pile up in memory. A loaded file that has NOT been analysed "
+    "is kept (not discarded) unless force_unload=True. For a uniform batch over many "
+    "samples, prefer run_recipe_on_samples instead.",
+    phase="1",
+    llm=True,
+)
+def advance_to_file(path: str, force_unload: bool = False) -> dict[str, Any]:
+    new_canon = _canonical_path_text(path)
+    loaded = {
+        sp for sp in (_layer_source_path(L) for L in get_viewer().layers) if sp
+    }
+    leaving = loaded - {new_canon}
+    complete = _complete_file_paths()
+
+    unloaded_layers: list[str] = []
+    unloaded_files: list[str] = []
+    kept_unanalysed: list[str] = []
+    warnings: list[str] = []
+    for f in sorted(leaving):
+        if f in complete or force_unload:
+            unloaded_layers += _remove_layers_by_name(_file_layer_tree(f))
+            unloaded_files.append(f)
+        else:
+            kept_unanalysed.append(f)
+            warnings.append(
+                f"{f} is loaded but not analysed; not unloaded "
+                "(pass force_unload=True to discard it)"
+            )
+
+    load_result = _load_file(new_canon, force_reload=False)
+    return {
+        "loaded": new_canon,
+        "load_result": load_result,
+        "unloaded_files": unloaded_files,
+        "unloaded_layers": unloaded_layers,
+        "kept_unanalysed": kept_unanalysed,
+        "warnings": warnings,
+    }
 
 
 def _existing_load_result(path: str, layer_names: list[str]) -> dict[str, Any]:

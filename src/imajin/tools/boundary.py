@@ -32,6 +32,13 @@ _AREA = {"polygon", "rectangle", "ellipse"}
 _SKIP = {"line", "path"}
 
 
+def _reference_source_path(reference: Any) -> str | None:
+    md = getattr(reference, "metadata", None)
+    if not isinstance(md, dict):
+        return None
+    return md.get("source_path") or md.get("path")
+
+
 def _clean_shape(vertices: object) -> np.ndarray | None:
     """Validate a whole shape's vertices.
 
@@ -251,6 +258,12 @@ def boundary_mask_from_shapes(
             metadata={
                 "source_shapes_layer": shapes_layer,
                 "reference_layer": reference_layer,
+                # Tie this (image-sized) mask to the reference's file tree so
+                # advance_to_file unloads it with the rest. source_layer chains to the
+                # reference (which may be a MIP -> image); source_path is the direct
+                # match when the reference carries one.
+                "source_layer": reference_layer,
+                "source_path": _reference_source_path(reference),
                 "axes": info["axes"],
                 "broadcast_z": info["broadcast_z"],
                 "mask_voxels": info["mask_voxels"],
