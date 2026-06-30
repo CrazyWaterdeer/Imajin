@@ -101,3 +101,31 @@ def test_get_batch_progress_tool() -> None:
     out = get_batch_progress()
     assert out["universe_known"] is True
     assert len(out["analysed"]) == 1 and out["next_pending"] is None
+
+
+def test_current_is_empty_when_headless() -> None:
+    from imajin import session as state
+    from imajin.agent.context import batch_progress_data, summarize_batch_progress
+
+    state.set_viewer(None)
+    assert batch_progress_data()["current"] == []
+    assert summarize_batch_progress() is None  # nothing at all -> no ledger
+
+
+def test_current_shows_loaded_unanalysed_file(viewer) -> None:
+    import numpy as np
+    from imajin import session as state
+    from imajin.agent.context import batch_progress_data, summarize_batch_progress
+
+    viewer.add_image(
+        np.zeros((4, 4), dtype=np.float32), name="cur_img",
+        metadata={"source_path": "/d/cur.lsm"},
+    )
+    d = batch_progress_data()
+    assert any(c["key"].endswith("cur.lsm") for c in d["current"])
+    s = summarize_batch_progress()
+    assert s is not None and "current (loaded" in s  # ledger shows even with nothing analysed
+
+    # Once analysed, the file is no longer "current".
+    state.put_run(sample_id="cur", file_id="/d/cur.lsm", recipe_id="r", status="complete")
+    assert batch_progress_data()["current"] == []
