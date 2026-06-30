@@ -30,8 +30,13 @@ earlier conversation is compacted.
   registered/loaded — UNLESS the user explicitly asks to rerun/recompute or changes
   parameters, in which case call `analyze_target_cells` with `rerun=True`.
 - When continuing a multi-file batch, pick the **next pending** file; never restart from the
-  first. Call `get_batch_progress` if you need the full structured list.
+  first. Call `get_batch_progress` if you need the full structured list. The ledger also shows the
+  `current` (loaded, not yet analysed) file.
 - For a multi-file batch, call `register_files` first so pending files are tracked.
+- When stepping through large files **one at a time** (e.g. a hand-drawn ROI per file), load the
+  next file with `advance_to_file(next_path)` — it frees memory by unloading the finished
+  (analysed) current file. This is manual one-at-a-time stepping; it is NOT the uniform
+  many-sample batch (`run_recipe_on_samples`). Plain `load_file` does not unload anything.
 
 Concrete pipelines (these are FUNCTIONS to invoke as tool calls, not text to write):
 

@@ -187,10 +187,34 @@ def batch_progress_data() -> dict[str, Any]:
             for k in keys
         ]
 
+    # The "current" file(s): loaded image files (by source_path) not yet analysed.
+    # Read inline + headless-safe so this never requires a viewer and never imports
+    # imajin.tools (which would register all tools during agent-context import).
+    current: list[dict[str, Any]] = []
+    try:
+        from imajin.session import viewer_or_none
+
+        viewer = viewer_or_none()
+        if viewer is not None:
+            seen: set[str] = set()
+            for layer in list(viewer.layers):
+                md = getattr(layer, "metadata", None)
+                sp = (md.get("source_path") or md.get("path")) if isinstance(md, dict) else None
+                if not sp:
+                    continue
+                ck = _canon_key(sp)
+                if ck in complete or ck in seen:
+                    continue
+                seen.add(ck)
+                current.append({"label": _key_label(ck, universe.get(ck, ck)), "key": ck})
+    except Exception:
+        current = []
+
     return {
         "analysed": _entry(list(complete)),
         "pending": _entry(pending),
         "failed": _entry(list(failed)),
+        "current": current,
         "universe_known": universe_known,
         "n_universe": len(universe),
         "next_pending": (_key_label(pending[0], universe.get(pending[0], pending[0]))
@@ -202,7 +226,12 @@ def summarize_batch_progress(max_labels: int = 8, max_chars: int = 600) -> str |
     """Compact one-block ledger for the per-turn system prompt; `None` when there is
     no batch state to show (single-shot use)."""
     data = batch_progress_data()
-    if not data["analysed"] and not data["failed"] and not data["pending"]:
+    if (
+        not data["analysed"]
+        and not data["failed"]
+        and not data["pending"]
+        and not data.get("current")
+    ):
         return None
 
     n_a, n_f, n_p = len(data["analysed"]), len(data["failed"]), len(data["pending"])
@@ -217,6 +246,11 @@ def summarize_batch_progress(max_labels: int = 8, max_chars: int = 600) -> str |
             "pending unknown (call register_files to track the batch)."
         )
     lines = [head]
+
+    cur = data.get("current") or []
+    if cur:
+        labels = ", ".join(c["label"] for c in cur[:max_labels])
+        lines.append(f"  current (loaded, not yet analysed): {labels}")
 
     def _fmt(entries: list[dict[str, Any]]) -> str:
         shown = entries[:max_labels]
