@@ -63,7 +63,7 @@ def test_cellpose_sam_writes_qc_png(viewer, monkeypatch, tmp_path) -> None:
         def eval(self, data, **kwargs):  # noqa: ANN001
             return labels, None, None
 
-    monkeypatch.setattr(segment, "_get_cellpose_model", lambda *_args, **_kwargs: _FakeModel())
+    monkeypatch.setattr("imajin.tools._segmentation_io._get_cellpose_model", lambda *_args, **_kwargs: _FakeModel())
     out = tmp_path / "segmentation_qc.png"
 
     res = segment.cellpose_sam(

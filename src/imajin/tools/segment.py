@@ -41,6 +41,7 @@ from imajin.analysis.segmentation_auto3d import (
 )
 from imajin.agent.qt_dispatch import call_on_main
 from imajin.paths import normalize_user_path
+from imajin.tools import _segmentation_io as _seg_io
 from imajin.tools._segmentation_io import load_and_guard
 from imajin.tools._segmentation_outputs import (
     _default_qc_png_path,
@@ -52,19 +53,11 @@ from imajin.tools._segmentation_outputs import (
 from imajin.tools.napari_ops import add_labels_from_worker, snapshot_layer
 from imajin.tools.registry import tool
 
-_CACHED_MODELS: dict[str, Any] = {}
-
-
-def _get_cellpose_model(model_name: str = "cpsam"):
-    if model_name in _CACHED_MODELS:
-        return _CACHED_MODELS[model_name]
-    import torch
-    from cellpose import models
-
-    gpu = torch.cuda.is_available()
-    model = models.CellposeModel(gpu=gpu, pretrained_model=model_name)
-    _CACHED_MODELS[model_name] = model
-    return model
+# The Cellpose model cache lives in _segmentation_io. cellpose_sam /
+# segment_3d_cells_auto call it module-qualified (_seg_io._get_cellpose_model) so a
+# test patching imajin.tools._segmentation_io._get_cellpose_model intercepts the
+# call after the Phase 2 package split. The bare alias below is readable only.
+_get_cellpose_model = _seg_io._get_cellpose_model
 
 
 def _json_ready(value: Any) -> Any:
@@ -132,7 +125,7 @@ def cellpose_sam(
         # than confusing Cellpose.
         use_3d = False
 
-    cp = _get_cellpose_model(model)
+    cp = _seg_io._get_cellpose_model(model)
     scale = tuple(float(s) for s in getattr(L, "scale", ()) or ())
     anisotropy = None
     if use_3d and len(scale) >= 3 and scale[1] > 0:
@@ -319,7 +312,7 @@ def segment_3d_cells_auto(
     )
 
     if include_cellpose_sam:
-        cp = _get_cellpose_model(cellpose_model)
+        cp = _seg_io._get_cellpose_model(cellpose_model)
         anisotropy = None
         scale = tuple(float(s) for s in getattr(L, "scale", ()) or ())
         if len(scale) >= 3 and scale[1] > 0:

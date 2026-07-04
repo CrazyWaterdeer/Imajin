@@ -68,3 +68,18 @@ def load_and_guard(
     else:  # pragma: no cover - programming error
         raise ValueError(f"unknown dims={dims!r}")
     return L, data, axes
+
+
+_CACHED_MODELS: dict[str, Any] = {}
+
+
+def _get_cellpose_model(model_name: str = "cpsam"):
+    if model_name in _CACHED_MODELS:
+        return _CACHED_MODELS[model_name]
+    import torch
+    from cellpose import models
+
+    gpu = torch.cuda.is_available()
+    model = models.CellposeModel(gpu=gpu, pretrained_model=model_name)
+    _CACHED_MODELS[model_name] = model
+    return model

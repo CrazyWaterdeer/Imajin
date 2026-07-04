@@ -33,7 +33,7 @@ from imajin.tools.registry import call_tool, get_tool
 # that looks the name up in *that* namespace. These strings point at where each
 # helper is actually called from, so the interception survives the package split
 # by editing only these constants.
-CELLPOSE_MODEL_TARGET = "imajin.tools.segment._get_cellpose_model"
+CELLPOSE_MODEL_TARGET = "imajin.tools._segmentation_io._get_cellpose_model"
 PREPARE_CORRECTED_TARGET = "imajin.tools.segment._prepare_corrected"
 BOUNDARY_BBOX_TARGET = "imajin.tools.segment._boundary_bbox_slices"
 
