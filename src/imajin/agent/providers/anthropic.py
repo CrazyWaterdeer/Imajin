@@ -27,6 +27,7 @@ class AnthropicProvider:
         self.model = model
         self.max_tokens = max_tokens
         self._client = Anthropic(api_key=api_key)
+        self._resolved = False
 
     def stream(
         self,
@@ -34,6 +35,16 @@ class AnthropicProvider:
         tools: list[dict[str, Any]],
         system: str,
     ) -> Iterator[Event]:
+        # If constructed with a tier token ("sonnet"/"opus"/...), upgrade it to the
+        # latest concrete model id once, on this worker thread. Cached + falls back
+        # to a recent default, so a stale ID or a dead network never blocks a turn.
+        if not self._resolved:
+            self._resolved = True
+            from imajin.agent.model_catalog import ANTHROPIC_TIERS, resolve_anthropic_model
+
+            if self.model in ANTHROPIC_TIERS:
+                self.model = resolve_anthropic_model(self._client, self.model)
+
         cached_system = [
             {"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}
         ]

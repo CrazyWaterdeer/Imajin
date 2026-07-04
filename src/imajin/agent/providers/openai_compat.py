@@ -185,6 +185,7 @@ class OpenAICompatProvider:
         self.max_tokens = max_tokens
         self.base_url = base_url
         self._client = OpenAI(api_key=api_key or "ollama", base_url=base_url)
+        self._resolved = False
 
     def stream(
         self,
@@ -192,6 +193,16 @@ class OpenAICompatProvider:
         tools: list[dict[str, Any]],
         system: str,
     ) -> Iterator[Event]:
+        # Upgrade the "gpt" tier token to the latest flagship model once, on this
+        # worker thread (best-effort, cached, falls back to gpt-5). Concrete model
+        # ids — including Ollama models like "qwen3.5:9b" — pass through untouched.
+        if not self._resolved:
+            self._resolved = True
+            if self.model == "gpt":
+                from imajin.agent.model_catalog import resolve_openai_model
+
+                self.model = resolve_openai_model(self._client)
+
         oai_messages = [{"role": "system", "content": system}, *_anthropic_to_openai_messages(messages)]
         oai_tools: list[dict[str, Any]] = []
         for t in tools:

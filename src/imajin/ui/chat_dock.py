@@ -22,12 +22,16 @@ from imajin.ui.chat_transcript import ChatTranscript
 from imajin.ui.provider_status import ProviderStatus, compute_statuses
 from imajin.ui.theme import apply_dock_theme
 
+# The model field for API-backed Claude and OpenAI is a *tier* token, not a pinned
+# id: the provider resolves it to the latest concrete model at connection time (see
+# imajin.agent.model_catalog). Subscription entries use the CLI's own always-latest
+# aliases; the local model stays pinned.
 _MODEL_CHOICES: list[tuple[str, str, str]] = [
-    ("Claude Sonnet 4.6", "anthropic", "claude-sonnet-4-6"),
-    ("Claude Opus 4.7", "anthropic", "claude-opus-4-7"),
+    ("Claude Sonnet (API, latest)", "anthropic", "sonnet"),
+    ("Claude Opus (API, latest)", "anthropic", "opus"),
     ("Claude Sonnet (subscription)", "claude-agent", "sonnet"),
     ("Claude Opus (subscription)", "claude-agent", "opus"),
-    ("GPT-5 (OpenAI)", "openai", "gpt-5"),
+    ("GPT (OpenAI, latest)", "openai", "gpt"),
     ("Local: qwen3.5:9b (multimodal, 256K)", "ollama", "qwen3.5:9b"),
 ]
 
