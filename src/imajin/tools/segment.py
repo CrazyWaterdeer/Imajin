@@ -43,6 +43,7 @@ from imajin.paths import normalize_user_path
 from imajin.tools import _segmentation_io as _seg_io
 from imajin.tools._segmentation_io import (
     boundary_broadcast_warning,
+    effective_target_min_size,
     load_and_guard,
     resolve_boundary,
 )
@@ -648,15 +649,13 @@ def segment_target_objects(
 
     raw = np.asarray(data, dtype=np.float32)
     spacing = _voxel_spacing(tuple(L.scale), raw.ndim)
-    xy_area = int(np.prod(raw.shape[-2:])) if raw.ndim >= 2 else int(raw.size)
-    physical_min_size = _min_size_from_physical(
+    effective_min_size = effective_target_min_size(
+        raw,
         min_size=min_size,
-        min_volume_um3=min_volume_um3,
         min_area_um2=min_area_um2,
+        min_volume_um3=min_volume_um3,
         spacing=spacing,
-        ndim=raw.ndim,
     )
-    effective_min_size = physical_min_size or max(16, min(512, int(round(xy_area * 0.00005))))
     # Load + resolve the boundary BEFORE background correction, so the expensive
     # pipeline can run on just the ROI bounding box when that is safe.
     boundary_data_bool, _boundary_raw = resolve_boundary(boundary_mask, raw.shape)
@@ -920,15 +919,13 @@ def auto_segment_target(
 
     raw = np.asarray(data, dtype=np.float32)
     spacing = _voxel_spacing(tuple(L.scale), raw.ndim)
-    xy_area = int(np.prod(raw.shape[-2:])) if raw.ndim >= 2 else int(raw.size)
-    physical_min_size = _min_size_from_physical(
+    effective_min_size = effective_target_min_size(
+        raw,
         min_size=min_size,
-        min_volume_um3=min_volume_um3,
         min_area_um2=min_area_um2,
+        min_volume_um3=min_volume_um3,
         spacing=spacing,
-        ndim=raw.ndim,
     )
-    effective_min_size = physical_min_size or max(16, min(512, int(round(xy_area * 0.00005))))
 
     boundary_data_bool, _boundary_raw = resolve_boundary(boundary_mask, raw.shape)
     _bcast = boundary_broadcast_warning(boundary_data_bool, _boundary_raw)

@@ -10,9 +10,11 @@ from __future__ import annotations
 
 from typing import Any
 
+import numpy as np
+
 from imajin.agent.qt_dispatch import call_on_main
 from imajin.analysis.arrays import layer_axes_from_metadata, materialize_array
-from imajin.analysis.segmentation import resolve_boundary_mask
+from imajin.analysis.segmentation import min_size_from_physical, resolve_boundary_mask
 from imajin.tools.napari_ops import snapshot_layer
 
 
@@ -114,3 +116,20 @@ def boundary_broadcast_warning(bool_mask, boundary_raw):
             f"{bool_mask.shape[0]} Z planes"
         )
     return None
+
+
+def effective_target_min_size(raw, *, min_size, min_area_um2, min_volume_um3, spacing):
+    """The physical-or-heuristic min_size fallback shared by segment_target_objects
+    and auto_segment_target: a physical size (from um) if given, else a fraction of
+    the XY area clamped to [16, 512]. (segment_intensity_regions uses a different
+    ``... or int(min_size)`` fallback and keeps it inline.)"""
+    ndim = raw.ndim
+    xy_area = int(np.prod(raw.shape[-2:])) if ndim >= 2 else int(raw.size)
+    physical = min_size_from_physical(
+        min_size=min_size,
+        min_volume_um3=min_volume_um3,
+        min_area_um2=min_area_um2,
+        spacing=spacing,
+        ndim=ndim,
+    )
+    return physical or max(16, min(512, int(round(xy_area * 0.00005))))
