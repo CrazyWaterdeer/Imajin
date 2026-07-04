@@ -50,8 +50,26 @@ def test_ollama_unavailable_when_offline() -> None:
 
 
 def test_all_unavailable_on_laptop_scenario() -> None:
-    # No keys set + Ollama not installed/running.
+    # No keys set + Ollama not installed/running + no `claude` login.
     s = _settings(anthropic_api_key=None, openai_api_key=None)
-    with patch.object(provider_status, "is_running", return_value=False):
+    with (
+        patch.object(provider_status, "is_running", return_value=False),
+        patch.object(
+            provider_status, "subscription_available", return_value=(False, "not logged in")
+        ),
+    ):
         statuses = provider_status.compute_statuses(s)
     assert all(not st.available for st in statuses.values())
+
+
+def test_subscription_available_without_api_keys() -> None:
+    # The subscription agent is independent of API keys: a logged-in `claude`
+    # makes it available even when no keys are configured.
+    s = _settings(anthropic_api_key=None, openai_api_key=None)
+    with (
+        patch.object(provider_status, "is_running", return_value=False),
+        patch.object(provider_status, "subscription_available", return_value=(True, None)),
+    ):
+        statuses = provider_status.compute_statuses(s)
+    assert statuses["claude-agent"].available is True
+    assert statuses["anthropic"].available is False

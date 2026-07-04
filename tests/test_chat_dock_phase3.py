@@ -8,9 +8,10 @@ def test_chat_dock_has_model_picker(qtbot, viewer) -> None:
     dock = ChatDock(viewer=viewer, settings=Settings())
     qtbot.addWidget(dock)
 
-    assert dock.model_picker.count() == 4
+    assert dock.model_picker.count() == 6
     assert "Claude Sonnet 4.6" in dock.model_picker.itemText(0)
-    assert "qwen3.5:9b" in dock.model_picker.itemText(3)
+    assert "subscription" in dock.model_picker.itemText(2)
+    assert "qwen3.5:9b" in dock.model_picker.itemText(5)
     assert dock.send_btn.isEnabled()
     assert dock.stop_btn.isHidden()
 

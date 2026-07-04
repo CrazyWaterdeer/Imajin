@@ -41,6 +41,7 @@ dependencies = [
     "Pillow>=10.3",
     # Utilities
     "platformdirs>=4.2",
+    "claude-agent-sdk>=0.2.110",
 ]
 
 [project.optional-dependencies]
