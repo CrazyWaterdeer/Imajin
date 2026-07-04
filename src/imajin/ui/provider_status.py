@@ -4,6 +4,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from imajin.agent.providers.claude_agent import subscription_available
 from imajin.ui.ollama_helper import is_running
 
 
@@ -24,6 +25,11 @@ def compute_statuses(settings: Any) -> dict[str, ProviderStatus]:
         _OK
         if settings.anthropic_api_key
         else ProviderStatus(available=False, reason="no API key")
+    )
+    # Subscription-backed agent needs no API key — just a logged-in `claude` CLI.
+    sub_ok, sub_reason = subscription_available()
+    statuses["claude-agent"] = (
+        _OK if sub_ok else ProviderStatus(available=False, reason=sub_reason)
     )
     statuses["openai"] = (
         _OK

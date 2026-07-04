@@ -25,6 +25,8 @@ from imajin.ui.theme import apply_dock_theme
 _MODEL_CHOICES: list[tuple[str, str, str]] = [
     ("Claude Sonnet 4.6", "anthropic", "claude-sonnet-4-6"),
     ("Claude Opus 4.7", "anthropic", "claude-opus-4-7"),
+    ("Claude Sonnet (subscription)", "claude-agent", "sonnet"),
+    ("Claude Opus (subscription)", "claude-agent", "opus"),
     ("GPT-5 (OpenAI)", "openai", "gpt-5"),
     ("Local: qwen3.5:9b (multimodal, 256K)", "ollama", "qwen3.5:9b"),
 ]
@@ -306,7 +308,6 @@ class ChatDock(QWidget):
 
     def _ensure_runner(self):
         from imajin.agent.prompts import build_system_prompt
-        from imajin.agent.runner import AgentRunner
 
         idx = self.model_picker.currentIndex()
         _, kind, model = _MODEL_CHOICES[idx]
@@ -316,23 +317,38 @@ class ChatDock(QWidget):
             and self._provider_model == model
         ):
             return self._runner
-        provider = self._make_provider()
 
         def call_tool_via_jobs(tool_name: str, **kwargs: Any) -> Any:
             return self.execution_service.call_tool_blocking(
                 tool_name,
                 kwargs=kwargs,
                 source="llm",
-                driver=f"llm:{provider.model}",
+                driver=f"llm:{model}",
                 title=tool_name,
                 tool_caller=self._tool_runner.call,
             )
 
-        self._runner = AgentRunner(
-            provider,
-            build_system_prompt(),
-            tool_caller=call_tool_via_jobs,
-        )
+        if kind == "claude-agent":
+            # Subscription-backed: the Claude Code agent owns its own loop, so this
+            # is a ClaudeAgentRunner (not a Provider behind AgentRunner). It presents
+            # the same turn()/reset()/cancel() surface, so everything downstream is
+            # unchanged. No API key — it uses the local `claude` login.
+            from imajin.agent.providers.claude_agent import ClaudeAgentRunner
+
+            self._runner = ClaudeAgentRunner(
+                model=model,
+                system_prompt=build_system_prompt(),
+                tool_caller=call_tool_via_jobs,
+            )
+        else:
+            from imajin.agent.runner import AgentRunner
+
+            provider = self._make_provider()
+            self._runner = AgentRunner(
+                provider,
+                build_system_prompt(),
+                tool_caller=call_tool_via_jobs,
+            )
         self._provider_kind = kind
         self._provider_model = model
         return self._runner
