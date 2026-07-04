@@ -21,7 +21,6 @@ from imajin.analysis.segmentation import (
     label_qc_warnings as _label_qc_warnings,
     min_size_from_physical as _min_size_from_physical,
     remove_small_binary_objects as _remove_small_binary_objects,
-    resolve_boundary_mask as _resolve_boundary_mask,
     segment_connected_regions as _segment_connected_regions,
     threshold_noise_floor as _threshold_noise_floor,
     voxel_spacing as _voxel_spacing,
@@ -42,7 +41,11 @@ from imajin.analysis.segmentation_auto3d import (
 from imajin.agent.qt_dispatch import call_on_main
 from imajin.paths import normalize_user_path
 from imajin.tools import _segmentation_io as _seg_io
-from imajin.tools._segmentation_io import load_and_guard
+from imajin.tools._segmentation_io import (
+    boundary_broadcast_warning,
+    load_and_guard,
+    resolve_boundary,
+)
 from imajin.tools._segmentation_outputs import (
     _default_qc_png_path,
     _saturation_warnings,
@@ -270,16 +273,10 @@ def segment_3d_cells_auto(
 
     raw = np.asarray(data, dtype=np.float32)
     spacing = _voxel_spacing(tuple(L.scale), raw.ndim)
-    boundary_data_bool: np.ndarray | None = None
-    if boundary_mask is not None:
-        boundary_layer_snapshot = call_on_main(snapshot_layer, boundary_mask)
-        boundary_raw = materialize_array(boundary_layer_snapshot.data)
-        # A 2D ROI/domain drawn on the MIP is broadcast across Z for this 3D stack.
-        boundary_data_bool = _resolve_boundary_mask(boundary_raw, raw.shape)
-        if boundary_data_bool.ndim == 3 and boundary_raw.ndim == 2:
-            saturation_warnings.append(
-                f"boundary_mask is a 2D ROI broadcast across all {raw.shape[0]} Z planes"
-            )
+    boundary_data_bool, _boundary_raw = resolve_boundary(boundary_mask, raw.shape)
+    _bcast = boundary_broadcast_warning(boundary_data_bool, _boundary_raw)
+    if _bcast:
+        saturation_warnings.append(_bcast)
 
     base_options = {
         "background_radius": background_radius,
@@ -662,17 +659,10 @@ def segment_target_objects(
     effective_min_size = physical_min_size or max(16, min(512, int(round(xy_area * 0.00005))))
     # Load + resolve the boundary BEFORE background correction, so the expensive
     # pipeline can run on just the ROI bounding box when that is safe.
-    boundary_data_bool: np.ndarray | None = None
-    _boundary_raw: np.ndarray | None = None
-    if boundary_mask is not None:
-        boundary_layer_snapshot = call_on_main(snapshot_layer, boundary_mask)
-        _boundary_raw = materialize_array(boundary_layer_snapshot.data)
-        # A 2D ROI/domain drawn on the MIP is broadcast across Z for a 3D stack.
-        boundary_data_bool = _resolve_boundary_mask(_boundary_raw, raw.shape)
-        if boundary_data_bool.ndim == 3 and _boundary_raw.ndim == 2:
-            saturation_warnings.append(
-                f"boundary_mask is a 2D ROI broadcast across all {raw.shape[0]} Z planes"
-            )
+    boundary_data_bool, _boundary_raw = resolve_boundary(boundary_mask, raw.shape)
+    _bcast = boundary_broadcast_warning(boundary_data_bool, _boundary_raw)
+    if _bcast:
+        saturation_warnings.append(_bcast)
 
     # Crop to the ROI bbox only when the background is a *local* operator
     # (radius > 0) and no *global* hyperbright mask is requested -- then the label
@@ -940,16 +930,10 @@ def auto_segment_target(
     )
     effective_min_size = physical_min_size or max(16, min(512, int(round(xy_area * 0.00005))))
 
-    boundary_data_bool: np.ndarray | None = None
-    if boundary_mask is not None:
-        boundary_layer_snapshot = call_on_main(snapshot_layer, boundary_mask)
-        _boundary_raw = materialize_array(boundary_layer_snapshot.data)
-        # A 2D ROI/domain drawn on the MIP is broadcast across Z for a 3D stack.
-        boundary_data_bool = _resolve_boundary_mask(_boundary_raw, raw.shape)
-        if boundary_data_bool.ndim == 3 and _boundary_raw.ndim == 2:
-            saturation_warnings.append(
-                f"boundary_mask is a 2D ROI broadcast across all {raw.shape[0]} Z planes"
-            )
+    boundary_data_bool, _boundary_raw = resolve_boundary(boundary_mask, raw.shape)
+    _bcast = boundary_broadcast_warning(boundary_data_bool, _boundary_raw)
+    if _bcast:
+        saturation_warnings.append(_bcast)
 
     params: dict[str, Any] = {
         "background_radius": background_radius,
@@ -1151,12 +1135,9 @@ def segment_expression_domain(
     raw = np.asarray(data, dtype=np.float32)
 
     spacing = _voxel_spacing(tuple(L.scale), raw.ndim)
-    boundary_bool: np.ndarray | None = None
+    boundary_bool, _bnd_raw = resolve_boundary(boundary_mask, raw.shape)
     boundary_outline_2d: np.ndarray | None = None
-    if boundary_mask is not None:
-        _bnd_snapshot = call_on_main(snapshot_layer, boundary_mask)
-        _bnd_raw = materialize_array(_bnd_snapshot.data)
-        boundary_bool = _resolve_boundary_mask(_bnd_raw, raw.shape)
+    if _bnd_raw is not None:
         boundary_outline_2d = (
             (_bnd_raw > 0) if _bnd_raw.ndim == 2 else np.any(_bnd_raw > 0, axis=0)
         ).astype(np.int32)

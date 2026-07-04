@@ -12,6 +12,7 @@ from typing import Any
 
 from imajin.agent.qt_dispatch import call_on_main
 from imajin.analysis.arrays import layer_axes_from_metadata, materialize_array
+from imajin.analysis.segmentation import resolve_boundary_mask
 from imajin.tools.napari_ops import snapshot_layer
 
 
@@ -83,3 +84,33 @@ def _get_cellpose_model(model_name: str = "cpsam"):
     model = models.CellposeModel(gpu=gpu, pretrained_model=model_name)
     _CACHED_MODELS[model_name] = model
     return model
+
+
+def resolve_boundary(boundary_mask, raw_shape):
+    """Snapshot + materialize a boundary layer and resolve it to a bool mask
+    broadcast to ``raw_shape``. Returns ``(bool_mask, boundary_raw)`` or
+    ``(None, None)`` when no boundary was given. The caller decides whether to
+    emit the broadcast warning (see ``boundary_broadcast_warning``) and how to use
+    the raw array (crop bbox / QC outline)."""
+    if boundary_mask is None:
+        return None, None
+    snap = call_on_main(snapshot_layer, boundary_mask)
+    boundary_raw = materialize_array(snap.data)
+    return resolve_boundary_mask(boundary_raw, raw_shape), boundary_raw
+
+
+def boundary_broadcast_warning(bool_mask, boundary_raw):
+    """The "2D ROI broadcast across all N Z planes" note the target / auto-target /
+    auto-3d tools append when a 2D ROI was broadcast over a 3D stack. Opt-in:
+    segment_expression_domain deliberately does not emit it."""
+    if (
+        bool_mask is not None
+        and boundary_raw is not None
+        and bool_mask.ndim == 3
+        and boundary_raw.ndim == 2
+    ):
+        return (
+            f"boundary_mask is a 2D ROI broadcast across all "
+            f"{bool_mask.shape[0]} Z planes"
+        )
+    return None
