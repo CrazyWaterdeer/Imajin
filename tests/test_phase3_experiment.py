@@ -478,7 +478,7 @@ def test_run_recipe_on_samples_multi_sample_one_fails(
 
     from imajin.tools import segment
 
-    monkeypatch.setattr(segment, "_get_cellpose_model", _fake_model_factory)
+    monkeypatch.setattr("imajin.tools._segmentation_io._get_cellpose_model", _fake_model_factory)
 
     res = workflows.run_recipe_on_samples(
         recipe_name="r1", sample_names=["ctrl_1", "trt_1"]

@@ -40,7 +40,7 @@ def _stub_cellpose(monkeypatch: pytest.MonkeyPatch, mask: np.ndarray) -> None:
         def eval(self, data, **kwargs):  # noqa: ANN001
             return mask, None, None
 
-    monkeypatch.setattr(segment, "_get_cellpose_model", lambda *a, **kw: _FakeModel())
+    monkeypatch.setattr("imajin.tools._segmentation_io._get_cellpose_model", lambda *a, **kw: _FakeModel())
 
 
 def test_review_mode_auto_skips_checkpoint(viewer, monkeypatch):
