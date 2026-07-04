@@ -39,18 +39,16 @@ from imajin.analysis.segmentation_auto3d import (
     selection_confidence as _selection_confidence,
 )
 from imajin.agent.qt_dispatch import call_on_main
-from imajin.paths import normalize_user_path
 from imajin.tools import _segmentation_io as _seg_io
 from imajin.tools._segmentation_io import (
     boundary_broadcast_warning,
     effective_target_min_size,
+    finalize_qc_png,
     load_and_guard,
     resolve_boundary,
 )
 from imajin.tools._segmentation_outputs import (
-    _default_qc_png_path,
     _saturation_warnings,
-    _save_qc_png,
     _source_metadata_from_layer,
     _write_segmentation_qc_png,
 )
@@ -171,32 +169,15 @@ def cellpose_sam(
         },
     )
 
-    saved_qc_png: str | None = None
-    qc_png_error: str | None = None
-    qc_png_skipped_reason: str | None = None
-    if save_qc_png:
-        try:
-            out_path = (
-                normalize_user_path(qc_png_path).resolve()
-                if qc_png_path
-                else _default_qc_png_path(layer.name, L)
-            )
-            saved_qc_png, qc_png_skipped_reason = _save_qc_png(
-                data,
-                masks,
-                out_path,
-                labels_layer=layer.name,
-                source_layer=L.name,
-                method="cellpose_sam",
-                force=qc_png_path is not None,
-            )
-            if saved_qc_png:
-                try:
-                    layer.metadata["qc_png_path"] = saved_qc_png
-                except Exception:
-                    pass
-        except Exception as exc:  # noqa: BLE001
-            qc_png_error = f"{type(exc).__name__}: {exc}"
+    saved_qc_png, qc_png_error, qc_png_skipped_reason = finalize_qc_png(
+        data,
+        masks,
+        layer,
+        L,
+        method="cellpose_sam",
+        save_qc_png=save_qc_png,
+        qc_png_path=qc_png_path,
+    )
 
     return {
         "labels_layer": layer.name,
@@ -402,32 +383,15 @@ def segment_3d_cells_auto(
         },
     )
 
-    saved_qc_png: str | None = None
-    qc_png_error: str | None = None
-    qc_png_skipped_reason: str | None = None
-    if save_qc_png:
-        try:
-            out_path = (
-                normalize_user_path(qc_png_path).resolve()
-                if qc_png_path
-                else _default_qc_png_path(layer.name, L)
-            )
-            saved_qc_png, qc_png_skipped_reason = _save_qc_png(
-                raw,
-                best.labels,
-                out_path,
-                labels_layer=layer.name,
-                source_layer=L.name,
-                method="auto_3d_cells",
-                force=qc_png_path is not None,
-            )
-            if saved_qc_png:
-                try:
-                    layer.metadata["qc_png_path"] = saved_qc_png
-                except Exception:
-                    pass
-        except Exception as exc:  # noqa: BLE001
-            qc_png_error = f"{type(exc).__name__}: {exc}"
+    saved_qc_png, qc_png_error, qc_png_skipped_reason = finalize_qc_png(
+        raw,
+        best.labels,
+        layer,
+        L,
+        method="auto_3d_cells",
+        save_qc_png=save_qc_png,
+        qc_png_path=qc_png_path,
+    )
 
     return {
         "labels_layer": layer.name,
@@ -545,32 +509,15 @@ def segment_intensity_regions(
         },
     )
 
-    saved_qc_png: str | None = None
-    qc_png_error: str | None = None
-    qc_png_skipped_reason: str | None = None
-    if save_qc_png:
-        try:
-            out_path = (
-                normalize_user_path(qc_png_path).resolve()
-                if qc_png_path
-                else _default_qc_png_path(layer.name, L)
-            )
-            saved_qc_png, qc_png_skipped_reason = _save_qc_png(
-                data,
-                masks,
-                out_path,
-                labels_layer=layer.name,
-                source_layer=L.name,
-                method="intensity_regions",
-                force=qc_png_path is not None,
-            )
-            if saved_qc_png:
-                try:
-                    layer.metadata["qc_png_path"] = saved_qc_png
-                except Exception:
-                    pass
-        except Exception as exc:  # noqa: BLE001
-            qc_png_error = f"{type(exc).__name__}: {exc}"
+    saved_qc_png, qc_png_error, qc_png_skipped_reason = finalize_qc_png(
+        data,
+        masks,
+        layer,
+        L,
+        method="intensity_regions",
+        save_qc_png=save_qc_png,
+        qc_png_path=qc_png_path,
+    )
 
     return {
         "labels_layer": layer.name,
@@ -799,33 +746,16 @@ def segment_target_objects(
             bm_bool if bm_bool.ndim == 2 else np.any(bm_bool, axis=0)
         ).astype(np.int32)
 
-    saved_qc_png: str | None = None
-    qc_png_error: str | None = None
-    qc_png_skipped_reason: str | None = None
-    if save_qc_png:
-        try:
-            out_path = (
-                normalize_user_path(qc_png_path).resolve()
-                if qc_png_path
-                else _default_qc_png_path(layer.name, L)
-            )
-            saved_qc_png, qc_png_skipped_reason = _save_qc_png(
-                raw,
-                masks,
-                out_path,
-                labels_layer=layer.name,
-                source_layer=L.name,
-                method="target_objects",
-                force=qc_png_path is not None,
-                secondary_outline_mask=secondary_mask_array,
-            )
-            if saved_qc_png:
-                try:
-                    layer.metadata["qc_png_path"] = saved_qc_png
-                except Exception:
-                    pass
-        except Exception as exc:  # noqa: BLE001
-            qc_png_error = f"{type(exc).__name__}: {exc}"
+    saved_qc_png, qc_png_error, qc_png_skipped_reason = finalize_qc_png(
+        raw,
+        masks,
+        layer,
+        L,
+        method="target_objects",
+        save_qc_png=save_qc_png,
+        qc_png_path=qc_png_path,
+        secondary_outline_mask=secondary_mask_array,
+    )
 
     return {
         "labels_layer": layer.name,
@@ -1029,33 +959,16 @@ def auto_segment_target(
             else np.any(boundary_data_bool, axis=0)
         ).astype(np.int32)
 
-    saved_qc_png: str | None = None
-    qc_png_error: str | None = None
-    qc_png_skipped_reason: str | None = None
-    if save_qc_png:
-        try:
-            out_path = (
-                normalize_user_path(qc_png_path).resolve()
-                if qc_png_path
-                else _default_qc_png_path(layer.name, L)
-            )
-            saved_qc_png, qc_png_skipped_reason = _save_qc_png(
-                raw,
-                masks,
-                out_path,
-                labels_layer=layer.name,
-                source_layer=L.name,
-                method="auto_target_objects",
-                force=qc_png_path is not None,
-                secondary_outline_mask=secondary_mask_array,
-            )
-            if saved_qc_png:
-                try:
-                    layer.metadata["qc_png_path"] = saved_qc_png
-                except Exception:
-                    pass
-        except Exception as exc:  # noqa: BLE001
-            qc_png_error = f"{type(exc).__name__}: {exc}"
+    saved_qc_png, qc_png_error, qc_png_skipped_reason = finalize_qc_png(
+        raw,
+        masks,
+        layer,
+        L,
+        method="auto_target_objects",
+        save_qc_png=save_qc_png,
+        qc_png_path=qc_png_path,
+        secondary_outline_mask=secondary_mask_array,
+    )
 
     return {
         "labels_layer": layer.name,
@@ -1309,33 +1222,16 @@ def segment_expression_domain(
         },
     )
 
-    saved_qc_png: str | None = None
-    qc_png_error: str | None = None
-    qc_png_skipped_reason: str | None = None
-    if save_qc_png:
-        try:
-            out_path = (
-                normalize_user_path(qc_png_path).resolve()
-                if qc_png_path
-                else _default_qc_png_path(layer.name, L)
-            )
-            saved_qc_png, qc_png_skipped_reason = _save_qc_png(
-                raw,
-                labels,
-                out_path,
-                labels_layer=layer.name,
-                source_layer=L.name,
-                method="expression_domain",
-                force=qc_png_path is not None,
-                secondary_outline_mask=boundary_outline_2d,
-            )
-            if saved_qc_png:
-                try:
-                    layer.metadata["qc_png_path"] = saved_qc_png
-                except Exception:
-                    pass
-        except Exception as exc:  # noqa: BLE001
-            qc_png_error = f"{type(exc).__name__}: {exc}"
+    saved_qc_png, qc_png_error, qc_png_skipped_reason = finalize_qc_png(
+        raw,
+        labels,
+        layer,
+        L,
+        method="expression_domain",
+        save_qc_png=save_qc_png,
+        qc_png_path=qc_png_path,
+        secondary_outline_mask=boundary_outline_2d,
+    )
 
     return {
         "labels_layer": layer.name,

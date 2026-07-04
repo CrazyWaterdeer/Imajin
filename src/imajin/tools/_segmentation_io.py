@@ -15,6 +15,8 @@ import numpy as np
 from imajin.agent.qt_dispatch import call_on_main
 from imajin.analysis.arrays import layer_axes_from_metadata, materialize_array
 from imajin.analysis.segmentation import min_size_from_physical, resolve_boundary_mask
+from imajin.paths import normalize_user_path
+from imajin.tools._segmentation_outputs import _default_qc_png_path, _save_qc_png
 from imajin.tools.napari_ops import snapshot_layer
 
 
@@ -133,3 +135,51 @@ def effective_target_min_size(raw, *, min_size, min_area_um2, min_volume_um3, sp
         ndim=ndim,
     )
     return physical or max(16, min(512, int(round(xy_area * 0.00005))))
+
+
+def finalize_qc_png(
+    image,
+    masks,
+    labels_layer,
+    source_layer,
+    *,
+    method,
+    save_qc_png,
+    qc_png_path,
+    secondary_outline_mask=None,
+):
+    """The shared QC-PNG save block: resolve the output path (explicit
+    ``qc_png_path`` else the default bundle path derived from the *source* layer),
+    write the overlay, record it on the labels layer's metadata, and capture
+    saved/skipped/error. Returns
+    ``(saved_qc_png, qc_png_error, qc_png_skipped_reason)``. Needs both the labels
+    layer object (``.name`` + the metadata write) and the source layer object
+    (default path + provenance)."""
+    saved_qc_png: str | None = None
+    qc_png_error: str | None = None
+    qc_png_skipped_reason: str | None = None
+    if save_qc_png:
+        try:
+            out_path = (
+                normalize_user_path(qc_png_path).resolve()
+                if qc_png_path
+                else _default_qc_png_path(labels_layer.name, source_layer)
+            )
+            saved_qc_png, qc_png_skipped_reason = _save_qc_png(
+                image,
+                masks,
+                out_path,
+                labels_layer=labels_layer.name,
+                source_layer=source_layer.name,
+                method=method,
+                force=qc_png_path is not None,
+                secondary_outline_mask=secondary_outline_mask,
+            )
+            if saved_qc_png:
+                try:
+                    labels_layer.metadata["qc_png_path"] = saved_qc_png
+                except Exception:
+                    pass
+        except Exception as exc:  # noqa: BLE001
+            qc_png_error = f"{type(exc).__name__}: {exc}"
+    return saved_qc_png, qc_png_error, qc_png_skipped_reason
