@@ -5,7 +5,7 @@ from typing import Any
 import numpy as np
 
 from imajin.session import get_layer, get_viewer
-from imajin.analysis.arrays import layer_axes_from_metadata, materialize_array
+from imajin.analysis.arrays import materialize_array
 from imajin.analysis.domain_segmentation import (
     domain_min_size_from_physical as _domain_min_size_from_physical,
     domain_physical_sizes as _domain_physical_sizes,
@@ -41,6 +41,7 @@ from imajin.analysis.segmentation_auto3d import (
 )
 from imajin.agent.qt_dispatch import call_on_main
 from imajin.paths import normalize_user_path
+from imajin.tools._segmentation_io import load_and_guard
 from imajin.tools._segmentation_outputs import (
     _default_qc_png_path,
     _saturation_warnings,
@@ -64,11 +65,6 @@ def _get_cellpose_model(model_name: str = "cpsam"):
     model = models.CellposeModel(gpu=gpu, pretrained_model=model_name)
     _CACHED_MODELS[model_name] = model
     return model
-
-
-def _layer_axes_for_seg(layer: Any, ndim: int) -> str:
-    md = getattr(layer, "metadata", None) or {}
-    return layer_axes_from_metadata(md, ndim, default_3d="ZYX")
 
 
 def _json_ready(value: Any) -> Any:
@@ -121,21 +117,13 @@ def cellpose_sam(
     save_qc_png: bool = True,
     qc_png_path: str | None = None,
 ) -> dict[str, Any]:
-    L = call_on_main(snapshot_layer, image_layer)
-    data = materialize_array(L.data)
-
-    axes = _layer_axes_for_seg(L, data.ndim)
-    if "T" in axes:
-        raise ValueError(
-            f"cellpose_sam refuses to run on a time-series layer ({axes}, "
-            f"shape {data.shape}). Use extract_timepoint to pick a frame first, "
-            "or run a per-frame workflow."
-        )
-    if data.ndim < 2 or data.ndim > 3:
-        raise ValueError(
-            f"cellpose_sam expects a 2D (YX) or 3D (ZYX) layer, got shape "
-            f"{data.shape}. Reduce to YX/ZYX before calling."
-        )
+    L, data, axes = load_and_guard(
+        image_layer,
+        tool_name="cellpose_sam",
+        dims="2d_or_3d",
+        ts_hint="Use extract_timepoint to pick a frame first, or run a per-frame workflow.",
+        ndim_hint=" Reduce to YX/ZYX before calling.",
+    )
 
     is_3d_input = data.ndim == 3 and "Z" in axes
     use_3d = bool(do_3D) and is_3d_input
@@ -279,22 +267,13 @@ def segment_3d_cells_auto(
     save_qc_png: bool = True,
     qc_png_path: str | None = None,
 ) -> dict[str, Any]:
-    L = call_on_main(snapshot_layer, image_layer)
-    data = materialize_array(L.data)
+    L, data, axes = load_and_guard(
+        image_layer,
+        tool_name="segment_3d_cells_auto",
+        dims="3d_only",
+        ts_hint="Extract a timepoint or run a per-frame workflow first.",
+    )
     saturation_warnings = _saturation_warnings(data, layer_name=L.name)
-
-    axes = _layer_axes_for_seg(L, data.ndim)
-    if "T" in axes:
-        raise ValueError(
-            f"segment_3d_cells_auto refuses to run on a time-series layer "
-            f"({axes}, shape {data.shape}). Extract a timepoint or run a "
-            "per-frame workflow first."
-        )
-    if data.ndim != 3 or "Z" not in axes:
-        raise ValueError(
-            f"segment_3d_cells_auto expects a 3D ZYX layer, got shape "
-            f"{data.shape} with axes {axes!r}."
-        )
 
     raw = np.asarray(data, dtype=np.float32)
     spacing = _voxel_spacing(tuple(L.scale), raw.ndim)
@@ -516,21 +495,12 @@ def segment_intensity_regions(
     save_qc_png: bool = True,
     qc_png_path: str | None = None,
 ) -> dict[str, Any]:
-    L = call_on_main(snapshot_layer, image_layer)
-    data = materialize_array(L.data)
-
-    axes = _layer_axes_for_seg(L, data.ndim)
-    if "T" in axes:
-        raise ValueError(
-            f"segment_intensity_regions refuses to run on a time-series layer "
-            f"({axes}, shape {data.shape}). Use extract_timepoint or a per-frame "
-            "workflow first."
-        )
-    if data.ndim < 2 or data.ndim > 3:
-        raise ValueError(
-            f"segment_intensity_regions expects a 2D (YX) or 3D (ZYX) layer, got "
-            f"shape {data.shape}."
-        )
+    L, data, axes = load_and_guard(
+        image_layer,
+        tool_name="segment_intensity_regions",
+        dims="2d_or_3d",
+        ts_hint="Use extract_timepoint or a per-frame workflow first.",
+    )
     spacing = _voxel_spacing(tuple(L.scale), data.ndim)
     effective_min_size = _min_size_from_physical(
         min_size=min_size,
@@ -678,22 +648,13 @@ def segment_target_objects(
     qc_png_path: str | None = None,
     boundary_mask: str | None = None,
 ) -> dict[str, Any]:
-    L = call_on_main(snapshot_layer, image_layer)
-    data = materialize_array(L.data)
+    L, data, axes = load_and_guard(
+        image_layer,
+        tool_name="segment_target_objects",
+        dims="2d_or_3d",
+        ts_hint="Use extract_timepoint or a per-frame workflow first.",
+    )
     saturation_warnings = _saturation_warnings(data, layer_name=L.name)
-
-    axes = _layer_axes_for_seg(L, data.ndim)
-    if "T" in axes:
-        raise ValueError(
-            f"segment_target_objects refuses to run on a time-series layer "
-            f"({axes}, shape {data.shape}). Use extract_timepoint or a per-frame "
-            "workflow first."
-        )
-    if data.ndim < 2 or data.ndim > 3:
-        raise ValueError(
-            f"segment_target_objects expects a 2D (YX) or 3D (ZYX) layer, got "
-            f"shape {data.shape}."
-        )
 
     raw = np.asarray(data, dtype=np.float32)
     spacing = _voxel_spacing(tuple(L.scale), raw.ndim)
@@ -966,22 +927,13 @@ def auto_segment_target(
     qc_png_path: str | None = None,
     boundary_mask: str | None = None,
 ) -> dict[str, Any]:
-    L = call_on_main(snapshot_layer, image_layer)
-    data = materialize_array(L.data)
+    L, data, axes = load_and_guard(
+        image_layer,
+        tool_name="auto_segment_target",
+        dims="2d_or_3d",
+        ts_hint="Use extract_timepoint or a per-frame workflow first.",
+    )
     saturation_warnings = _saturation_warnings(data, layer_name=L.name)
-
-    axes = _layer_axes_for_seg(L, data.ndim)
-    if "T" in axes:
-        raise ValueError(
-            f"auto_segment_target refuses to run on a time-series layer "
-            f"({axes}, shape {data.shape}). Use extract_timepoint or a per-frame "
-            "workflow first."
-        )
-    if data.ndim < 2 or data.ndim > 3:
-        raise ValueError(
-            f"auto_segment_target expects a 2D (YX) or 3D (ZYX) layer, got "
-            f"shape {data.shape}."
-        )
 
     raw = np.asarray(data, dtype=np.float32)
     spacing = _voxel_spacing(tuple(L.scale), raw.ndim)
@@ -1197,21 +1149,13 @@ def segment_expression_domain(
             f"threshold_strategy must be 'noise_floor' (got {threshold_strategy!r})"
         )
 
-    L = call_on_main(snapshot_layer, image_layer)
-    data = materialize_array(L.data)
+    L, data, axes = load_and_guard(
+        image_layer,
+        tool_name="segment_expression_domain",
+        dims="2d_or_3d_terse",
+    )
     saturation_warnings = _saturation_warnings(data, layer_name=L.name)
     raw = np.asarray(data, dtype=np.float32)
-
-    axes = _layer_axes_for_seg(L, raw.ndim)
-    if "T" in axes:
-        raise ValueError(
-            f"segment_expression_domain refuses to run on a time-series layer "
-            f"({axes}, shape {raw.shape})."
-        )
-    if raw.ndim < 2 or raw.ndim > 3:
-        raise ValueError(
-            f"segment_expression_domain expects 2D (YX) or 3D (ZYX), got {raw.shape}."
-        )
 
     spacing = _voxel_spacing(tuple(L.scale), raw.ndim)
     boundary_bool: np.ndarray | None = None
