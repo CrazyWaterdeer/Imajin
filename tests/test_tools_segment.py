@@ -867,13 +867,13 @@ def test_target_objects_crop_matches_no_crop(viewer, monkeypatch) -> None:
     viewer.add_labels(roi, name="roi")
 
     seen: dict[str, tuple] = {}
-    real_prep = segment._prepare_corrected
+    real_prep = segment.target._prepare_corrected
 
     def spy_prep(arr, **kw):
         seen["shape"] = tuple(arr.shape)
         return real_prep(arr, **kw)
 
-    monkeypatch.setattr(segment, "_prepare_corrected", spy_prep)
+    monkeypatch.setattr(segment.target, "_prepare_corrected", spy_prep)
     res = segment.segment_target_objects(
         "stack", boundary_mask="roi", background_radius=24, smoothing_sigma=1,
         min_size=50, save_qc_png=False,
@@ -888,8 +888,8 @@ def test_target_objects_crop_matches_no_crop(viewer, monkeypatch) -> None:
     # boundary, which would change the threshold scope).
     obj = viewer.layers[res["labels_layer"]]
     viewer.layers.remove(obj)
-    monkeypatch.setattr(segment, "_prepare_corrected", real_prep)
-    monkeypatch.setattr(segment, "_boundary_bbox_slices", lambda *a, **k: None)
+    monkeypatch.setattr(segment.target, "_prepare_corrected", real_prep)
+    monkeypatch.setattr(segment.target, "_boundary_bbox_slices", lambda *a, **k: None)
     res2 = segment.segment_target_objects(
         "stack", boundary_mask="roi", background_radius=24, smoothing_sigma=1,
         min_size=50, save_qc_png=False,
@@ -908,9 +908,9 @@ def test_target_objects_skips_crop_for_global_operators(viewer, monkeypatch) -> 
     viewer.add_labels(roi, name="r")
 
     called: list[int] = []
-    real = segment._boundary_bbox_slices
+    real = segment.target._boundary_bbox_slices
     monkeypatch.setattr(
-        segment, "_boundary_bbox_slices",
+        segment.target, "_boundary_bbox_slices",
         lambda *a, **k: (called.append(1), real(*a, **k))[1],
     )
     # radius=0 -> global percentile background -> crop must be skipped.

@@ -34,8 +34,8 @@ from imajin.tools.registry import call_tool, get_tool
 # helper is actually called from, so the interception survives the package split
 # by editing only these constants.
 CELLPOSE_MODEL_TARGET = "imajin.tools._segmentation_io._get_cellpose_model"
-PREPARE_CORRECTED_TARGET = "imajin.tools.segment._prepare_corrected"
-BOUNDARY_BBOX_TARGET = "imajin.tools.segment._boundary_bbox_slices"
+PREPARE_CORRECTED_TARGET = "imajin.tools.segment.target._prepare_corrected"
+BOUNDARY_BBOX_TARGET = "imajin.tools.segment.target._boundary_bbox_slices"
 
 TOOLS = [
     "cellpose_sam",
