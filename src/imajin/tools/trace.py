@@ -6,7 +6,6 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from imajin.analysis.arrays import materialize_array
 from imajin.analysis.morphology_features import extract_feature_vector
 from imajin.analysis.morphology_match import match_against_library
 from imajin.analysis.morphology_reference import append_reference, load_reference_library
@@ -18,6 +17,7 @@ from imajin.tools._trace_export import _swc_coordinates, _write_swc
 from imajin.tools._trace_image import (
     _binary_from_layer_data,
     _component_labels,
+    _materialize,
     _normalize_image,
     _rolling_ball_subtract,
 )
@@ -53,10 +53,6 @@ from imajin.tools.napari_ops import (
     snapshot_layer,
 )
 from imajin.tools.registry import tool
-
-
-def _materialize(arr) -> np.ndarray:
-    return materialize_array(arr)
 
 
 @tool(
