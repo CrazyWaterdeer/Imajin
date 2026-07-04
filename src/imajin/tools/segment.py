@@ -45,6 +45,7 @@ from imajin.tools._segmentation_io import (
     effective_target_min_size,
     finalize_qc_png,
     load_and_guard,
+    project_boundary_outline_2d,
     resolve_boundary,
 )
 from imajin.tools._segmentation_outputs import (
@@ -742,9 +743,7 @@ def segment_target_objects(
         bm_snapshot = call_on_main(snapshot_layer, boundary_mask)
         bm_bool = materialize_array(bm_snapshot.data) > 0
         # QC overlay is drawn on the 2D projection; keep the outline 2D.
-        secondary_mask_array = (
-            bm_bool if bm_bool.ndim == 2 else np.any(bm_bool, axis=0)
-        ).astype(np.int32)
+        secondary_mask_array = project_boundary_outline_2d(bm_bool)
 
     saved_qc_png, qc_png_error, qc_png_skipped_reason = finalize_qc_png(
         raw,
@@ -953,11 +952,7 @@ def auto_segment_target(
     if boundary_data_bool is not None:
         # boundary_data_bool may be a Z-broadcast view; project to a 2D outline so
         # the QC overlay stays small instead of materialising a Z*Y*X int32 array.
-        secondary_mask_array = (
-            boundary_data_bool
-            if boundary_data_bool.ndim == 2
-            else np.any(boundary_data_bool, axis=0)
-        ).astype(np.int32)
+        secondary_mask_array = project_boundary_outline_2d(boundary_data_bool)
 
     saved_qc_png, qc_png_error, qc_png_skipped_reason = finalize_qc_png(
         raw,
@@ -1048,9 +1043,7 @@ def segment_expression_domain(
     boundary_bool, _bnd_raw = resolve_boundary(boundary_mask, raw.shape)
     boundary_outline_2d: np.ndarray | None = None
     if _bnd_raw is not None:
-        boundary_outline_2d = (
-            (_bnd_raw > 0) if _bnd_raw.ndim == 2 else np.any(_bnd_raw > 0, axis=0)
-        ).astype(np.int32)
+        boundary_outline_2d = project_boundary_outline_2d(_bnd_raw > 0)
 
     threshold_image = _smooth_domain_image(
         raw,

@@ -183,3 +183,14 @@ def finalize_qc_png(
         except Exception as exc:  # noqa: BLE001
             qc_png_error = f"{type(exc).__name__}: {exc}"
     return saved_qc_png, qc_png_error, qc_png_skipped_reason
+
+
+def project_boundary_outline_2d(bool_mask):
+    """Project a (possibly Z-broadcast) boolean boundary mask to a 2D int32 outline
+    for the QC overlay. The caller owns *how* it obtained the boolean --
+    segment_target_objects re-snapshots the layer, auto_segment_target reuses the
+    resolved bool, segment_expression_domain uses the raw boundary array -- only the
+    projection is shared."""
+    return (
+        bool_mask if bool_mask.ndim == 2 else np.any(bool_mask, axis=0)
+    ).astype(np.int32)
