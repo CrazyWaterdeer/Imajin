@@ -7,8 +7,9 @@ skeleton-based morphology, cell tracking, methods writeup), and exposes every
 operation through **two interchangeable interfaces**:
 
 - a **manual button dock** (magicgui forms — LLM-free, offline, deterministic)
-- an **LLM chat dock** (Claude by default; any OpenAI-compatible endpoint —
-  ChatGPT, Ollama, vLLM, LM Studio — also works)
+- an **LLM chat dock** — Claude through a **Pro/Max subscription** (no API key,
+  via the Claude Agent SDK) or an **Anthropic API key**, plus any
+  OpenAI-compatible endpoint (ChatGPT, Ollama, vLLM, LM Studio)
 
 Both drivers call the same `tools/*.py` functions, so a chat command and a
 button click produce identical results and identical provenance entries.
@@ -50,11 +51,31 @@ happen.
   and surface in a layer-linked Qt table dock.
 - **Colocalization**: Manders M1/M2 (Otsu / zero / scalar threshold modes)
   and Pearson correlation, both mask-aware.
+- **Quality control & ROI review**: QC metrics for label layers, measurement
+  tables, and timecourses (`compute_segmentation_qc`, `compute_measurement_qc`,
+  `compute_timecourse_qc`), pass / warning / fail status (`mark_qc_status`),
+  label outlines and jump-to-object navigation — all surfaced in a QC dock. Raw
+  segmentation can be curated by hand in the interactive ROI review dock.
+- **Statistics**: publication-oriented descriptive summaries (`describe_table`),
+  group comparison with conservative defaults (`compare_groups`), and time-course
+  normalization plus response-feature extraction (`normalize_timecourse`,
+  `extract_timecourse_features`).
+- **Publication figures**: styled matplotlib group-distribution, time-course,
+  and scatter plots (`plot_group_distribution`, `plot_timecourse`,
+  `plot_scatter`) alongside the calcium ΔF/F0 heatmap.
 - **3D + visualization**: `set_view`, `set_colormap`, `screenshot`,
   `max_projection`, `orthogonal_views`, `animate_z_rotation` (mp4 / gif).
 - **Experiment annotations**: samples, replicates, files, and layer groups can
   be annotated as control / treatment / genotype / condition groups for
-  report generation and future batch summaries.
+  report generation and group summaries.
+- **Batch, recipes & reporting**: register a folder of files, validate
+  acquisition metadata up front (`validate_analysis_metadata`), capture a
+  reusable analysis recipe (`create_analysis_recipe`) and replay it across
+  annotated samples, aggregate per-object measurements to sample / group level
+  (`summarize_experiment`), and track progress (`get_batch_progress`). Results
+  export as self-contained bundles (`save_result_bundle`) next to the input
+  data; `generate_report` / `generate_experiment_report` render session- and
+  experiment-level HTML or markdown.
 - **Cell tracking**: `track_cells` via [btrack](https://github.com/quantumjot/btrack)
   on T-axis Labels.
 - **Calcium imaging (v1)**: rolling-percentile ΔF/F0, honest defocus +
@@ -72,9 +93,15 @@ happen.
   external connectome lookup (neuPrint/FlyWire) are an opt-in Tier-2 backend
   (`uv sync --extra connectome`) that is not yet wired up; mouse connectomes
   (MICrONS/Allen) are out of scope. Not part of the default cell workflow.
-- **LLM-driven analysis**: provider abstraction with prompt caching for
-  Anthropic and a translation layer for any OpenAI-compatible `/v1` endpoint.
-  Streaming chat and tool-use are non-blocking via napari's `thread_worker`.
+- **LLM-driven analysis**: three interchangeable chat backends behind one dock —
+  (1) **Claude via subscription**, where the Claude Agent SDK drives your
+  logged-in `claude` CLI (no API key) and imajin's own tools are bridged in as an
+  in-process MCP server; (2) **Claude via Anthropic API key**, direct with prompt
+  caching; and (3) any **OpenAI-compatible `/v1` endpoint** (OpenAI, Ollama,
+  vLLM, LM Studio) through a translation layer. The API-backed Claude / OpenAI
+  entries resolve to the **latest model** for a tier (`sonnet` / `opus` / `gpt`)
+  at connection time, so new releases need no code change. Streaming chat and
+  tool-use are non-blocking via napari's `thread_worker`.
 - **Specialist sub-agents**: `consult_neural_tracer` and
   `consult_methods_writer` route domain-specific questions to focused
   sub-agents with their own prompts and (for the tracer) their own tool sets.
@@ -87,9 +114,9 @@ happen.
 
 `napari ≥ 0.7` + `PyQt6`, `magicgui`, `tifffile`, `bioio` + `bioio-czi`,
 `dask`, `cellpose ≥ 4`, `scikit-image`, `skan`, `btrack`, `anthropic`,
-`openai`, `pydantic v2`, `torch + torchvision` (CUDA cu128 via custom uv
-index). Python pinned to **3.12** because PyTorch has no `cp314` CUDA
-wheels yet (PyTorch issue #169929).
+`openai`, `claude-agent-sdk` (subscription path), `pydantic v2`,
+`torch + torchvision` (CUDA cu128 via custom uv index). Python pinned to
+**3.12** because PyTorch has no `cp314` CUDA wheels yet (PyTorch issue #169929).
 
 ## Install
 
@@ -105,7 +132,7 @@ uv sync
 ## Run
 
 ```bash
-# environment smoke test (CUDA, imports, model download)
+# environment smoke test (imports, CUDA, GPU renderer, provider keys)
 uv run imajin --doctor
 
 # launch the GUI (napari + chat dock + manual dock)
@@ -114,17 +141,25 @@ uv run imajin
 
 ## Configuration
 
-LLM provider keys are read from environment variables (or the in-app
+The chat dock's model picker shows each backend's live availability; use
+whichever you have credentials for.
+
+**Claude via subscription (no API key).** With the
+[Claude Code](https://docs.anthropic.com/en/docs/claude-code) CLI installed and
+logged in (`claude` on your `PATH` with a Pro/Max login, or a
+`CLAUDE_CODE_OAUTH_TOKEN`), the "Claude … (subscription)" entries work with no
+further setup — imajin drives them through the Claude Agent SDK.
+
+**Claude / OpenAI via API key.** Read from environment variables (or the in-app
 settings dock):
 
 ```bash
-export ANTHROPIC_API_KEY=sk-ant-...        # Claude (default)
+export ANTHROPIC_API_KEY=sk-ant-...        # Claude (Anthropic API)
 export OPENAI_API_KEY=sk-...               # OpenAI / Anthropic-compat backends
 ```
 
-For a fully local stack, install Ollama and point the OpenAI-compatible
-provider at `http://localhost:11434/v1` from the settings dock — no key
-required.
+**Fully local.** Install Ollama and point the OpenAI-compatible provider at
+`http://localhost:11434/v1` from the settings dock — no key required.
 
 ## Status
 

@@ -7,7 +7,13 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-from imajin.paths import is_wsl, normalize_user_path, windows_drive_roots
+from imajin.paths import (
+    _NON_USER_PROFILES,
+    _safe_is_dir,
+    is_wsl,
+    normalize_user_path,
+    windows_drive_roots,
+)
 
 
 _KST = timezone(timedelta(hours=9), name="KST")
@@ -71,17 +77,21 @@ def _windows_documents_dir() -> Path | None:
     home_name = Path.home().name.lower()
     for root in windows_drive_roots():
         users = root / "Users"
-        if not users.is_dir():
+        if not _safe_is_dir(users):
+            continue
+        try:
+            entries = list(users.iterdir())
+        except OSError:
             continue
         candidates = sorted(
-            [p for p in users.iterdir() if p.is_dir()],
+            [p for p in entries if _safe_is_dir(p)],
             key=lambda p: (p.name.lower() != home_name, p.name.lower()),
         )
         for user_dir in candidates:
-            if user_dir.name.lower() in {"public", "default"}:
+            if user_dir.name.lower() in _NON_USER_PROFILES:
                 continue
             documents = user_dir / "Documents"
-            if documents.is_dir():
+            if _safe_is_dir(documents):
                 return documents
     return None
 

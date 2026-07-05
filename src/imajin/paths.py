@@ -12,6 +12,13 @@ _WSL_UNC_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Entries under Windows ``C:\Users`` that are junctions or system profiles, not
+# real people. Excluded when picking a default user profile so we never land on a
+# reparse point like ``All Users`` (→ ProgramData) or ``Default User`` (→ Default).
+_NON_USER_PROFILES = frozenset(
+    {"public", "default", "default user", "all users", "defaultuser0"}
+)
+
 
 def is_wsl() -> bool:
     """Return True when the process appears to be running under WSL."""
@@ -75,13 +82,32 @@ def normalize_user_path(path: str | os.PathLike[str]) -> Path:
     return Path(text).expanduser()
 
 
+def _safe_is_dir(path: Path) -> bool:
+    """``Path.is_dir`` that treats an unreadable/dead mount as "not a directory".
+
+    ``Path.is_dir()`` swallows a handful of errnos (ENOENT/ENOTDIR/...) but not
+    ENODEV/ENXIO, so a stale WSL drive mount — e.g. an ejected USB that was ``E:``
+    or a disconnected network drive — makes the bare call raise
+    ``OSError: [Errno 19] No such device``. Enumerating drives or dialog
+    locations must skip such an entry, not crash the caller.
+    """
+    try:
+        return path.is_dir()
+    except OSError:
+        return False
+
+
 def windows_drive_roots() -> list[Path]:
     roots: list[Path] = []
     mnt = Path("/mnt")
     if not mnt.exists():
         return roots
-    for child in sorted(mnt.iterdir()):
-        if len(child.name) == 1 and child.name.isalpha() and child.is_dir():
+    try:
+        children = sorted(mnt.iterdir())
+    except OSError:
+        return roots
+    for child in children:
+        if len(child.name) == 1 and child.name.isalpha() and _safe_is_dir(child):
             roots.append(child)
     return roots
 
@@ -92,17 +118,22 @@ def windows_file_dialog_locations() -> list[Path]:
     for root in windows_drive_roots():
         locations.append(root)
         users = root / "Users"
-        if users.is_dir():
-            for user_dir in sorted(users.iterdir()):
-                if not user_dir.is_dir() or user_dir.name.lower() in {"public", "default"}:
-                    continue
-                locations.append(user_dir)
-                downloads = user_dir / "Downloads"
-                desktop = user_dir / "Desktop"
-                documents = user_dir / "Documents"
-                for candidate in (downloads, desktop, documents):
-                    if candidate.is_dir():
-                        locations.append(candidate)
+        if not _safe_is_dir(users):
+            continue
+        try:
+            user_dirs = sorted(users.iterdir())
+        except OSError:
+            continue
+        for user_dir in user_dirs:
+            if not _safe_is_dir(user_dir) or user_dir.name.lower() in _NON_USER_PROFILES:
+                continue
+            locations.append(user_dir)
+            downloads = user_dir / "Downloads"
+            desktop = user_dir / "Desktop"
+            documents = user_dir / "Documents"
+            for candidate in (downloads, desktop, documents):
+                if _safe_is_dir(candidate):
+                    locations.append(candidate)
     deduped: list[Path] = []
     seen: set[str] = set()
     for loc in locations:
