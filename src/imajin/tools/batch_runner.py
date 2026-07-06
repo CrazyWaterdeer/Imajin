@@ -459,6 +459,7 @@ class BatchRecipeRunner:
             if info.get("file_path"):
                 sample_paths.append(str(info["file_path"]))
         anchor = resolve_anchor_folder(sample_paths)
+        self.input_anchor = anchor
 
         bundle = create_result_bundle(
             name=self.recipe.name,
@@ -731,6 +732,28 @@ class BatchRecipeRunner:
             )
         )
         self.n_complete += 1
+
+        # Durable per-sample index for cross-session resume (best-effort: a metadata
+        # hiccup must never fail an already-complete 1-2 GB sample).
+        try:
+            from imajin.result_bundles import record_sample_index_entry
+
+            record_sample_index_entry(
+                self.parent_bundle,
+                source_file=info["file_path"],
+                anchor=getattr(self, "input_anchor", None),
+                method=result.get("segmentation_method"),
+                mode="two_tier" if self.domain_strategy is not None else "single",
+                status="complete",
+                table=attached_tables[0] if attached_tables else None,
+                outputs=[
+                    n
+                    for n in (result.get("labels_layer"), result.get("preprocessed_layer"))
+                    if n
+                ],
+            )
+        except Exception:  # noqa: BLE001 - the durable sample index is best-effort
+            pass
 
     def _report_sample_failed(
         self,

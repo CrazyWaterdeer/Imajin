@@ -419,6 +419,15 @@ def test_run_recipe_on_samples_single_sample_attaches_columns(
     assert (df["file_id"] == "ctrl_1").all()
     assert (df["source_layer"] == "ctrl_1_ch0").all()
     assert "ctrl_1_ch0" in viewer.layers
+
+    # P0: the batch run also writes a durable per-sample index (for resume).
+    from imajin.result_bundles import read_sample_index
+
+    sample_index = read_sample_index(res["bundle_path"])
+    assert sample_index["legacy_inferred"] is False
+    assert len(sample_index["entries"]) == 1
+    assert sample_index["entries"][0]["status"] == "complete"
+    assert sample_index["input_anchor"]
     assert "ctrl_1_ch0_masks" not in viewer.layers
     assert res["cleanup_enabled"] is True
     assert run["cleanup_removed_layers"]
