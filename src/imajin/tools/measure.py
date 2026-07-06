@@ -83,6 +83,31 @@ def _add_physical_columns(
     return df
 
 
+def _add_region_column(df: pd.DataFrame, label_names: Any) -> pd.DataFrame:
+    """Map each row's integer ``label`` to a name via a ``{int: str}`` dict carried on the
+    labels layer metadata (``label_names``), added as a ``region`` column. Best-effort:
+    keys that don't coerce to int are skipped; unmapped labels become NaN, and rows are
+    never dropped. No-op when ``label_names`` is not a (non-empty) dict or the frame has no
+    ``label`` column. Lets a partition layer ({1: "inside", 2: "outside"}) self-describe its
+    measurement rows without a fragile caller-side post-step."""
+    if not isinstance(label_names, dict) or "label" not in df.columns:
+        return df
+    mapping: dict[int, str] = {}
+    for key, value in label_names.items():
+        try:
+            mapping[int(key)] = str(value)
+        except (TypeError, ValueError):
+            continue
+    if not mapping:
+        return df
+    region = df["label"].map(mapping)
+    if "region" in df.columns:
+        df["region"] = region
+    else:
+        df.insert(df.columns.get_loc("label") + 1, "region", region)
+    return df
+
+
 def _layer_axes(layer: Any, ndim: int) -> str:
     md = getattr(layer, "metadata", {}) or {}
     return layer_axes_from_metadata(md, ndim, default_3d="ZYX")
@@ -268,6 +293,7 @@ def measure_intensity(
     props = properties or list(_DEFAULT_PROPS)
     df = _run_regionprops(label_arr, image_arrs, channel_names, props)
     df = _add_physical_columns(df, labels.scale, label_arr.ndim)
+    df = _add_region_column(df, (labels.metadata or {}).get("label_names"))
 
     scale = _voxel_scale(labels.scale, label_arr.ndim)
     spec = {
@@ -424,6 +450,7 @@ def refresh_measurement(table_name: str) -> dict[str, Any]:
 
     df = _run_regionprops(label_arr, image_arrs, channel_names, spec["properties"])
     df = _add_physical_columns(df, labels.scale, label_arr.ndim)
+    df = _add_region_column(df, (labels.metadata or {}).get("label_names"))
     prev_n = len(entry.df)
     call_on_main(update_table, table_name, df)
     return {

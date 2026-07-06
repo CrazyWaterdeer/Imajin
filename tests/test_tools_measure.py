@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import numpy as np
+import pandas as pd
 import pytest
 
 from imajin import session as state
@@ -50,6 +51,64 @@ def test_measure_intensity_two_layers(viewer) -> None:
     assert label_to_red[2] == pytest.approx(50.0)
     assert label_to_green[1] == pytest.approx(10.0)
     assert label_to_green[2] == pytest.approx(200.0)
+
+
+def test_region_column_from_label_names_metadata(viewer) -> None:
+    labels, a, _ = _two_label_image()
+    viewer.add_labels(labels, name="parts", metadata={"label_names": {1: "inside", 2: "outside"}})
+    viewer.add_image(a, name="ch_red")
+
+    res = measure.measure_intensity(labels_layer="parts", image_layers=["ch_red"])
+    assert "region" in res["columns"]
+    df = state.get_table(res["table_name"])
+    label_to_region = dict(zip(df["label"], df["region"]))
+    assert label_to_region[1] == "inside"
+    assert label_to_region[2] == "outside"
+
+
+def test_no_region_column_without_label_names(viewer) -> None:
+    labels, a, _ = _two_label_image()
+    viewer.add_labels(labels, name="masks")  # no label_names metadata
+    viewer.add_image(a, name="ch_red")
+
+    res = measure.measure_intensity(labels_layer="masks", image_layers=["ch_red"])
+    assert "region" not in res["columns"]
+
+
+def test_region_column_accepts_string_keys(viewer) -> None:
+    # A bundle round-trip through JSON turns {1: ...} into {"1": ...}.
+    labels, a, _ = _two_label_image()
+    viewer.add_labels(labels, name="parts", metadata={"label_names": {"1": "inside", "2": "outside"}})
+    viewer.add_image(a, name="ch_red")
+
+    res = measure.measure_intensity(labels_layer="parts", image_layers=["ch_red"])
+    df = state.get_table(res["table_name"])
+    assert dict(zip(df["label"], df["region"]))[1] == "inside"
+
+
+def test_region_column_partial_mapping_keeps_rows(viewer) -> None:
+    labels, a, _ = _two_label_image()
+    viewer.add_labels(labels, name="parts", metadata={"label_names": {1: "inside"}})
+    viewer.add_image(a, name="ch_red")
+
+    res = measure.measure_intensity(labels_layer="parts", image_layers=["ch_red"])
+    df = state.get_table(res["table_name"])
+    assert res["n_rows"] == 2  # unmapped label 2 is not dropped
+    label_to_region = dict(zip(df["label"], df["region"]))
+    assert label_to_region[1] == "inside"
+    assert pd.isna(label_to_region[2])
+
+
+def test_region_column_survives_refresh(viewer) -> None:
+    labels, a, _ = _two_label_image()
+    viewer.add_labels(labels, name="parts", metadata={"label_names": {1: "inside", 2: "outside"}})
+    viewer.add_image(a, name="ch_red")
+
+    res = measure.measure_intensity(labels_layer="parts", image_layers=["ch_red"])
+    refreshed = measure.refresh_measurement(res["table_name"])
+    assert "region" in refreshed["columns"]
+    df = state.get_table(res["table_name"])
+    assert dict(zip(df["label"], df["region"]))[2] == "outside"
 
 
 def test_refresh_measurement_picks_up_label_edit(viewer) -> None:
