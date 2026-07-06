@@ -1,6 +1,12 @@
 from __future__ import annotations
 
-from imajin.analysis.resume import file_signature, rel_key, sample_slug_for
+from imajin.analysis.resume import (
+    bundle_belongs_to_dir,
+    diff_keys,
+    file_signature,
+    rel_key,
+    sample_slug_for,
+)
 
 
 def test_rel_key_is_anchor_relative_and_forward_slashed():
@@ -34,3 +40,23 @@ def test_file_signature(tmp_path):
     f.write_text("hi")
     sig = file_signature(f)
     assert sig is not None and sig["size"] == 2 and "mtime" in sig
+
+
+def test_diff_keys_three_way():
+    d = diff_keys(analysed_keys={"a.lsm", "b.lsm"}, present_keys={"b.lsm", "c.lsm"})
+    assert d["analysed"] == ["a.lsm", "b.lsm"]
+    assert d["pending"] == ["c.lsm"]  # on disk, not in bundle
+    assert d["missing"] == ["a.lsm"]  # in bundle, not on disk
+
+
+def test_bundle_belongs_to_dir(tmp_path):
+    data = tmp_path / "data"
+    data.mkdir()
+    bundle = data / "20260706_run"  # batch bundle lives under the data folder
+    bundle.mkdir()
+    assert bundle_belongs_to_dir(None, bundle, data) is True
+    # or by stored input anchor even when the bundle lives elsewhere
+    other = tmp_path / "results" / "b"
+    other.mkdir(parents=True)
+    assert bundle_belongs_to_dir(str(data), other, data) is True
+    assert bundle_belongs_to_dir(None, other, data) is False
