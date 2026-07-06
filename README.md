@@ -51,6 +51,19 @@ happen.
   and surface in a layer-linked Qt table dock.
 - **Colocalization**: Manders M1/M2 (Otsu / zero / scalar threshold modes)
   and Pearson correlation, both mask-aware.
+- **Channel-as-mask (inside vs outside a domain)**: use one segmented channel to
+  scope another. `mask_logic` does boolean set-ops on mask / label layers
+  (`not` / `and` / `or` / `subtract`), so "outside the green domain" is
+  `subtract(specimen, green)` or `not(green, within_layer=specimen)`.
+  `partition_inside_outside(region_layer, within_layer)` builds a single
+  inside/outside Labels map — bounded by a required specimen mask, with an optional
+  `boundary_buffer_um` guard band around the ambiguous domain edge — that feeds
+  `measure_intensity([signal])` for inside/outside signal in one call (rows carry a
+  `region` column). Typical recipe: `segment_intensity_regions("green")` →
+  `partition_inside_outside(green_regions, specimen)` → `measure_intensity(partition,
+  ["red"])`. Compare **per sample** as `log2(inside / outside)`, then test that
+  contrast across biological replicates — the two rows from one image are paired, not
+  independent groups, so do not hand them to `compare_groups` as two groups.
 - **Quality control & ROI review**: QC metrics for label layers, measurement
   tables, and timecourses (`compute_segmentation_qc`, `compute_measurement_qc`,
   `compute_timecourse_qc`), pass / warning / fail status (`mark_qc_status`),
