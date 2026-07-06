@@ -273,12 +273,27 @@ class ChatDock(QWidget):
         layout.addWidget(composer)
         self.input.setFocus(Qt.FocusReason.OtherFocusReason)
 
+    def _release_runner(self) -> None:
+        # Discard the current runner, closing it first if it holds resources (the
+        # subscription runner owns a background loop + `claude` subprocess).
+        runner, self._runner = self._runner, None
+        close = getattr(runner, "close", None)
+        if callable(close):
+            try:
+                close()
+            except Exception:  # noqa: BLE001 - best-effort teardown
+                pass
+
     def invalidate_runner(self) -> None:
-        self._runner = None
+        self._release_runner()
         self._provider_kind = None
         self._provider_model = None
         # Re-probe in case API keys were just edited or Ollama just came up.
         self.model_picker.refresh_statuses(compute_statuses(self.settings))
+
+    def closeEvent(self, event) -> None:
+        self._release_runner()
+        super().closeEvent(event)
 
     def _make_provider(self):
         from imajin.agent.providers import (
@@ -360,7 +375,7 @@ class ChatDock(QWidget):
     def _on_model_change(self, _index: int) -> None:
         if self._runner is not None:
             self._append_system("Model changed — conversation reset.")
-        self._runner = None
+        self._release_runner()
 
     def _on_clear(self) -> None:
         if self._runner is not None:
