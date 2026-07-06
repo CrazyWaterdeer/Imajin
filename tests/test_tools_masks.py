@@ -4,8 +4,8 @@ import numpy as np
 import pytest
 
 from imajin import session as state
-from imajin.tools import get_tool, masks, measure
-from imajin.tools.masks import _align, _combine_masks, _MaskError, _partition
+from imajin.tools import get_tool, masks, measure, stats
+from imajin.tools.masks import _align, _classify_overlap, _combine_masks, _MaskError, _partition
 from imajin.tools.segment.intensity import segment_intensity_regions
 
 
@@ -347,3 +347,131 @@ def test_partition_empty_outside_not_comparable(viewer) -> None:
     res = masks.partition_inside_outside("green_regions", within_layer="specimen")
     assert res["ok"] and res["comparable"] is False
     assert res["outside_voxels"] == 0
+
+
+# --- pure core: _classify_overlap ----------------------------------------------------
+
+def _three_cells():
+    labels = np.zeros((10, 30), dtype=np.int32)
+    labels[2:8, 1:5]   = 1   # 24 px
+    labels[2:8, 11:15] = 2   # 24 px
+    labels[2:8, 21:25] = 3   # 24 px
+    return labels
+
+
+def test_classify_overlap_by_threshold():
+    labels = _three_cells()
+    region = np.zeros((10, 30), dtype=bool)
+    region[2:8, 11:15] = True   # cell 2 fully covered -> 1.0
+    region[2:8, 21:23] = True   # cell 3 half covered -> 0.5
+    # cell 1 no region -> 0.0
+    mapping, overlap, wfrac, counts = _classify_overlap(labels, region, overlap_threshold=0.5)
+    assert mapping == {1: "outside", 2: "inside", 3: "inside"}  # 0.5 is inside (>=)
+    assert wfrac is None
+    assert counts == {"inside": 2, "outside": 1, "excluded": 0}
+    assert 0 not in mapping  # background never classified
+
+
+def test_classify_overlap_excluded_by_within():
+    labels = _three_cells()
+    region = np.zeros((10, 30), dtype=bool)
+    region[2:8, 1:5] = True  # cell 1 inside region
+    within = np.ones((10, 30), dtype=bool)
+    within[2:8, 21:25] = False  # cell 3 off-specimen
+    mapping, _, wfrac, counts = _classify_overlap(
+        labels, region, overlap_threshold=0.5, within_bool=within, within_threshold=0.5
+    )
+    assert mapping[3] == "excluded"
+    assert counts["excluded"] == 1
+
+
+def test_classify_overlap_empty_labels():
+    labels = np.zeros((6, 6), dtype=np.int32)
+    region = np.ones((6, 6), dtype=bool)
+    mapping, _, _, counts = _classify_overlap(labels, region, overlap_threshold=0.5)
+    assert mapping == {}
+
+
+# --- tool: classify_labels_by_mask ---------------------------------------------------
+
+def _cells_and_green(viewer):
+    cells = np.zeros((10, 20), dtype=np.int32)
+    cells[2:5, 2:5]   = 1   # inside green
+    cells[2:5, 7:10]  = 2   # inside green
+    cells[2:5, 14:17] = 3   # outside green
+    cells[6:9, 14:17] = 4   # outside green
+    green = np.zeros((10, 20), dtype=np.uint8)
+    green[:, 0:12] = 1
+    red = np.zeros((10, 20), dtype=np.float32)
+    red[2:5, 2:5]   = 500.0
+    red[2:5, 7:10]  = 520.0
+    red[2:5, 14:17] = 100.0
+    red[6:9, 14:17] = 120.0
+    viewer.add_labels(cells, name="cells")
+    viewer.add_image(green, name="green")
+    viewer.add_image(red, name="red")
+
+
+def test_classify_is_registered() -> None:
+    assert get_tool("classify_labels_by_mask") is not None
+
+
+def test_classify_then_measure_then_compare(viewer) -> None:
+    _cells_and_green(viewer)
+    res = masks.classify_labels_by_mask("cells", "green")
+    assert res["ok"] and res["counts"]["inside"] == 2 and res["counts"]["outside"] == 2
+
+    # cells layer now carries label_names + classification provenance
+    L = viewer.layers["cells"]
+    assert L.metadata["label_names"] == {1: "inside", 2: "inside", 3: "outside", 4: "outside"}
+    assert L.metadata["classification"]["tool"] == "classify_labels_by_mask"
+
+    meas = measure.measure_intensity(labels_layer="cells", image_layers=["red"])
+    df = state.get_table(meas["table_name"])
+    assert "region" in df.columns
+    cmp = stats.compare_groups(meas["table_name"], "mean_intensity_red", group_col="region", n_bootstrap=100)
+    row = state.get_table(cmp["result_table"]).iloc[0]
+    assert row["group_a"] == "inside" and row["group_b"] == "outside"
+    assert row["mean_difference_b_minus_a"] < 0  # inside brighter than outside
+
+
+def test_classify_preserves_prior_label_names_and_warns(viewer) -> None:
+    _cells_and_green(viewer)
+    viewer.layers["cells"].metadata["label_names"] = {1: "special", 9: "keepme"}
+    res = masks.classify_labels_by_mask("cells", "green")
+    assert res["previous_label_names"] == {1: "special", 9: "keepme"}
+    assert any("overwrote" in w for w in res["warnings"])
+    # unrelated key preserved; classified key overwritten
+    ln = viewer.layers["cells"].metadata["label_names"]
+    assert ln[9] == "keepme" and ln[1] == "inside"
+
+
+def test_classify_write_label_names_false_leaves_layer(viewer) -> None:
+    _cells_and_green(viewer)
+    res = masks.classify_labels_by_mask("cells", "green", write_label_names=False)
+    assert res["ok"] and "label_names" not in viewer.layers["cells"].metadata
+    assert state.get_table(res["table_name"]).shape[0] == 4  # table still written
+
+
+def test_classify_excluded_by_within(viewer) -> None:
+    _cells_and_green(viewer)
+    within = np.ones((10, 20), dtype=np.uint8)
+    within[6:9, 14:17] = 0  # exclude cell 4
+    viewer.add_image(within, name="specimen")
+    res = masks.classify_labels_by_mask("cells", "green", within_layer="specimen")
+    assert res["counts"]["excluded"] == 1
+    assert any("excluded" in w for w in res["warnings"])
+
+
+def test_classify_2d_region_over_3d_cells_broadcasts(viewer) -> None:
+    cells = np.zeros((3, 8, 8), dtype=np.int32)
+    cells[:, 2:4, 2:4] = 1
+    cells[:, 5:7, 5:7] = 2
+    green2d = np.zeros((8, 8), dtype=np.uint8)
+    green2d[2:4, 2:4] = 1  # covers cell 1's xy
+    viewer.add_labels(cells, name="cells3d")
+    viewer.add_image(green2d, name="green2d")
+    res = masks.classify_labels_by_mask("cells3d", "green2d")
+    assert res["ok"] and res["broadcast_z"] is True
+    assert any("broadcast" in w for w in res["warnings"])
+    assert res["counts"]["inside"] == 1 and res["counts"]["outside"] == 1

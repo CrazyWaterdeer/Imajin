@@ -61,9 +61,21 @@ happen.
   `measure_intensity([signal])` for inside/outside signal in one call (rows carry a
   `region` column). Typical recipe: `segment_intensity_regions("green")` →
   `partition_inside_outside(green_regions, specimen)` → `measure_intensity(partition,
-  ["red"])`. Compare **per sample** as `log2(inside / outside)`, then test that
-  contrast across biological replicates — the two rows from one image are paired, not
-  independent groups, so do not hand them to `compare_groups` as two groups.
+  ["red"])`. For a **per-object** question instead ("are individual red cells brighter
+  inside green?"), `classify_labels_by_mask(cells, green, within_layer=specimen)` tags
+  each segmented cell inside/outside by its overlap with the domain (writing a `region`
+  per cell), then `filter_table` to inside/outside and `compare_groups(group_col=
+  "region")`. Two comparison paths, with honest statistics: the **domain-level** inside
+  vs outside is *paired* within a sample — compare per sample as `log2(inside/outside)`
+  and test the contrast across replicates with `compare_groups(..., test="wilcoxon")`
+  (paired signed-rank; `compare_groups` also warns against pseudoreplication on clustered
+  per-cell rows). **Per-cell** independence only holds for a single image / genuinely
+  independent units. Classify on one channel and measure a *different* one — using the
+  masking channel as the outcome is circular.
+- **Statistics (paired)**: `compare_groups` supports independent Welch / Mann-Whitney /
+  ANOVA / Kruskal and **paired** Wilcoxon signed-rank / paired-t (`test="wilcoxon"` /
+  `"paired_t"`) with signed rank-biserial / Cohen's dz effect sizes, for within-sample
+  designs like inside-vs-outside a domain.
 - **Quality control & ROI review**: QC metrics for label layers, measurement
   tables, and timecourses (`compute_segmentation_qc`, `compute_measurement_qc`,
   `compute_timecourse_qc`), pass / warning / fail status (`mark_qc_status`),

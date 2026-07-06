@@ -413,11 +413,206 @@ def describe_table(
     }
 
 
+def _signed_rank_biserial(d: np.ndarray) -> float:
+    """Rank-biserial correlation for a paired sample, from the signed ranks of the nonzero
+    differences: ``r = (R+ - R-) / (R+ + R-)``. Ties get average ranks; zeros are dropped
+    (Wilcoxon 'wilcox' zero method). Returns 0.0 when all differences are zero. This is
+    unambiguous in sign (positive when ``d = b - a`` skews positive), unlike deriving it from
+    SciPy's smaller-rank-sum W."""
+    from scipy.stats import rankdata
+
+    d = np.asarray(d, dtype=float)
+    nz = d[d != 0]
+    if nz.size == 0:
+        return 0.0
+    ranks = rankdata(np.abs(nz))
+    r_plus = float(ranks[nz > 0].sum())
+    r_minus = float(ranks[nz < 0].sum())
+    total = r_plus + r_minus
+    return float((r_plus - r_minus) / total) if total > 0 else 0.0
+
+
+def _bootstrap_mean_paired(d: np.ndarray, *, n_bootstrap: int, seed: int) -> tuple[float, float]:
+    """Percentile bootstrap CI for the mean paired difference — resample ``d`` itself so
+    pairing is preserved (never resample the two arms independently)."""
+    d = np.asarray(d, dtype=float)
+    if n_bootstrap <= 0 or d.size == 0:
+        return np.nan, np.nan
+    rng = np.random.default_rng(seed)
+    means = np.empty(int(n_bootstrap), dtype=float)
+    for i in range(int(n_bootstrap)):
+        means[i] = float(np.mean(rng.choice(d, size=d.size, replace=True)))
+    lo, hi = np.percentile(means, (2.5, 97.5))
+    return float(lo), float(hi)
+
+
+def _paired_compare(
+    analysis: pd.DataFrame,
+    group_col: str,
+    analysis_col: str,
+    sample_col: str,
+    *,
+    test: str,
+    reference_group: str | None,
+    value_col: str,
+    n_bootstrap: int,
+    seed: int,
+) -> tuple[list[dict[str, Any]], dict[str, int], list[str]]:
+    """Two-group paired comparison, pairing the groups within each sample.
+
+    Consumes the already sample-aggregated ``analysis`` frame (one row per sample x group),
+    pivots to aligned per-sample pairs, drops incomplete/non-finite pairs, and runs a
+    signed-rank (``wilcoxon``) or paired-t test with ``d = b - a`` (``group_a`` = the
+    reference/baseline). Errors loudly rather than silently averaging duplicates.
+    """
+    from scipy import stats as scipy_stats
+
+    warnings: list[str] = []
+    if sample_col not in analysis.columns:
+        raise ValueError(
+            f"paired tests need sample-level data with a {sample_col!r} column; use a table "
+            "with sample_name (object-level rows cannot be paired)"
+        )
+    if analysis.duplicated([sample_col, group_col]).any():
+        raise ValueError(
+            f"paired input has multiple rows per ({sample_col}, {group_col}); aggregate to one "
+            "value per sample and group first"
+        )
+    pivot = analysis.pivot(index=sample_col, columns=group_col, values=analysis_col)
+    groups = [str(g) for g in pivot.columns]
+    if len(groups) != 2:
+        raise ValueError(
+            f"paired tests require exactly two groups in {group_col!r}; got {len(groups)}"
+        )
+    ordered = sorted(groups)
+    if reference_group is not None:
+        ref = str(reference_group)
+        if ref not in groups:
+            raise ValueError(f"reference_group {reference_group!r} not among groups {groups}")
+        ordered = [ref] + [g for g in ordered if g != ref]
+    group_a, group_b = ordered[0], ordered[1]
+
+    pair = pivot[[group_a, group_b]]
+    n_total = int(len(pair))
+    a = pair[group_a].to_numpy(dtype=float)
+    b = pair[group_b].to_numpy(dtype=float)
+    finite = np.isfinite(a) & np.isfinite(b)
+    a, b = a[finite], b[finite]
+    n_pairs = int(a.size)
+    n_dropped = n_total - n_pairs
+    if n_dropped > 0:
+        warnings.append(
+            f"dropped {n_dropped} sample(s) with an incomplete or non-finite inside/outside pair"
+        )
+    if n_pairs < 2:
+        raise ValueError(f"need at least two complete pairs; got {n_pairs}")
+    d = b - a
+
+    if test == "wilcoxon":
+        if np.all(d == 0):
+            stat, pvalue = 0.0, 1.0
+            warnings.append("all paired differences are zero; p-value set to 1.0")
+        else:
+            stat, pvalue = scipy_stats.wilcoxon(b, a)  # (b, a) so any stat sign tracks b - a
+        effect, effect_name = _signed_rank_biserial(d), "rank_biserial"
+        test_name = "wilcoxon_signed_rank"
+    elif test == "paired_t":
+        stat, pvalue = scipy_stats.ttest_rel(b, a)
+        sd = float(np.std(d, ddof=1)) if d.size > 1 else 0.0
+        if sd == 0.0:
+            effect = 0.0 if float(np.mean(d)) == 0.0 else np.nan
+            if not np.isfinite(effect):
+                warnings.append("paired differences have zero variance; cohens_dz is undefined")
+        else:
+            effect = float(np.mean(d) / sd)
+        effect_name, test_name = "cohens_dz", "paired_t"
+    else:
+        raise ValueError(f"unknown paired test {test!r}")
+
+    ci_low, ci_high = _bootstrap_mean_paired(d, n_bootstrap=n_bootstrap, seed=seed)
+    row = {
+        "test": test_name,
+        "requested_test": test,
+        "data_level": "sample",
+        "value_col": value_col,
+        "group_col": group_col,
+        "group_a": group_a,
+        "group_b": group_b,
+        "n_pairs": n_pairs,
+        "n_dropped_incomplete": n_dropped,
+        "mean_a": float(np.mean(a)),
+        "mean_b": float(np.mean(b)),
+        "median_a": float(np.median(a)),
+        "median_b": float(np.median(b)),
+        "mean_difference_b_minus_a": float(np.mean(d)),
+        "median_difference_b_minus_a": float(np.median(d)),
+        "mean_difference_ci95_low": ci_low,
+        "mean_difference_ci95_high": ci_high,
+        "statistic": float(stat) if np.isfinite(stat) else np.nan,
+        "p_value": float(pvalue) if np.isfinite(pvalue) else np.nan,
+        effect_name: effect,
+    }
+    return [row], {group_a: n_pairs, group_b: n_pairs}, warnings
+
+
+def _finalize_compare(
+    rows: list[dict[str, Any]],
+    *,
+    table_name: str,
+    value_col: str,
+    group_col: str,
+    data_level: str,
+    sample_agg: str,
+    dropped: int,
+    warnings: list[str],
+    group_counts: dict[str, int],
+    save_csv: bool,
+) -> dict[str, Any]:
+    """Shared tail for compare_groups: persist the result rows and build the return dict."""
+    result_df = pd.DataFrame(rows)
+    if warnings:
+        result_df["warnings"] = "; ".join(warnings)
+    result_table = put_table(
+        f"stats_compare__{slugify_result_name(table_name)}__{slugify_result_name(value_col)}",
+        result_df,
+        spec={
+            "tool": "compare_groups",
+            "source_table": table_name,
+            "value_col": value_col,
+            "group_col": group_col,
+            "data_level": data_level,
+            "sample_agg": sample_agg,
+            "dropped_nonfinite": dropped,
+        },
+    )
+    out_rows = result_df.to_dict(orient="records")
+    for row in out_rows:
+        row["value_col"] = value_col
+    if save_csv:
+        register_stats_rows(kind="compare", table=table_name, rows=out_rows)
+    return {
+        "source_table": table_name,
+        "value_col": value_col,
+        "group_col": group_col,
+        "data_level": data_level,
+        "sample_agg": sample_agg,
+        "test": str(result_df.loc[0, "test"]),
+        "p_value": float(result_df.loc[0, "p_value"]),
+        "result_table": result_table,
+        "csv_path": None,
+        "group_counts": group_counts,
+        "dropped_nonfinite": dropped,
+        "warnings": warnings,
+    }
+
+
 @tool(
     description="Compare groups for a numeric measurement with conservative defaults. "
     "Uses sample-level means when sample_name is present; otherwise object-level "
     "values are used with a warning. Supports Welch t-test, Mann-Whitney U, ANOVA, "
-    "and Kruskal-Wallis, with effect-size fields where appropriate.",
+    "and Kruskal-Wallis (independent), plus paired Wilcoxon signed-rank / paired-t "
+    "(test='wilcoxon' / 'paired_t') for within-sample paired designs such as "
+    "inside-vs-outside a domain measured on the same specimen.",
     phase="7",
     worker=True,
 )
@@ -428,7 +623,9 @@ def compare_groups(
     sample_col: str = "sample_name",
     level: Literal["auto", "sample", "object"] = "auto",
     sample_agg: Literal["mean", "median"] = "mean",
-    test: Literal["auto", "ttest", "welch", "mannwhitney", "anova", "kruskal"] = "auto",
+    test: Literal[
+        "auto", "ttest", "welch", "mannwhitney", "anova", "kruskal", "wilcoxon", "paired_t"
+    ] = "auto",
     reference_group: str | None = None,
     n_bootstrap: int = 5000,
     seed: int = 12345,
@@ -445,6 +642,42 @@ def compare_groups(
         level=level,
         sample_agg=sample_agg,
     )
+    if test in ("wilcoxon", "paired_t"):
+        rows, group_counts, paired_warnings = _paired_compare(
+            analysis,
+            group_col,
+            analysis_col,
+            sample_col,
+            test=test,
+            reference_group=reference_group,
+            value_col=value_col,
+            n_bootstrap=n_bootstrap,
+            seed=seed,
+        )
+        return _finalize_compare(
+            rows,
+            table_name=table_name,
+            value_col=value_col,
+            group_col=group_col,
+            data_level=data_level,
+            sample_agg=sample_agg,
+            dropped=dropped,
+            warnings=warnings + paired_warnings,
+            group_counts=group_counts,
+            save_csv=save_csv,
+        )
+
+    if (
+        data_level == "object"
+        and sample_col in df.columns
+        and df.groupby([sample_col, group_col]).size().gt(1).any()
+    ):
+        warnings.append(
+            "object-level rows are nested within samples (multiple objects per sample and "
+            "group); this independent test risks pseudoreplication — prefer sample-level "
+            "aggregation and a paired test for cross-specimen inference"
+        )
+
     grouped = _ordered_group_values(analysis, group_col, analysis_col, reference_group)
     if len(grouped) < 2:
         raise ValueError(f"need at least two groups in {group_col!r}; got {len(grouped)}")
@@ -574,42 +807,18 @@ def compare_groups(
         }
         rows.append(row)
 
-    result_df = pd.DataFrame(rows)
-    if warnings:
-        result_df["warnings"] = "; ".join(warnings)
-    result_table = put_table(
-        f"stats_compare__{slugify_result_name(table_name)}__{slugify_result_name(value_col)}",
-        result_df,
-        spec={
-            "tool": "compare_groups",
-            "source_table": table_name,
-            "value_col": value_col,
-            "group_col": group_col,
-            "data_level": data_level,
-            "sample_agg": sample_agg,
-            "dropped_nonfinite": dropped,
-        },
+    return _finalize_compare(
+        rows,
+        table_name=table_name,
+        value_col=value_col,
+        group_col=group_col,
+        data_level=data_level,
+        sample_agg=sample_agg,
+        dropped=dropped,
+        warnings=warnings,
+        group_counts=group_counts,
+        save_csv=save_csv,
     )
-    rows = result_df.to_dict(orient="records")
-    for row in rows:
-        row["value_col"] = value_col
-    if save_csv:
-        register_stats_rows(kind="compare", table=table_name, rows=rows)
-    csv_path = None  # legacy field
-    return {
-        "source_table": table_name,
-        "value_col": value_col,
-        "group_col": group_col,
-        "data_level": data_level,
-        "sample_agg": sample_agg,
-        "test": str(result_df.loc[0, "test"]),
-        "p_value": float(result_df.loc[0, "p_value"]),
-        "result_table": result_table,
-        "csv_path": csv_path,
-        "group_counts": group_counts,
-        "dropped_nonfinite": dropped,
-        "warnings": warnings,
-    }
 
 
 def _existing_auto_statistics_keys() -> set[tuple[str, str, str]]:
