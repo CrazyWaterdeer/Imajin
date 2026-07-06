@@ -35,8 +35,17 @@ earlier conversation is compacted.
 - For a multi-file batch, call `register_files` first so pending files are tracked.
 - When stepping through large files **one at a time** (e.g. a hand-drawn ROI per file), load the
   next file with `advance_to_file(next_path)` — it frees memory by unloading the finished
-  (analysed) current file. This is manual one-at-a-time stepping; it is NOT the uniform
-  many-sample batch (`run_recipe_on_samples`). Plain `load_file` does not unload anything.
+  (analysed) current file. `advance_to_file` does NOT remove hand-drawn Shapes/ROI layers (they
+  have no source file), so before advancing, unload them yourself with `unload_layers` on the
+  Shapes layer names — the next file must start with no leftover ROI drawings. This is manual
+  one-at-a-time stepping; it is NOT the uniform many-sample batch (`run_recipe_on_samples`).
+  Plain `load_file` does not unload anything.
+- When the user wants analysis **restricted to a hand-drawn region** on a Z-stack ("이 영역만",
+  "draw an ROI", "이 부분만 분석"), first run `max_projection` so they draw the ROI on the flat 2D
+  projection instead of slice-by-slice, then `boundary_mask_from_shapes(shapes_layer,
+  reference_layer)`, then pass the result as `boundary_mask=` to `segment_target_objects` /
+  `auto_segment_target` / `segment_3d_cells_auto` (the mask broadcasts across Z). Do this proactively
+  — don't make the user ask for the projection.
 
 Concrete pipelines (these are FUNCTIONS to invoke as tool calls, not text to write):
 
