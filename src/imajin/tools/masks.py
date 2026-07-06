@@ -20,6 +20,7 @@ from __future__ import annotations
 from typing import Any
 
 import numpy as np
+import pandas as pd
 
 from imajin.agent.qt_dispatch import call_on_main
 from imajin.analysis.arrays import layer_axes_from_metadata, materialize_array
@@ -29,6 +30,7 @@ from imajin.analysis.segmentation import (
     resolve_boundary_mask,
     voxel_spacing,
 )
+from imajin.session import get_layer, put_table
 from imajin.tools.napari_ops import add_labels_from_worker, snapshot_layer
 from imajin.tools.registry import tool
 
@@ -188,6 +190,74 @@ def _partition(
         ),
     }
     return labels, stats, warnings
+
+
+def _classify_overlap(
+    labels: np.ndarray,
+    region_bool: np.ndarray,
+    *,
+    overlap_threshold: float,
+    within_bool: np.ndarray | None = None,
+    within_threshold: float = 0.5,
+    inside_name: str = "inside",
+    outside_name: str = "outside",
+    excluded_name: str = "excluded",
+) -> tuple[dict[int, str], np.ndarray, np.ndarray | None, dict[str, int]]:
+    """Classify each object label by its fractional overlap with ``region_bool``.
+
+    Per label, ``overlap = |object ∩ region| / |object|`` (object-pixel denominator) via
+    ``np.bincount`` — exact and O(voxels), no per-object loop. An object is ``inside`` when
+    ``overlap >= overlap_threshold`` else ``outside``; if ``within_bool`` is given, an object
+    whose within-fraction ``< within_threshold`` is ``excluded`` (off-specimen). Background
+    label 0 is never classified. Returns ``(mapping{label: class}, overlap, within_frac,
+    counts)``.
+    """
+    labels = np.asarray(labels)
+    max_label = int(labels.max()) if labels.size else 0
+    n_unique = int(np.count_nonzero(np.unique(labels)))
+    if max_label > 5_000_000 and max_label > 10 * max(n_unique, 1):
+        raise _MaskError(
+            f"labels max id {max_label} is far larger than the object count ({n_unique}); "
+            "relabel the layer sequentially (relabel_sequential) before classifying"
+        )
+    n = max_label + 1
+    total = np.bincount(labels.ravel(), minlength=n).astype(float)
+    ins = np.bincount(np.asarray(labels[region_bool]).ravel(), minlength=n).astype(float)
+    overlap = np.divide(ins, total, out=np.zeros_like(total), where=total > 0)
+    within_frac = None
+    if within_bool is not None:
+        win = np.bincount(np.asarray(labels[within_bool]).ravel(), minlength=n).astype(float)
+        within_frac = np.divide(win, total, out=np.zeros_like(total), where=total > 0)
+
+    mapping: dict[int, str] = {}
+    counts = {inside_name: 0, outside_name: 0, excluded_name: 0}
+    for lbl in range(1, n):  # skip background (label 0)
+        if total[lbl] <= 0:
+            continue
+        if within_frac is not None and within_frac[lbl] < within_threshold:
+            cls = excluded_name
+        elif overlap[lbl] >= overlap_threshold:
+            cls = inside_name
+        else:
+            cls = outside_name
+        mapping[lbl] = cls
+        counts[cls] += 1
+    return mapping, overlap, within_frac, counts
+
+
+def _stamp_classification(
+    labels_layer: str, mapping: dict[int, str], provenance: dict[str, Any]
+) -> dict[int, str]:
+    """Main-thread: stamp the per-object classification onto the cells layer so
+    ``measure_intensity`` emits a ``region`` column. Preserves prior ``label_names`` keys not
+    re-classified (``{**prev, **mapping}``) and records provenance under a dedicated
+    ``classification`` key. Returns the previous ``label_names`` for reporting."""
+    layer = get_layer(labels_layer)
+    md = layer.metadata
+    prev = dict(md.get("label_names") or {})
+    md["label_names"] = {**prev, **mapping}
+    md["classification"] = provenance
+    return prev
 
 
 def _scales_disagree(scale_a: tuple[float, ...], scale_b: tuple[float, ...]) -> bool:
@@ -464,6 +534,131 @@ def partition_inside_outside(
             "comparable": comparable,
             "broadcast_z": broadcast_z,
             "label_names": label_names,
+            "warnings": warnings,
+        }
+    except _MaskError as e:
+        return {"ok": False, "error": str(e)}
+
+
+@tool(
+    description="Classify each segmented object (cell) as inside/outside a domain by its "
+    "fractional overlap with a region mask, for a PER-OBJECT inside-vs-outside comparison. "
+    "Writes label_names on the cells layer so measure_intensity emits a per-cell region "
+    "column; then filter to inside/outside and compare_groups(group_col='region'). Classify "
+    "on one channel and measure a DIFFERENT one — measuring the channel that defined the "
+    "domain is circular. Per-cell independence holds for a single image / genuinely "
+    "independent units; across specimens, aggregate per sample and use the paired mode.",
+    phase="7",
+    worker=True,
+)
+def classify_labels_by_mask(
+    labels_layer: str,
+    region_layer: str,
+    overlap_threshold: float = 0.5,
+    within_layer: str | None = None,
+    within_threshold: float = 0.5,
+    inside_name: str = "inside",
+    outside_name: str = "outside",
+    write_label_names: bool = True,
+    broadcast_2d_to_3d: bool = True,
+    table_name: str | None = None,
+) -> dict[str, Any]:
+    try:
+        warnings: list[str] = []
+        snap_l, data_l, _ = _load_mask_layer(labels_layer)
+        labels = np.asarray(data_l).astype(np.int32)
+
+        _snap_r, data_r, _ = _load_mask_layer(region_layer)
+        region_bool, broadcast_z = _align(
+            labels.shape, _foreground(data_r), broadcast_2d_to_3d=broadcast_2d_to_3d
+        )
+        within_bool = None
+        if within_layer:
+            _snap_w, data_w, _ = _load_mask_layer(within_layer)
+            within_bool, bz_w = _align(
+                labels.shape, _foreground(data_w), broadcast_2d_to_3d=broadcast_2d_to_3d
+            )
+            broadcast_z = broadcast_z or bz_w
+
+        mapping, overlap, within_frac, counts = _classify_overlap(
+            labels,
+            region_bool,
+            overlap_threshold=overlap_threshold,
+            within_bool=within_bool,
+            within_threshold=within_threshold,
+            inside_name=inside_name,
+            outside_name=outside_name,
+        )
+        n_objects = int(np.count_nonzero(np.unique(labels)))
+
+        table_rows = []
+        for lbl in sorted(mapping):
+            row = {
+                "label": int(lbl),
+                "overlap_fraction": float(overlap[lbl]),
+                "region": mapping[lbl],
+            }
+            if within_frac is not None:
+                row["within_fraction"] = float(within_frac[lbl])
+            table_rows.append(row)
+        columns = ["label", "overlap_fraction", "region"] + (
+            ["within_fraction"] if within_bool is not None else []
+        )
+        df = pd.DataFrame(table_rows, columns=columns)
+        tname = call_on_main(
+            put_table,
+            table_name or f"{labels_layer}_classification",
+            df,
+            spec={
+                "tool": "classify_labels_by_mask",
+                "labels_layer": labels_layer,
+                "region_layer": region_layer,
+                "overlap_threshold": float(overlap_threshold),
+                "within_layer": within_layer,
+                "within_threshold": float(within_threshold),
+            },
+        )
+
+        prev: dict[int, str] = {}
+        if write_label_names:
+            provenance = {
+                "region": mapping,
+                "region_layer": region_layer,
+                "overlap_threshold": float(overlap_threshold),
+                "within_layer": within_layer,
+                "within_threshold": float(within_threshold),
+                "tool": "classify_labels_by_mask",
+            }
+            prev = call_on_main(_stamp_classification, labels_layer, mapping, provenance)
+            if prev and any(k in prev and prev[k] != v for k, v in mapping.items()):
+                warnings.append(
+                    "overwrote existing label_names entries on the cells layer "
+                    "(previous values returned in previous_label_names)"
+                )
+
+        if broadcast_z:
+            warnings.append(
+                "a 2D region mask was broadcast across all Z planes (assumes the domain is "
+                "constant in Z; a real 3D domain should not be extruded)"
+            )
+        excluded = counts.get("excluded", 0)
+        if excluded > 0:
+            warnings.append(
+                f"{excluded} object(s) classified 'excluded' (below within_threshold); "
+                "filter_table to inside/outside before a two-group compare_groups"
+            )
+
+        return {
+            "ok": True,
+            "labels_layer": labels_layer,
+            "table_name": tname,
+            "counts": counts,
+            "n_objects": n_objects,
+            "overlap_threshold": float(overlap_threshold),
+            "within_threshold": float(within_threshold),
+            "broadcast_z": broadcast_z,
+            "previous_label_names": prev,
+            "note": "classify on one channel, measure a different one (same-channel is circular)",
             "warnings": warnings,
         }
     except _MaskError as e:
