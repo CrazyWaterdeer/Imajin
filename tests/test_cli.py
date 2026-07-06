@@ -89,3 +89,39 @@ def test_input_method_env_no_engine_leaves_qt_im_module_unset(monkeypatch) -> No
 
     # No IME engine → do NOT set the wayland stub that swallowed keystrokes.
     assert "QT_IM_MODULE" not in cli.os.environ
+
+
+def test_ensure_fcitx_starts_in_xim_mode_without_wayland(monkeypatch) -> None:
+    import subprocess as sp
+    from types import SimpleNamespace
+
+    from imajin import cli
+
+    monkeypatch.setenv("QT_IM_MODULE", "fcitx")
+    monkeypatch.setenv("WAYLAND_DISPLAY", "wayland-0")
+    monkeypatch.setattr(cli, "_is_wsl", lambda: True)
+    monkeypatch.setattr(cli.shutil, "which", lambda name: "/usr/bin/fcitx5")
+    monkeypatch.setattr(sp, "run", lambda *a, **k: SimpleNamespace(returncode=1))  # not running
+
+    captured: dict = {}
+    monkeypatch.setattr(sp, "Popen", lambda args, **k: captured.update(args=args, env=k.get("env")))
+
+    cli._ensure_fcitx()
+
+    assert captured["args"][:2] == ["fcitx5", "-d"]
+    # WSLg denies the Wayland IME protocol — fcitx5 must run X11/XIM-only.
+    assert "WAYLAND_DISPLAY" not in captured["env"]
+
+
+def test_ensure_fcitx_noop_when_fcitx_not_selected(monkeypatch) -> None:
+    import subprocess as sp
+
+    from imajin import cli
+
+    monkeypatch.delenv("QT_IM_MODULE", raising=False)
+    called: list = []
+    monkeypatch.setattr(sp, "Popen", lambda *a, **k: called.append(1))
+
+    cli._ensure_fcitx()
+
+    assert called == []

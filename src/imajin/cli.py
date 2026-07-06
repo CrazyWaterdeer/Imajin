@@ -28,6 +28,36 @@ def _ensure_ollama(base_url: str) -> None:
         pass
 
 
+def _ensure_fcitx() -> None:
+    """Best-effort: start fcitx5 in X11/XIM mode on WSL so CJK input works.
+
+    WSLg's Wayland compositor denies the ``zwp_input_method`` protocol, so a plain
+    ``fcitx5 -d`` bind-fails ("permission to bind input_method denied") and the
+    daemon exits. Launching it *without* ``WAYLAND_DISPLAY`` keeps it on X11 (XIM),
+    which the forced ``xcb`` Qt platform consumes. No-op unless fcitx is the
+    selected IME, we're on WSL, fcitx5 is installed, and it isn't already running.
+    """
+    if os.environ.get("QT_IM_MODULE") != "fcitx" or not _is_wsl():
+        return
+    if shutil.which("fcitx5") is None:
+        return
+    try:
+        import subprocess
+
+        if subprocess.run(["pgrep", "-x", "fcitx5"], capture_output=True).returncode == 0:
+            return  # already running
+        env = {k: v for k, v in os.environ.items() if k != "WAYLAND_DISPLAY"}
+        subprocess.Popen(
+            ["fcitx5", "-d"],
+            env=env,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+    except Exception:
+        pass
+
+
 def _apply_ui_scale_env(ui_scale_setting: str) -> None:
     # Priority: existing env var (power-user override) > settings/auto.
     if "QT_SCALE_FACTOR" in os.environ:
@@ -203,6 +233,7 @@ def main() -> int:
     settings = Settings.from_env()
     _setup_wsl_env()
     _setup_input_method_env()
+    _ensure_fcitx()
     _apply_ui_scale_env(settings.ui_scale)
     _ensure_ollama(settings.ollama_base_url)
     parser = argparse.ArgumentParser(
