@@ -13,7 +13,6 @@ from __future__ import annotations
 from typing import Any
 
 import numpy as np
-from sklearn.preprocessing import StandardScaler
 
 
 def _confidence(distances: np.ndarray, order: np.ndarray) -> float:
@@ -62,6 +61,11 @@ def match_against_library(
 
     X = library.frame[cols].to_numpy(dtype=float)
     q = np.array([[float(query_features[c]) for c in cols]], dtype=float)
+
+    # Imported lazily: keeps scikit-learn (~1s import) off the app-startup path,
+    # since this Tier-2 classifier is rarely invoked. Other tools follow the same
+    # lazy-heavy-import convention.
+    from sklearn.preprocessing import StandardScaler
 
     scaler = StandardScaler().fit(X)  # zero-variance columns are handled (scale→1)
     distances = np.linalg.norm(scaler.transform(X) - scaler.transform(q), axis=1)
