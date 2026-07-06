@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import numpy as np
 import pandas as pd
 import pytest
+from scipy import stats as scipy_stats
 
 from imajin import session as state
 from imajin.tools import stats
@@ -201,3 +203,149 @@ def test_normalize_timecourse_and_extract_features() -> None:
     label1 = feat_df[feat_df["label"] == 1].iloc[0]
     assert label1["peak_amplitude"] == pytest.approx(1.0)
     assert label1["time_to_peak"] == pytest.approx(2.0)
+
+
+# --- paired mode (inside/outside within-sample) --------------------------------------
+
+def _paired_inside_outside_table(n: int = 6, seed: int = 0) -> str:
+    rng = np.random.default_rng(seed)
+    rows = []
+    for i in range(n):
+        base = float(rng.uniform(1.0, 3.0))
+        rows.append({"sample_name": f"s{i}", "region": "inside", "val": base + float(rng.uniform(0.3, 0.9))})
+        rows.append({"sample_name": f"s{i}", "region": "outside", "val": base})
+    return state.put_table("io", pd.DataFrame(rows), spec={"tool": "test"})
+
+
+def test_paired_wilcoxon_matches_scipy() -> None:
+    df = state.get_table(_paired_inside_outside_table())
+    res = stats.compare_groups("io", "val", group_col="region", test="wilcoxon", n_bootstrap=200)
+
+    piv = df.pivot(index="sample_name", columns="region", values="val")
+    inside = piv["inside"].to_numpy(float)
+    outside = piv["outside"].to_numpy(float)
+    W, p = scipy_stats.wilcoxon(outside, inside)  # group_a=inside (sorted), group_b=outside -> (b,a)
+
+    row = state.get_table(res["result_table"]).iloc[0]
+    assert row["test"] == "wilcoxon_signed_rank"
+    assert row["group_a"] == "inside" and row["group_b"] == "outside"
+    assert row["n_pairs"] == 6
+    assert res["p_value"] == pytest.approx(float(p))
+    assert row["statistic"] == pytest.approx(float(W))
+    assert res["group_counts"] == {"inside": 6, "outside": 6}
+
+
+def test_paired_t_matches_scipy_and_reference_group_sets_direction() -> None:
+    df = state.get_table(_paired_inside_outside_table())
+    # reference_group=outside -> group_a=outside, group_b=inside, d = inside - outside > 0
+    res = stats.compare_groups(
+        "io", "val", group_col="region", test="paired_t",
+        reference_group="outside", n_bootstrap=200,
+    )
+    piv = df.pivot(index="sample_name", columns="region", values="val")
+    inside = piv["inside"].to_numpy(float)
+    outside = piv["outside"].to_numpy(float)
+    t, p = scipy_stats.ttest_rel(inside, outside)  # (b=inside, a=outside)
+
+    row = state.get_table(res["result_table"]).iloc[0]
+    assert row["group_a"] == "outside" and row["group_b"] == "inside"
+    assert row["mean_difference_b_minus_a"] > 0  # inside enriched
+    assert res["p_value"] == pytest.approx(float(p))
+    assert row["statistic"] == pytest.approx(float(t))
+    assert row["cohens_dz"] > 0
+
+
+def test_signed_rank_biserial_sign_and_value() -> None:
+    # all differences positive -> rank-biserial = +1
+    d = np.array([0.5, 0.8, 0.2, 1.1, 0.6])
+    assert stats._signed_rank_biserial(d) == pytest.approx(1.0)
+    # mixed: exact Rp/Rn from |d| ranks
+    d2 = np.array([2.0, -1.0, 3.0])  # ranks of |d|: 1->2, -1->1, 3->3 ; Rp=2+3=5, Rn=1
+    assert stats._signed_rank_biserial(d2) == pytest.approx((5 - 1) / (5 + 1))
+    assert stats._signed_rank_biserial(np.zeros(4)) == 0.0
+
+
+def test_paired_bootstrap_ci_deterministic_and_brackets_mean() -> None:
+    lo, hi = stats._bootstrap_mean_paired(np.array([0.5, 0.7, 0.6, 0.8, 0.9]), n_bootstrap=500, seed=7)
+    lo2, hi2 = stats._bootstrap_mean_paired(np.array([0.5, 0.7, 0.6, 0.8, 0.9]), n_bootstrap=500, seed=7)
+    assert (lo, hi) == (lo2, hi2)  # deterministic with fixed seed
+    assert lo <= 0.7 <= hi  # brackets the mean difference (~0.7)
+
+
+def test_paired_drops_incomplete_pair_with_warning() -> None:
+    df = pd.DataFrame(
+        {
+            "sample_name": ["s1", "s1", "s2", "s2", "s3"],  # s3 has only inside
+            "region": ["inside", "outside", "inside", "outside", "inside"],
+            "val": [2.0, 1.0, 2.5, 1.2, 3.0],
+        }
+    )
+    state.put_table("io", df, spec={"tool": "test"})
+    res = stats.compare_groups("io", "val", group_col="region", test="paired_t", n_bootstrap=100)
+    row = state.get_table(res["result_table"]).iloc[0]
+    assert row["n_pairs"] == 2
+    assert row["n_dropped_incomplete"] == 1
+    assert any("incomplete" in w for w in res["warnings"])
+
+
+def test_paired_auto_stays_independent() -> None:
+    _paired_inside_outside_table()
+    res = stats.compare_groups("io", "val", group_col="region", n_bootstrap=100)  # test=auto
+    assert res["test"] == "welch_ttest"
+
+
+def test_paired_object_level_rejects_duplicates() -> None:
+    # forcing object level on a multi-object-per-sample table -> unpairable duplicates
+    df = pd.DataFrame(
+        {
+            "sample_name": ["s1", "s1", "s1", "s1"],
+            "region": ["inside", "inside", "outside", "outside"],
+            "val": [2.0, 2.2, 1.0, 1.1],
+        }
+    )
+    state.put_table("io", df, spec={"tool": "test"})
+    with pytest.raises(ValueError):
+        stats.compare_groups("io", "val", group_col="region", test="wilcoxon", level="object")
+
+
+def test_paired_raw_object_duplicates_ok_at_sample_level() -> None:
+    # many cells per sample x region is fine at auto/sample level (aggregated first)
+    df = pd.DataFrame(
+        {
+            "sample_name": ["s1", "s1", "s1", "s1", "s2", "s2", "s2", "s2"],
+            "region": ["inside", "inside", "outside", "outside"] * 2,
+            "val": [2.0, 2.2, 1.0, 1.1, 2.5, 2.7, 1.3, 1.2],
+        }
+    )
+    state.put_table("io", df, spec={"tool": "test"})
+    res = stats.compare_groups("io", "val", group_col="region", test="paired_t", n_bootstrap=100)
+    assert state.get_table(res["result_table"]).iloc[0]["n_pairs"] == 2
+
+
+def test_paired_requires_two_pairs() -> None:
+    df = pd.DataFrame(
+        {"sample_name": ["s1", "s1"], "region": ["inside", "outside"], "val": [2.0, 1.0]}
+    )
+    state.put_table("io", df, spec={"tool": "test"})
+    with pytest.raises(ValueError):
+        stats.compare_groups("io", "val", group_col="region", test="wilcoxon")
+
+
+def test_paired_missing_sample_col_errors() -> None:
+    df = pd.DataFrame({"region": ["inside", "outside", "inside", "outside"], "val": [2.0, 1.0, 2.5, 1.2]})
+    state.put_table("io", df, spec={"tool": "test"})
+    with pytest.raises(ValueError):
+        stats.compare_groups("io", "val", group_col="region", sample_col="sample_name", test="wilcoxon")
+
+
+def test_pseudoreplication_warning_on_clustered_object_level() -> None:
+    df = pd.DataFrame(
+        {
+            "sample_name": ["s1", "s1", "s1", "s2", "s2", "s2"],
+            "region": ["inside", "inside", "outside", "inside", "outside", "outside"],
+            "val": [2.0, 2.1, 1.0, 2.5, 1.1, 1.2],
+        }
+    )
+    state.put_table("io", df, spec={"tool": "test"})
+    res = stats.compare_groups("io", "val", group_col="region", level="object", n_bootstrap=100)
+    assert any("pseudoreplication" in w for w in res["warnings"])
