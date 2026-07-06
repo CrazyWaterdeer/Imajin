@@ -1,6 +1,6 @@
 # Inside/Outside Statistics Completion — Implementation Plan
 
-Status: plan (pre-review)
+Status: plan (revised after one Codex review; ready to implement)
 Date: 2026-07-07
 Spec: `docs/superpowers/specs/2026-07-07-inside-outside-stats-completion-design.md`
 
@@ -143,3 +143,52 @@ completing the inside/outside statistical story on top of the shipped channel-as
 
 Directional paired alternatives; a straddling/boundary class; `>2`-group paired tests;
 mixed-effects/permutation models for nested data; new plots.
+
+## Revisions from plan review (accepted Codex findings)
+
+Concrete deltas folded into the commits above:
+
+- **#4 skip background:** classify the label range **1..max** — never `lbl == 0` (background has
+  `total > 0` too). `_align` already guarantees `region_bool.shape == labels.shape`.
+- **#1 paired ordering / direction:** columns ordered as `group_a = reference_group` (baseline)
+  when given else the lexically-first, `group_b` the other; run `wilcoxon(b, a)` / `ttest_rel(b, a)`
+  so the statistic sign matches `d = b - a`. `reference_group` given but absent from the two
+  groups → `ValueError`.
+- **#2 non-destructive stamp:** `_stamp_classification` writes `{**prev, **mapping}` (preserve
+  prior `label_names` keys not re-classified) and warns when a preserved key's value changes.
+- **#6 finite filter (not just NaN):** after the pivot+`dropna`, additionally keep only
+  `np.isfinite(a) & np.isfinite(b)` pairs (drops `inf`), counted into `n_dropped`; then the
+  all-zero-`d` short-circuit. (Verified: `scipy.stats.wilcoxon(a, a)` does **not** raise — it
+  returns NaN + a RuntimeWarning — so the all-zero case must be special-cased to `stat=0, p=1`.)
+- **#8 `cohens_dz` guard:** `std(d, ddof=1) == 0` with non-zero mean → `np.nan` + warning
+  (undefined standardized effect); all-zero `d` → the `p=1` short-circuit.
+- **#9 pseudoreplication precision:** warn only when `data_level == "object"` **and**
+  `sample_col in df.columns` **and** `df.groupby([sample_col, group_col]).size().gt(1).any()`
+  (real clustering: multiple objects per `sample × group`), not merely multiple rows per sample.
+- **#5 huge-label guard:** if `labels.max()` is implausibly large (e.g. `> 5_000_000` and
+  `>> n_unique`), error suggesting `relabel_sequential` rather than allocating a giant `bincount`.
+- **#3/#16 group_counts:** for paired mode, `group_counts = {group_a: n_pairs, group_b: n_pairs}`
+  (complete-pair counts); documented in the result.
+- **#11 threading:** `call_on_main` is synchronous (returns the callee's value — `coloc`/`measure`
+  already rely on this), so the returned `prev` and the subsequent `measure_intensity` do not race.
+
+### Gate changes
+
+- **Commit 2 gate:** `pytest tests/test_tools_masks.py tests/test_tools_measure.py
+  tests/test_tools_stats.py -q` (the classify→measure→filter→compare integration path) then the
+  **full suite**.
+- **Commit 3 gate:** the two smokes are **encoded as tests** (the per-cell recipe test in Commit 2
+  and a paired-vs-scipy test in Commit 1), and Commit 3 runs the full suite (no "gate: none").
+
+### Added tests (coverage gaps #7/#10/#14/#15/#16/#18)
+
+- signed rank-biserial: assert exact `Rp`/`Rn` and value on a known example (tie-aware via
+  `rankdata`), not just sign; a ties case and a one-nonzero-diff case.
+- paired bootstrap resamples `d` (not `a`,`b` independently): deterministic CI with a fixed seed
+  brackets `mean(d)`.
+- duplicate boundary: a raw **object-level** table with many rows per `sample × region` is valid
+  (aggregates fine); only a malformed **already-sample-level** duplicate `sample × group` errors.
+- `within` denominator is total object pixels: an object partly in-region and partly off-specimen
+  classifies by object-pixel fractions.
+- circularity: same-channel classify-then-measure runs (allowed) but the tool returns the
+  exploratory-only warning.
