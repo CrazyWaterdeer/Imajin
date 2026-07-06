@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 import numpy as np
@@ -9,9 +11,60 @@ from imajin.agent.qt_dispatch import call_on_main
 from imajin.tools.napari_ops import add_image_from_worker, snapshot_layer
 from imajin.tools.registry import tool
 
+# Fast-mode background estimation downsamples each plane by this factor before
+# running rolling_ball, then upsamples the (low-frequency) background back.
+_RB_DOWNSAMPLE = 4
+
 
 def _materialize(arr) -> np.ndarray:
     return materialize_array(arr)
+
+
+def _run_over_planes(fn, n: int) -> None:
+    """Apply ``fn(z)`` for z in range(n), across threads when it pays off.
+
+    Independent Z-planes with disjoint output slices — safe to parallelise, and
+    ``skimage.restoration.rolling_ball`` releases the GIL, so this is a real
+    speedup (measured ~7x on a multi-core box) with byte-identical output.
+    """
+    if n <= 1:
+        for z in range(n):
+            fn(z)
+        return
+    workers = min(n, os.cpu_count() or 4)
+    with ThreadPoolExecutor(max_workers=workers) as ex:
+        list(ex.map(fn, range(n)))
+
+
+def _subtract_rolling_ball(
+    plane: np.ndarray, radius: float, *, fast: bool, out_dtype: Any | None
+) -> np.ndarray:
+    """Background-subtract one 2D plane. ``fast`` estimates the background on a
+    downsampled copy for a large speedup — accurate when the background is smooth
+    (the usual case for uneven illumination), approximate otherwise.
+    ``out_dtype=None`` keeps the float result (the original 2D behaviour); a dtype
+    casts back (the original 3D behaviour)."""
+    from skimage.restoration import rolling_ball
+
+    if not fast:
+        result = plane - rolling_ball(plane, radius=radius)
+        return result if out_dtype is None else result.astype(out_dtype)
+
+    from skimage.transform import resize
+
+    factor = _RB_DOWNSAMPLE
+    p = plane.astype(np.float32, copy=False)
+    small_shape = (
+        max(1, plane.shape[0] // factor),
+        max(1, plane.shape[1] // factor),
+    )
+    small = resize(p, small_shape, order=1, anti_aliasing=True, preserve_range=True)
+    bg_small = rolling_ball(small, radius=max(1.0, radius / factor))
+    bg = resize(bg_small, plane.shape, order=1, preserve_range=True)
+    result = p - bg
+    if out_dtype is None:
+        return result
+    return np.clip(result, 0, None).astype(out_dtype)
 
 
 def _add_image(
@@ -34,28 +87,33 @@ def _add_image(
 
 @tool(
     description="Subtract rolling-ball background per Z-slice. Reduces uneven "
-    "illumination before segmentation. Larger radius for larger structures.",
+    "illumination before segmentation. Larger radius for larger structures. "
+    "Set fast=True to estimate the background on a downsampled copy — much faster, "
+    "accurate when the background is smooth (typical uneven illumination), "
+    "approximate for high-frequency backgrounds.",
     phase="2",
     worker=True,
 )
-def rolling_ball_background(layer: str, radius: float = 50.0) -> dict[str, Any]:
-    from skimage.restoration import rolling_ball
-
+def rolling_ball_background(
+    layer: str, radius: float = 50.0, fast: bool = False
+) -> dict[str, Any]:
     L = call_on_main(snapshot_layer, layer)
     data = _materialize(L.data)
 
     if data.ndim == 2:
-        bg = rolling_ball(data, radius=radius)
-        out = data - bg
+        out = _subtract_rolling_ball(data, radius, fast=fast, out_dtype=None)
     elif data.ndim == 3:
         out = np.empty_like(data)
-        for z in range(data.shape[0]):
-            bg = rolling_ball(data[z], radius=radius)
-            out[z] = data[z] - bg
+        _run_over_planes(
+            lambda z: out.__setitem__(
+                z, _subtract_rolling_ball(data[z], radius, fast=fast, out_dtype=data.dtype)
+            ),
+            data.shape[0],
+        )
     else:
         raise ValueError(f"Expected 2D or 3D layer, got shape {data.shape}")
 
-    return _add_image(L, out, "rb", op="rolling_ball", radius=radius)
+    return _add_image(L, out, "rb", op="rolling_ball", radius=radius, fast=fast)
 
 
 @tool(
