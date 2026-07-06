@@ -47,3 +47,39 @@ def sample_slug_for(key: str) -> str:
     stem = Path(key).stem or "sample"
     digest = hashlib.sha1(key.encode("utf-8")).hexdigest()[:8]
     return f"{slugify_result_name(stem)}_{digest}"
+
+
+def _canonical_dir(path: str | os.PathLike[str]) -> str:
+    return str(Path(path).expanduser().absolute()).replace("\\", "/").rstrip("/")
+
+
+def bundle_belongs_to_dir(
+    input_anchor: str | None, bundle_path: str | os.PathLike[str], directory: str | os.PathLike[str]
+) -> bool:
+    """Does this bundle cover ``directory``?
+
+    True when the bundle's stored input anchor is that directory, or the bundle
+    folder lives directly inside it (the batch case where ``root=anchor``). Anchor
+    match is by absolute path, so cross-machine matching falls back to the
+    lives-inside test; passing the bundle path explicitly always works.
+    """
+    d = _canonical_dir(directory)
+    if input_anchor and _canonical_dir(input_anchor) == d:
+        return True
+    return _canonical_dir(Path(bundle_path).parent) == d
+
+
+def diff_keys(
+    analysed_keys: list[str] | set[str], present_keys: list[str] | set[str]
+) -> dict[str, list[str]]:
+    """Three-way diff of rel-keys for resume.
+
+    ``analysed`` = complete in the bundle; ``pending`` = on disk but not in the
+    bundle (still to do); ``missing`` = in the bundle but no longer on disk.
+    """
+    analysed, present = set(analysed_keys), set(present_keys)
+    return {
+        "analysed": sorted(analysed),
+        "pending": sorted(present - analysed),
+        "missing": sorted(analysed - present),
+    }
