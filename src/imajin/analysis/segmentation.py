@@ -270,6 +270,34 @@ def dilate_binary_um(
     return ndi.binary_dilation(binary, structure=structure)
 
 
+def erode_binary_um(
+    binary: np.ndarray,
+    *,
+    spacing: tuple[float, ...],
+    radius_um: float,
+) -> np.ndarray:
+    """Binary erosion by a physical radius, the mirror of :func:`dilate_binary_um`.
+
+    Uses the same per-axis pixel-radius structuring element so a dilate/erode pair by the
+    same ``radius_um`` is symmetric. ``radius_um <= 0`` returns ``binary`` unchanged. Note
+    ``scipy.ndimage.binary_erosion`` treats out-of-array voxels as False, so callers that
+    eroded a 2D mask broadcast across Z must erode the 2D plane *before* broadcasting, or the
+    top/bottom planes are wiped.
+    """
+    from scipy import ndimage as ndi
+
+    if radius_um <= 0:
+        return binary
+    pixel_radius_per_axis: list[int] = []
+    for sp in spacing[-binary.ndim:]:
+        pr = max(1, int(round(float(radius_um) / float(sp))))
+        pixel_radius_per_axis.append(pr)
+    structure = np.ones(
+        tuple(2 * r + 1 for r in pixel_radius_per_axis), dtype=bool
+    )
+    return ndi.binary_erosion(binary, structure=structure)
+
+
 def estimate_local_background(
     image: np.ndarray,
     *,
