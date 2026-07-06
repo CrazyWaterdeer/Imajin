@@ -17,6 +17,7 @@ from imajin.tools import preprocess  # noqa: F401, E402
 from imajin.tools import segment  # noqa: F401, E402
 from imajin.tools import boundary  # noqa: F401, E402
 from imajin.tools import measure  # noqa: F401, E402
+from imajin.tools import masks  # noqa: F401, E402
 from imajin.tools import coloc  # noqa: F401, E402
 from imajin.tools import view  # noqa: F401, E402
 from imajin.tools import trace  # noqa: F401, E402
