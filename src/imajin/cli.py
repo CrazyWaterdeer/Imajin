@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import importlib
 import os
+import shutil
 import sys
 
 
@@ -38,20 +39,51 @@ def _apply_ui_scale_env(ui_scale_setting: str) -> None:
     os.environ.setdefault("QT_SCALE_FACTOR_ROUNDING_POLICY", "PassThrough")
 
 
-def _setup_input_method_env() -> None:
-    """Preserve the desktop IME for CJK text entry before Qt starts."""
-    if os.environ.get("QT_IM_MODULE"):
-        return
+def _detect_desktop_ime() -> str | None:
+    """Which CJK input-method engine is available: ``"fcitx"``, ``"ibus"``, or None.
+
+    Honour an explicit ``QT_IM_MODULE`` or the desktop ``GTK_IM_MODULE`` /
+    ``XMODIFIERS`` first, then fall back to detecting an installed engine binary
+    (the user may have installed fcitx5 without exporting the env vars).
+    """
+    mod = os.environ.get("QT_IM_MODULE", "").lower()
+    if mod in {"fcitx", "ibus"}:
+        return mod
     for key in ("GTK_IM_MODULE", "XMODIFIERS"):
         value = os.environ.get(key, "").lower()
         if "fcitx" in value:
-            os.environ["QT_IM_MODULE"] = "fcitx"
-            return
+            return "fcitx"
         if "ibus" in value:
-            os.environ["QT_IM_MODULE"] = "ibus"
-            return
-    if _is_wsl() and "wayland" in os.environ.get("QT_QPA_PLATFORM", "wayland").lower():
-        os.environ["QT_IM_MODULE"] = "wayland"
+            return "ibus"
+    if shutil.which("fcitx5") or shutil.which("fcitx"):
+        return "fcitx"
+    if shutil.which("ibus-daemon"):
+        return "ibus"
+    return None
+
+
+def _setup_input_method_env() -> None:
+    """Route CJK (Korean/Japanese/Chinese) text input to a real IME before Qt starts.
+
+    fcitx/ibus reach Qt through XIM, which only works on the X11 (``xcb``) platform.
+    WSLg's Wayland compositor has no working CJK text-input path, so under Wayland
+    the composed keys leak through Qt and read as shortcuts ("한글 입력이 단축키처럼
+    작동"). When an engine is present we therefore both select it and force ``xcb``.
+    With no engine we leave ``QT_IM_MODULE`` unset — the old ``=wayland`` stub
+    swallowed keystrokes without composing anything.
+    """
+    ime = _detect_desktop_ime()
+    if ime is None:
+        return
+    os.environ.setdefault("QT_IM_MODULE", ime)
+    os.environ.setdefault("GTK_IM_MODULE", ime)
+    os.environ.setdefault("XMODIFIERS", f"@im={ime}")
+    if _is_wsl():
+        # Force XWayland so the engine's XIM bridge reaches Qt. Only override the
+        # wayland-preferring default (respect an explicit non-wayland pin).
+        current = os.environ.get("QT_QPA_PLATFORM", "")
+        if not current or "wayland" in current.lower():
+            os.environ["QT_QPA_PLATFORM"] = "xcb"
 
 
 def _setup_wsl_env() -> None:
