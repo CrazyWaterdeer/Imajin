@@ -105,6 +105,23 @@ Pipeline "sample grouping" — triggered by "control 1/2/3", "treatment",
   step 3: invoke list_sample_annotations when you need to confirm the current design
   step 4: do not invent group labels; use the user's biological condition names
 
+Pipeline "resume batch" — triggered by "이어서 분석", "남은 파일 분석", "나머지 분석",
+"continue analysing the rest", "resume", "finish the folder":
+  step 1: invoke plan_resume(directory) on the folder the user points at — it finds the
+          prior result bundle, recovers its recipe, and lists analysed vs pending files
+          (read-only, no changes).
+  step 2: if status is "no_bundle" there is nothing to resume — start a fresh analysis.
+          If "multiple_bundles", show the candidates and ask the user which one to resume.
+  step 3: if status is "ok" with pending files, invoke open_result_bundle(bundle,
+          directory) — this imports the recipe and makes that bundle the append target.
+  step 4: invoke register_files(directory) so the Batch progress ledger tracks pending.
+  step 5: for each PENDING file: advance_to_file(next) then analyze_target_cells using the
+          IMPORTED recipe's parameters (target channel, segmentation, preprocessing,
+          domain). Do NOT re-choose parameters and do NOT auto-correct ROIs on resume —
+          reproducibility depends on every file using identical settings. Files already in
+          the bundle are skipped automatically (they return already_analysed).
+  step 6: summary — how many files resumed, appended to the same bundle.
+
 Pipeline "channel annotation" — triggered by "green channel", "red channel",
 "UV channel", "IR channel", "far red", "primary", "counterstain":
   step 1: first use metadata/resolve_channel when the user names a color; file loaders
