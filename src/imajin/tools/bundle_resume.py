@@ -156,3 +156,48 @@ def plan_resume(directory: str) -> dict[str, Any]:
             else "Nothing pending — every file under this folder is already in the bundle."
         ),
     }
+
+
+@tool(
+    description="Open a prior result bundle to RESUME its analysis: make it the append "
+    "target, import its recipe so pending files use identical parameters, and skip files it "
+    "already covers. Call after plan_resume confirms exactly one bundle. Pass the folder "
+    "being resumed as `directory` so already-analysed files match by relative path across "
+    "machines. After this, analyse the PENDING files with the imported parameters.",
+    phase="7",
+)
+def open_result_bundle(bundle_path: str, directory: str | None = None) -> dict[str, Any]:
+    from imajin.result_bundles import promote_to_process_bundle, read_sample_index
+    from imajin.session import set_resume_scope
+    from imajin.tools.files import _canonical_path_text
+    from imajin.tools.recipe_import import import_recipe_from_bundle
+
+    bundle = Path(bundle_path).expanduser()
+    promote_to_process_bundle(bundle)
+    try:
+        recipe_info = import_recipe_from_bundle(str(bundle))
+    except Exception as exc:  # noqa: BLE001 - a bundle without a recipe still resumes
+        recipe_info = {"recipe_name": None, "imported": None, "note": f"no recipe recovered: {exc}"}
+
+    idx = read_sample_index(bundle)
+    done_keys = {
+        e["key"] for e in idx["entries"] if e.get("status") == "complete" and e.get("key")
+    }
+    anchor = (
+        _canonical_path_text(directory)
+        if directory
+        else (idx.get("input_anchor") or str(bundle.parent))
+    )
+    set_resume_scope(anchor=anchor, done_keys=done_keys, bundle=str(bundle))
+    return {
+        "bundle": str(bundle),
+        "recipe_name": recipe_info.get("recipe_name"),
+        "recipe_params": recipe_info.get("imported"),
+        "analysed": len(done_keys),
+        "anchor": anchor,
+        "note": (
+            "This bundle is now the append target and its recipe is imported. Analyse the "
+            "PENDING files with these same parameters — do not re-choose them or auto-correct "
+            "ROIs; files it already covers are skipped automatically."
+        ),
+    }

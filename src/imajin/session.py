@@ -295,6 +295,28 @@ def reset_runs() -> None:
     session.run_counter[0] = 0
 
 
+# Resume scope: set when a prior result bundle is opened for append, so the
+# interactive re-run guard skips files the bundle already covers. Keyed by
+# anchor-relative path (stable across mounts/platforms), not absolute path.
+_resume_scope: dict[str, Any] | None = None
+
+
+def set_resume_scope(
+    anchor: str, done_keys: "set[str] | list[str]", bundle: str | None = None
+) -> None:
+    global _resume_scope
+    _resume_scope = {"anchor": str(anchor), "done_keys": set(done_keys), "bundle": bundle}
+
+
+def get_resume_scope() -> dict[str, Any] | None:
+    return _resume_scope
+
+
+def clear_resume_scope() -> None:
+    global _resume_scope
+    _resume_scope = None
+
+
 def put_qc_record(
     source: str,
     status: QCStatus = "not_checked",
