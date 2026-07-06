@@ -27,6 +27,7 @@ import asyncio
 import importlib.util
 import json
 import os
+import queue
 import shutil
 import tempfile
 import threading
@@ -195,8 +196,22 @@ def _force_subscription_env():
             os.environ.update(saved)
 
 
+# Marks the end of a turn's event stream across the loop→worker queue.
+_SENTINEL = object()
+
+
 class ClaudeAgentRunner:
-    """Runner backed by the local Claude Code subscription via the Claude Agent SDK."""
+    """Runner backed by the local Claude Code subscription via the Claude Agent SDK.
+
+    Owns **one** persistent asyncio loop on a dedicated daemon thread and **one**
+    persistent :class:`ClaudeSDKClient` for its whole lifetime. Each ``turn()``
+    reuses that connection (``query`` + ``receive_response``) and streams events
+    back to the chat worker thread via a queue. This replaces the old
+    new-loop-per-turn + one-shot ``query()`` design, which — because it closed a
+    loop while the SDK's subprocess/tasks were still pending and reused a
+    loop-bound MCP server across loops — orphaned ``claude`` subprocesses and
+    eventually froze the chat (worst on Windows' ProactorEventLoop).
+    """
 
     name = "claude-agent"
 
@@ -216,16 +231,43 @@ class ClaudeAgentRunner:
         self._server: Any | None = None
         self._allowed: list[str] = []
         self._cwd = tempfile.gettempdir()
+        # Persistent async machinery (created lazily on the first turn).
+        self._loop: asyncio.AbstractEventLoop | None = None
+        self._thread: threading.Thread | None = None
+        self._client: Any | None = None
 
     # -- lifecycle (mirrors AgentRunner) ------------------------------------
 
     def cancel(self) -> None:
         self._cancelled = True
+        client, loop = self._client, self._loop
+        if client is not None and loop is not None:
+            # Best-effort: ask the running turn to stop. Fire-and-forget.
+            try:
+                asyncio.run_coroutine_threadsafe(client.interrupt(), loop)
+            except Exception:  # noqa: BLE001
+                pass
 
     def reset(self) -> None:
-        # Drop the resumed CLI session so the next turn starts a fresh conversation.
-        self._session_id = None
+        # Drop the live connection so the next turn starts a fresh conversation.
         self._cancelled = False
+        self._session_id = None
+        self._disconnect()
+
+    def close(self) -> None:
+        """Tear down the connection, loop, and thread. Call when discarding the runner."""
+        self._disconnect()
+        loop, thread = self._loop, self._thread
+        self._loop, self._thread = None, None
+        if loop is not None:
+            loop.call_soon_threadsafe(loop.stop)
+        if thread is not None:
+            thread.join(timeout=5)
+        if loop is not None:
+            try:
+                loop.close()
+            except Exception:  # noqa: BLE001
+                pass
 
     # -- tool bridge ---------------------------------------------------------
 
@@ -287,49 +329,105 @@ class ClaudeAgentRunner:
             resume=self._session_id,
         )
 
-    # -- turn driving --------------------------------------------------------
+    # -- persistent loop + connection ---------------------------------------
 
-    async def _arun(self, user_text: str) -> Any:
+    def _ensure_loop(self) -> None:
+        if self._loop is not None:
+            return
+        loop = asyncio.new_event_loop()
+        thread = threading.Thread(
+            target=loop.run_forever, name="claude-agent-loop", daemon=True
+        )
+        thread.start()
+        self._loop, self._thread = loop, thread
+
+    def _call(self, coro: Any, timeout: float | None = None) -> Any:
+        """Run ``coro`` on the persistent loop from this (worker) thread; block."""
+        assert self._loop is not None
+        return asyncio.run_coroutine_threadsafe(coro, self._loop).result(timeout)
+
+    def _ensure_connected(self) -> None:
+        self._ensure_loop()
+        if self._client is not None:
+            return
+        sdk = _sdk()
         server, allowed = self._build_server()
         options = self._build_options(server, allowed)
+        client = sdk.ClaudeSDKClient(options=options)
+        # The CLI subprocess is spawned during connect(); strip API-key env vars
+        # for that window so it authenticates against the subscription OAuth.
+        with _force_subscription_env():
+            self._call(client.connect())
+        self._client = client
+
+    def _disconnect(self) -> None:
+        client = self._client
+        self._client = None
+        if client is None or self._loop is None:
+            return
+        try:
+            asyncio.run_coroutine_threadsafe(
+                client.disconnect(), self._loop
+            ).result(timeout=10)
+        except Exception:  # noqa: BLE001 - best-effort teardown
+            pass
+
+    # -- turn driving --------------------------------------------------------
+
+    async def _adrive_turn(self, user_text: str, q: queue.Queue) -> None:
         id_to_name: dict[str, str] = {}
         try:
-            async for message in _sdk().query(prompt=user_text, options=options):
+            await self._client.query(user_text)
+            async for message in self._client.receive_response():
                 if self._cancelled:
                     break
                 if hasattr(message, "num_turns") and hasattr(message, "session_id"):
                     self._session_id = getattr(message, "session_id", None) or self._session_id
                 for event in _translate_message(message, id_to_name):
-                    yield event
+                    q.put(event)
         except Exception as exc:  # noqa: BLE001 - report in-stream, don't crash the worker
-            self._session_id = None  # a stale resumed session is the usual culprit
-            yield TextDelta(text=f"\n[subscription agent error] {type(exc).__name__}: {exc}")
-            yield TurnDone(stop_reason="error", total_usage={})
+            q.put(TextDelta(text=f"\n[subscription agent error] {type(exc).__name__}: {exc}"))
+            q.put(TurnDone(stop_reason="error", total_usage={}))
+            # A broken connection is the usual culprit — drop it so the next turn
+            # reconnects fresh (also clears any stale resumed session id).
+            client, self._client, self._session_id = self._client, None, None
+            if client is not None:
+                try:
+                    await client.disconnect()
+                except Exception:  # noqa: BLE001
+                    pass
+        finally:
+            q.put(_SENTINEL)
 
     def turn(self, user_text: str) -> Iterator[Any]:
         """Drive one turn, yielding ``RunEvent`` objects synchronously.
 
-        The SDK is async and the chat dock consumes a sync generator on a worker
-        thread, so we step the async generator with a per-turn event loop. A fresh
-        loop per turn keeps this correct even if successive turns run on different
-        worker threads.
+        Connect lazily (once), run the turn on the persistent loop, and stream its
+        events back through a queue to this (chat worker) thread. The connection —
+        and its ``claude`` subprocess — survives across turns and is torn down only
+        by :meth:`reset` / :meth:`close`.
         """
         self._cancelled = False
-        loop = asyncio.new_event_loop()
-        agen = self._arun(user_text)
         try:
-            asyncio.set_event_loop(loop)
-            with _force_subscription_env():
-                while True:
-                    try:
-                        event = loop.run_until_complete(agen.__anext__())
-                    except StopAsyncIteration:
-                        break
-                    yield event
+            self._ensure_connected()
+        except Exception as exc:  # noqa: BLE001 - connect failed; report and bail
+            self._disconnect()
+            yield TextDelta(text=f"\n[subscription agent error] {type(exc).__name__}: {exc}")
+            yield TurnDone(stop_reason="error", total_usage={})
+            return
+
+        q: queue.Queue = queue.Queue()
+        future = asyncio.run_coroutine_threadsafe(
+            self._adrive_turn(user_text, q), self._loop
+        )
+        try:
+            while True:
+                item = q.get()
+                if item is _SENTINEL:
+                    break
+                yield item
         finally:
             try:
-                loop.run_until_complete(agen.aclose())
-            except Exception:  # noqa: BLE001 - best-effort teardown
+                future.result(timeout=5)
+            except Exception:  # noqa: BLE001 - already surfaced in-stream
                 pass
-            asyncio.set_event_loop(None)
-            loop.close()

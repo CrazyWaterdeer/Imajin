@@ -121,3 +121,101 @@ def test_build_server_bridges_registry_tools():
     assert all(name.startswith("mcp__imajin__") for name in allowed)
     # cached on second call
     assert runner._build_server()[1] is allowed
+
+
+def test_turn_streams_events_and_reuses_one_persistent_connection(monkeypatch):
+    """The runner connects once, reuses that client + loop across turns, and the
+    close() teardown disconnects it — the fix for the per-turn-loop subprocess leak."""
+    import imajin.tools  # noqa: F401  populate the registry the bridge reads
+
+    from imajin.agent.providers import claude_agent as ca
+
+    created: list = []
+
+    class _FakeClient:
+        def __init__(self, options=None):
+            self.options = options
+            self.connects = 0
+            self.disconnects = 0
+            self.queries: list[str] = []
+            created.append(self)
+
+        async def connect(self):
+            self.connects += 1
+
+        async def disconnect(self):
+            self.disconnects += 1
+
+        async def query(self, prompt):
+            self.queries.append(prompt)
+
+        async def receive_response(self):
+            yield SimpleNamespace(content=[SimpleNamespace(text="hi there")])
+            yield SimpleNamespace(
+                num_turns=1,
+                session_id="sess_1",
+                subtype="success",
+                stop_reason=None,
+                usage={"input_tokens": 3, "output_tokens": 4},
+            )
+
+        async def interrupt(self):
+            pass
+
+    fake_sdk = SimpleNamespace(
+        tool=lambda *a, **k: (lambda fn: fn),
+        create_sdk_mcp_server=lambda **k: object(),
+        ClaudeAgentOptions=lambda **k: SimpleNamespace(**k),
+        ClaudeSDKClient=_FakeClient,
+    )
+    monkeypatch.setattr(ca, "_sdk", lambda: fake_sdk)
+
+    runner = ca.ClaudeAgentRunner(model="sonnet", system_prompt="x")
+    try:
+        events1 = list(runner.turn("hello"))
+        events2 = list(runner.turn("again"))
+    finally:
+        runner.close()
+
+    assert any(isinstance(e, TextDelta) and e.text == "hi there" for e in events1)
+    assert isinstance(events1[-1], TurnDone)
+    assert isinstance(events2[-1], TurnDone)
+    # One client, connected once, reused for both turns, disconnected by close().
+    assert len(created) == 1
+    assert created[0].connects == 1
+    assert created[0].queries == ["hello", "again"]
+    assert created[0].disconnects == 1
+    assert runner._session_id == "sess_1"
+    # The background loop/thread are gone after close().
+    assert runner._loop is None and runner._thread is None
+
+
+def test_turn_reports_connect_failure_in_stream(monkeypatch):
+    from imajin.agent.providers import claude_agent as ca
+
+    class _BoomClient:
+        def __init__(self, options=None):
+            pass
+
+        async def connect(self):
+            raise RuntimeError("no claude login")
+
+        async def disconnect(self):
+            pass
+
+    fake_sdk = SimpleNamespace(
+        tool=lambda *a, **k: (lambda fn: fn),
+        create_sdk_mcp_server=lambda **k: object(),
+        ClaudeAgentOptions=lambda **k: SimpleNamespace(**k),
+        ClaudeSDKClient=_BoomClient,
+    )
+    monkeypatch.setattr(ca, "_sdk", lambda: fake_sdk)
+
+    runner = ca.ClaudeAgentRunner(model="sonnet", system_prompt="x")
+    try:
+        events = list(runner.turn("hi"))
+    finally:
+        runner.close()
+
+    assert any(isinstance(e, TextDelta) and "no claude login" in e.text for e in events)
+    assert isinstance(events[-1], TurnDone) and events[-1].stop_reason == "error"

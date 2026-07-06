@@ -47,15 +47,45 @@ def test_input_method_env_does_not_override_user_choice(monkeypatch) -> None:
     assert cli.os.environ["QT_IM_MODULE"] == "ibus"
 
 
-def test_input_method_env_defaults_to_wayland_on_wsl(monkeypatch) -> None:
+def test_input_method_env_forces_xcb_on_wsl_when_ime_present(monkeypatch) -> None:
     from imajin import cli
 
     monkeypatch.delenv("QT_IM_MODULE", raising=False)
-    monkeypatch.delenv("GTK_IM_MODULE", raising=False)
-    monkeypatch.delenv("XMODIFIERS", raising=False)
+    monkeypatch.setenv("GTK_IM_MODULE", "fcitx")
+    monkeypatch.setenv("XMODIFIERS", "@im=fcitx")
     monkeypatch.setenv("QT_QPA_PLATFORM", "wayland;xcb")
     monkeypatch.setattr(cli, "_is_wsl", lambda: True)
 
     cli._setup_input_method_env()
 
-    assert cli.os.environ["QT_IM_MODULE"] == "wayland"
+    assert cli.os.environ["QT_IM_MODULE"] == "fcitx"
+    # fcitx's XIM bridge only reaches Qt under XWayland, not WSLg's Wayland.
+    assert cli.os.environ["QT_QPA_PLATFORM"] == "xcb"
+
+
+def test_detect_desktop_ime_finds_installed_fcitx_binary(monkeypatch) -> None:
+    from imajin import cli
+
+    monkeypatch.delenv("QT_IM_MODULE", raising=False)
+    monkeypatch.delenv("GTK_IM_MODULE", raising=False)
+    monkeypatch.delenv("XMODIFIERS", raising=False)
+    monkeypatch.setattr(
+        cli.shutil, "which", lambda name: "/usr/bin/fcitx5" if name == "fcitx5" else None
+    )
+
+    assert cli._detect_desktop_ime() == "fcitx"
+
+
+def test_input_method_env_no_engine_leaves_qt_im_module_unset(monkeypatch) -> None:
+    from imajin import cli
+
+    monkeypatch.delenv("QT_IM_MODULE", raising=False)
+    monkeypatch.delenv("GTK_IM_MODULE", raising=False)
+    monkeypatch.delenv("XMODIFIERS", raising=False)
+    monkeypatch.setattr(cli.shutil, "which", lambda name: None)
+    monkeypatch.setattr(cli, "_is_wsl", lambda: True)
+
+    cli._setup_input_method_env()
+
+    # No IME engine → do NOT set the wayland stub that swallowed keystrokes.
+    assert "QT_IM_MODULE" not in cli.os.environ
