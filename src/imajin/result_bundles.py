@@ -173,6 +173,103 @@ def register_table_spec(table_name: str, spec: dict[str, Any]) -> None:
     write_bundle_metadata(bundle, seed)
 
 
+def _as_schema_v3(seed: dict[str, Any]) -> dict[str, Any]:
+    """Return ``seed`` as a schema-v3 dict, normalising a flat (v1) seed if needed."""
+    if seed.get("schema_version") in (2, 3):
+        return seed
+    normalized = _normalize_bundle_metadata(seed)
+    return {
+        "schema_version": 3,
+        "recipe_params": dict(normalized.get("recipe_params") or {}),
+        "run_context": dict(normalized.get("run_context") or {}),
+        "environment": dict(normalized.get("environment") or {}),
+        "table_specs": dict(seed.get("table_specs") or {}),
+        "outputs": list(seed.get("outputs") or []),
+    }
+
+
+def record_sample_index_entry(
+    bundle: Path | str,
+    *,
+    source_file: str,
+    anchor: str | Path | None,
+    method: str | None = None,
+    mode: str | None = None,
+    status: str = "complete",
+    table: str | None = None,
+    outputs: list[str] | None = None,
+) -> dict[str, Any]:
+    """Upsert one entry into the bundle's durable ``samples`` index (the commit point).
+
+    This is the authoritative per-sample done-record used to resume a batch:
+    independent of how many measurement rows the sample produced (a zero-object
+    sample still counts as complete). Keyed by the source file's path relative to
+    ``anchor`` (mount-agnostic; see :mod:`imajin.analysis.resume`). Written last so a
+    crash mid-sample simply leaves the sample unrecorded → treated as pending.
+    """
+    from imajin.analysis.resume import file_signature, rel_key, sample_slug_for
+
+    anchor_for_key = anchor if anchor is not None else Path(source_file).parent
+    key = rel_key(source_file, anchor_for_key)
+    entry = {
+        "key": key,
+        "source_file_abs": str(Path(source_file).expanduser().absolute()),
+        "signature": file_signature(source_file),
+        "sample_slug": sample_slug_for(key),
+        "method": method,
+        "mode": mode,
+        "status": status,
+        "table": table,
+        "outputs": list(outputs or []),
+    }
+    seed = _as_schema_v3(read_bundle_metadata(bundle))
+    # Top-level `sample_index` (distinct from `run_context.samples`, which holds the
+    # current run's redacted summaries and is rebuilt at finalize).
+    index = list(seed.get("sample_index") or [])
+    for i, existing in enumerate(index):
+        if isinstance(existing, dict) and existing.get("key") == key:
+            index[i] = entry
+            break
+    else:
+        index.append(entry)
+    seed["sample_index"] = index
+    if anchor is not None and not seed.get("input_anchor"):
+        seed["input_anchor"] = str(Path(anchor).expanduser().absolute())
+    write_bundle_metadata(bundle, seed)
+    return entry
+
+
+def read_sample_index(bundle: Path | str) -> dict[str, Any]:
+    """Read the durable ``samples`` index, or infer one from a legacy bundle.
+
+    Returns ``{entries, input_anchor, legacy_inferred}``. Legacy bundles (written
+    before the index existed) infer analysed samples from the ``outputs`` slugs and
+    set ``legacy_inferred=True`` so callers can warn that done-detection is
+    approximate (no per-file key / source path).
+    """
+    seed = read_bundle_metadata(bundle)
+    index = seed.get("sample_index")
+    if isinstance(index, list) and index:
+        return {
+            "entries": index,
+            "input_anchor": seed.get("input_anchor"),
+            "legacy_inferred": False,
+        }
+    inferred: dict[str, dict[str, Any]] = {}
+    for out in seed.get("outputs") or []:
+        if not isinstance(out, dict):
+            continue
+        md = out.get("metadata") if isinstance(out.get("metadata"), dict) else {}
+        slug = md.get("sample_slug") or md.get("sample")
+        if slug and slug not in inferred:
+            inferred[slug] = {"key": None, "sample_slug": slug, "status": "complete"}
+    return {
+        "entries": list(inferred.values()),
+        "input_anchor": seed.get("input_anchor"),
+        "legacy_inferred": True,
+    }
+
+
 def current_bundle() -> Path | None:
     ctx = _active_bundle.get()
     if ctx is not None:
@@ -414,17 +511,20 @@ def finalize_bundle_metadata(
     # Drop fields that schema_v3 no longer carries.
     run_context.pop("tables", None)
 
-    write_bundle_metadata(
-        bundle,
-        {
-            "schema_version": 3,
-            "recipe_params": dict(recipe_params),
-            "run_context": run_context,
-            "environment": environment,
-            "table_specs": dict(seed.get("table_specs") or {}),
-            "outputs": list(seed.get("outputs") or []),
-        },
-    )
+    finalized = {
+        "schema_version": 3,
+        "recipe_params": dict(recipe_params),
+        "run_context": run_context,
+        "environment": environment,
+        "table_specs": dict(seed.get("table_specs") or {}),
+        "outputs": list(seed.get("outputs") or []),
+        # Preserve the durable resume index + its anchor across finalisation
+        # (they are written incrementally per sample, not rebuilt here).
+        "sample_index": list(seed.get("sample_index") or []),
+    }
+    if seed.get("input_anchor"):
+        finalized["input_anchor"] = seed["input_anchor"]
+    write_bundle_metadata(bundle, finalized)
 
 
 def _redact_sample(sample: dict[str, Any]) -> dict[str, Any]:
