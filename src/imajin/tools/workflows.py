@@ -89,6 +89,34 @@ def _record_interactive_run(
     )
 
 
+def _resume_skip(analysis_file_key: str) -> dict[str, Any] | None:
+    """Skip a file a resumed bundle already covers, matched by anchor-relative key.
+
+    Enforced here (not just in the prompt) so re-running a done file during resume is
+    impossible by default, and robust across mounts/platforms (WSL↔Windows) where the
+    absolute path — and thus the ledger's exact key — would differ.
+    """
+    from imajin.session import get_resume_scope
+
+    scope = get_resume_scope()
+    if not scope:
+        return None
+    from imajin.analysis.resume import rel_key
+
+    key = rel_key(analysis_file_key, scope["anchor"])
+    if key in scope["done_keys"]:
+        return {
+            "ok": True,
+            "already_analysed": True,
+            "resumed_skip": True,
+            "message": (
+                f"{_run_label(analysis_file_key)} is already in the resumed bundle "
+                f"({key}); pass rerun=True to recompute."
+            ),
+        }
+    return None
+
+
 @tool(
     description="High-level target object analysis workflow. Resolves the target "
     "channel, optionally preprocesses it, segments target-positive objects/ROIs, "
@@ -163,6 +191,9 @@ def analyze_target_cells(
                     f"(table {prior_table}); pass rerun=True to recompute."
                 ),
             }
+        resumed = _resume_skip(analysis_file_key)
+        if resumed is not None:
+            return resumed
 
     seg_input_layer, pre_step, pre_record = _run_preprocess_step(
         target_layer,
