@@ -11,6 +11,8 @@ wheels/
 
 # Generated analysis outputs
 results/
+# Measurement tables exported next to input data (regionprops CSVs)
+*_measurements.csv
 
 # Git worktrees (isolated workspaces for feature development)
 .worktrees/
