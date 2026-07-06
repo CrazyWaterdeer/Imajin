@@ -23,7 +23,12 @@ import numpy as np
 
 from imajin.agent.qt_dispatch import call_on_main
 from imajin.analysis.arrays import layer_axes_from_metadata, materialize_array
-from imajin.analysis.segmentation import resolve_boundary_mask
+from imajin.analysis.segmentation import (
+    dilate_binary_um,
+    erode_binary_um,
+    resolve_boundary_mask,
+    voxel_spacing,
+)
 from imajin.tools.napari_ops import add_labels_from_worker, snapshot_layer
 from imajin.tools.registry import tool
 
@@ -102,6 +107,87 @@ def _combine_masks(
     if within is not None:
         out = out & within
     return out
+
+
+def _morph_um(
+    mask: np.ndarray,
+    kind: str,
+    *,
+    broadcast_z: bool,
+    spacing: tuple[float, ...],
+    radius_um: float,
+) -> np.ndarray:
+    """Erode/dilate a mask by a physical radius, at the right dimensionality.
+
+    When ``broadcast_z`` (the mask is a 2D region broadcast across a 3D stack's Z, i.e. a
+    cylinder), the morphology is done on the single YX plane and re-broadcast — otherwise a
+    3D erosion would treat the volume's top/bottom borders as background and wipe those
+    planes. A natively 3D mask gets full-3D morphology.
+    """
+    fn = erode_binary_um if kind == "erode" else dilate_binary_um
+    mask = np.asarray(mask)
+    if broadcast_z and mask.ndim == 3:
+        out2d = fn(np.asarray(mask[0]), spacing=tuple(spacing[-2:]), radius_um=radius_um)
+        return np.broadcast_to(out2d[None], mask.shape)
+    return fn(mask, spacing=spacing, radius_um=radius_um)
+
+
+def _partition(
+    region_aligned: np.ndarray,
+    within_aligned: np.ndarray,
+    *,
+    region_broadcast_z: bool,
+    spacing: tuple[float, ...] | None,
+    buffer_um: float,
+) -> tuple[np.ndarray, dict[str, Any], list[str]]:
+    """Two-label inside/outside map, disjoint by construction.
+
+    ``inside = region & within`` (label 1); ``outside = within & ~region`` (label 2). A
+    positive ``buffer_um`` (with voxel ``spacing``) instead brackets the *region* boundary:
+    ``inside = erode(region) & within`` and ``outside = within & ~dilate(region)``, so an
+    ambiguous PSF/bleed-through band around the domain edge belongs to neither. The band is
+    placed around the region (green) boundary — the specimen (within) edge is not a domain
+    boundary, so it is intentionally not eroded. ``region_clipped_fraction`` reports how much
+    of ``region`` fell outside ``within`` (a large value flags misregistration / wrong layer).
+    """
+    warnings: list[str] = []
+    do_buffer = bool(buffer_um and buffer_um > 0)
+    if do_buffer and spacing is None:
+        warnings.append(
+            "boundary_buffer_um requested but the reference layer has no voxel scale; "
+            "buffer skipped"
+        )
+        do_buffer = False
+
+    if do_buffer:
+        region_er = _morph_um(
+            region_aligned, "erode",
+            broadcast_z=region_broadcast_z, spacing=spacing, radius_um=buffer_um,
+        )
+        region_di = _morph_um(
+            region_aligned, "dilate",
+            broadcast_z=region_broadcast_z, spacing=spacing, radius_um=buffer_um,
+        )
+        inside = region_er & within_aligned
+        outside = within_aligned & ~region_di
+    else:
+        inside = region_aligned & within_aligned
+        outside = within_aligned & ~region_aligned
+
+    outside = outside & ~inside  # defensive; already disjoint
+    labels = np.zeros(region_aligned.shape, dtype=np.int32)
+    labels[inside] = 1
+    labels[outside] = 2
+
+    region_voxels = int(np.asarray(region_aligned).sum())
+    stats = {
+        "inside_voxels": int(inside.sum()),
+        "outside_voxels": int(outside.sum()),
+        "region_clipped_fraction": float(
+            int((region_aligned & ~within_aligned).sum()) / max(region_voxels, 1)
+        ),
+    }
+    return labels, stats, warnings
 
 
 def _scales_disagree(scale_a: tuple[float, ...], scale_b: tuple[float, ...]) -> bool:
@@ -248,6 +334,136 @@ def mask_logic(
             "broadcast_z": broadcast_z,
             "scale_mismatch": scale_mismatch,
             "axes": "ZYX" if len(target_shape) == 3 else "YX",
+            "warnings": warnings,
+        }
+    except _MaskError as e:
+        return {"ok": False, "error": str(e)}
+
+
+@tool(
+    description="Partition an image into a two-label map for inside-vs-outside comparison: "
+    "label 1 = inside a domain region (e.g. a segmented green channel), label 2 = the rest "
+    "of the specimen. Pass region_layer (the domain) and within_layer (the specimen/tissue "
+    "bound — REQUIRED so 'outside' isn't all image background). Feed the result to "
+    "measure_intensity([signal]) to get inside/outside signal in one call (rows carry a "
+    "region column). boundary_buffer_um excludes an ambiguous band around the domain edge. "
+    "Compare per sample as log2(inside/outside), then test across biological replicates — "
+    "the two rows from one image are paired, not independent groups.",
+    phase="7",
+    worker=True,
+)
+def partition_inside_outside(
+    region_layer: str,
+    within_layer: str | None = None,
+    boundary_buffer_um: float = 0.0,
+    allow_full_frame_outside: bool = False,
+    broadcast_2d_to_3d: bool = True,
+    name: str | None = None,
+) -> dict[str, Any]:
+    try:
+        warnings: list[str] = []
+        if not within_layer and not allow_full_frame_outside:
+            raise _MaskError(
+                "outside needs a specimen bound: pass within_layer, or set "
+                "allow_full_frame_outside=True to measure against the whole frame "
+                "(background-dominated, rarely meaningful)"
+            )
+
+        snap_r, data_r, _ = _load_mask_layer(region_layer)
+        snap_w = data_w = None
+        if within_layer:
+            snap_w, data_w, _ = _load_mask_layer(within_layer)
+
+        candidates = [(snap_r, data_r)]
+        if data_w is not None:
+            candidates.append((snap_w, data_w))
+        ref_snap, ref_data = max(candidates, key=lambda sd: sd[1].ndim)
+        target_shape = tuple(int(s) for s in ref_data.shape)
+        ref_scale = tuple(ref_snap.scale) if ref_snap.scale else None
+        spacing = voxel_spacing(ref_scale, len(target_shape)) if ref_scale else None
+
+        region_aligned, region_bz = _align(
+            target_shape, _foreground(data_r), broadcast_2d_to_3d=broadcast_2d_to_3d
+        )
+        broadcast_z = region_bz
+        if data_w is not None:
+            within_aligned, within_bz = _align(
+                target_shape, _foreground(data_w), broadcast_2d_to_3d=broadcast_2d_to_3d
+            )
+            broadcast_z = broadcast_z or within_bz
+        else:
+            within_aligned = np.ones(target_shape, dtype=bool)
+            warnings.append(
+                "no within_layer: 'outside' is the whole frame minus the region and "
+                "includes all background; intensity means will be near-zero/misleading"
+            )
+
+        labels, stats, part_warnings = _partition(
+            region_aligned,
+            within_aligned,
+            region_broadcast_z=region_bz,
+            spacing=spacing,
+            buffer_um=boundary_buffer_um,
+        )
+        warnings.extend(part_warnings)
+
+        inside_voxels = stats["inside_voxels"]
+        outside_voxels = stats["outside_voxels"]
+        if inside_voxels == 0 and outside_voxels == 0:
+            raise _MaskError(
+                "partition is empty (region and within do not overlap the frame); "
+                "check the layers"
+            )
+        comparable = inside_voxels > 0 and outside_voxels > 0
+        if not comparable:
+            warnings.append(
+                "inside or outside is empty — an inside/outside comparison is not "
+                "possible from this image (only one region has voxels)"
+            )
+        clipped = stats["region_clipped_fraction"]
+        if clipped > 0.2:
+            warnings.append(
+                f"{clipped:.0%} of the region falls outside within_layer — possible "
+                "misregistration, wrong layer, or a bad specimen mask"
+            )
+        if broadcast_z:
+            warnings.append(
+                f"a 2D mask was broadcast across all {target_shape[0]} Z planes (an "
+                "extrusion; volume_um3 is a cylinder, not the true 3D specimen volume)"
+            )
+
+        label_names = {1: "inside", 2: "outside"}
+        out_name = name or f"{region_layer}_partition"
+        layer = call_on_main(
+            add_labels_from_worker,
+            labels,
+            name=out_name,
+            scale=ref_scale,
+            metadata={
+                "source_layer": region_layer,
+                "source_path": _source_path(snap_r),
+                "label_names": label_names,
+                "region_layer": region_layer,
+                "within_layer": within_layer,
+                "within_used": bool(within_layer),
+                "boundary_buffer_um": float(boundary_buffer_um),
+                "region_clipped_fraction": clipped,
+                "comparable": comparable,
+                "broadcast_z": broadcast_z,
+                "axes": "ZYX" if len(target_shape) == 3 else "YX",
+            },
+        )
+        return {
+            "ok": True,
+            "partition_layer": layer.name,
+            "inside_voxels": inside_voxels,
+            "outside_voxels": outside_voxels,
+            "within_used": bool(within_layer),
+            "region_clipped_fraction": clipped,
+            "boundary_buffer_um": float(boundary_buffer_um),
+            "comparable": comparable,
+            "broadcast_z": broadcast_z,
+            "label_names": label_names,
             "warnings": warnings,
         }
     except _MaskError as e:
