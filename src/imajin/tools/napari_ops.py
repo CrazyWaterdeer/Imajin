@@ -12,6 +12,14 @@ class LayerSnapshot:
     data: Any
     scale: tuple[float, ...]
     metadata: dict[str, Any]
+    kind: str = ""
+
+
+def _layer_kind(layer: Any) -> str:
+    k = getattr(layer, "kind", None) or getattr(layer, "_type_string", None)
+    if isinstance(k, str):
+        return k.lower()
+    return type(layer).__name__.lower()
 
 
 def snapshot_layer(name: str) -> LayerSnapshot:
@@ -28,6 +36,7 @@ def snapshot_layer(name: str) -> LayerSnapshot:
         data=layer.data,
         scale=tuple(float(s) for s in getattr(layer, "scale", ())),
         metadata=metadata,
+        kind=_layer_kind(layer),
     )
 
 
