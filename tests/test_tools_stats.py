@@ -319,6 +319,58 @@ def test_within_subject_design_warns_on_independent_test() -> None:
     assert any("paired" in w.lower() and "within-subject" in w.lower() for w in res["warnings"])
 
 
+# --- post-hoc pairwise (3+ groups) ---------------------------------------------------
+
+def test_posthoc_games_howell_for_anova() -> None:
+    rng = np.random.default_rng(1)
+    _groups_table({
+        "A": list(10 + rng.normal(0, 1, 8)),
+        "B": list(20 + rng.normal(0, 1, 8)),
+        "C": list(10.5 + rng.normal(0, 1, 8)),  # close to A
+    })
+    res = stats.compare_groups("g", "val", save_csv=False)
+    assert res["test"] == "one_way_anova"
+    assert all(r["method"] == "games_howell" for r in res["posthoc"])
+    ph = {(r["group_a"], r["group_b"]): r["p_adjusted"] for r in res["posthoc"]}
+    assert ph[("A", "C")] > 0.05  # A and C don't differ
+    assert ph[("A", "B")] < 0.05 and ph[("B", "C")] < 0.05  # both differ from B
+    assert res["posthoc_table"] is not None
+    assert len(state.get_table(res["posthoc_table"])) == 3  # 3 pairs
+
+
+def test_posthoc_dunn_holm_for_kruskal() -> None:
+    _groups_table({
+        "A": [1, 1, 1, 1, 1, 1, 1, 50],
+        "B": [9, 9, 9, 9, 9, 9, 9, 90],
+        "C": [1, 1, 1, 2, 1, 1, 1, 55],
+    })
+    res = stats.compare_groups("g", "val", save_csv=False)
+    assert res["test"] == "kruskal_wallis"
+    assert all(r["method"] == "dunn+holm" for r in res["posthoc"])
+    # Holm adjustment never lowers a p-value below its raw value
+    assert all(r["p_adjusted"] >= r["p_value"] - 1e-12 for r in res["posthoc"])
+
+
+def test_posthoc_can_be_disabled_and_absent_for_two_groups() -> None:
+    _groups_table({"A": [1, 2, 3], "B": [4, 5, 6], "C": [7, 8, 9]})
+    off = stats.compare_groups("g", "val", posthoc=False, save_csv=False)
+    assert off["posthoc"] is None and off["posthoc_table"] is None
+
+    _groups_table({"A": [1, 2, 3, 4], "B": [5, 6, 7, 8]}, name="two")
+    two = stats.compare_groups("two", "val", save_csv=False)
+    assert two["posthoc"] is None  # no post-hoc for a single pair
+
+
+def test_adjust_pvalues_holm_and_bh() -> None:
+    holm = stats._adjust_pvalues([0.01, 0.02, 0.03], "holm")
+    assert holm == [pytest.approx(0.03), pytest.approx(0.04), pytest.approx(0.04)]
+    assert holm == sorted(holm)  # step-down: monotone non-decreasing
+    bh = stats._adjust_pvalues([0.01, 0.02, 0.03], "fdr_bh")
+    assert all(v == pytest.approx(0.03) for v in bh)
+    assert stats._adjust_pvalues([], "holm") == []
+    assert stats._adjust_pvalues([0.5], "none") == [0.5]
+
+
 # --- paired mode (inside/outside within-sample) --------------------------------------
 
 def _paired_inside_outside_table(n: int = 6, seed: int = 0) -> str:
