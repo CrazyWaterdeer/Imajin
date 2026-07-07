@@ -190,3 +190,17 @@ def test_plot_posthoc_brackets_for_three_groups(tmp_path) -> None:
     )
     assert len(res["groups"]) == 3
     assert out.exists()
+
+
+def test_new_palette_and_font_options(tmp_path) -> None:
+    assert figures._PALETTE[0] == "#C9CCCE"  # control = neutral grey
+    assert figures._PALETTE[1] == "#DA4E42"  # coral red
+    table = _dist_table()
+
+    sans = tmp_path / "sans.svg"
+    figures.plot_group_distribution(table, "mean_intensity", output_path=str(sans))
+    assert "Noto Sans" in sans.read_text(encoding="utf-8")
+
+    serif = tmp_path / "serif.svg"
+    figures.plot_group_distribution(table, "mean_intensity", font="serif", output_path=str(serif))
+    assert "Noto Serif" in serif.read_text(encoding="utf-8")
