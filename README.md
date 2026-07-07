@@ -71,7 +71,12 @@ happen.
   vs outside is *paired* within a sample — compare per sample as `log2(inside/outside)`
   and test the contrast across replicates with `compare_groups(..., test="wilcoxon")`
   (paired signed-rank; `compare_groups` also warns against pseudoreplication on clustered
-  per-cell rows). **Per-cell** independence only holds for a single image / genuinely
+  per-cell rows). When replicates are analysed one file at a time, `combine_tables`
+  concatenates their per-file tables into one — tagging each source with a `sample_name`
+  (replicate id) — so the paired test spans replicates and the combined table exports as a
+  single CSV. A CSV merged outside the app comes back in via `import_table` (the counterpart
+  to `export_table`), so externally-combined data still plots and tests with the same tools.
+  **Per-cell** independence only holds for a single image / genuinely
   independent units. Classify on one channel and measure a *different* one — using the
   masking channel as the outcome is circular.
 - **Statistics (paired)**: `compare_groups` supports independent Welch / Mann-Whitney /

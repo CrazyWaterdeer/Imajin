@@ -2,11 +2,15 @@ from __future__ import annotations
 
 from typing import Any
 
+import pandas as pd
+
+from imajin.agent.qt_dispatch import call_on_main
 from imajin.session import (
     get_file as _get_file,
     get_table,
     get_viewer,
     list_runs as _list_runs,
+    put_table,
 )
 from imajin.paths import normalize_user_path
 from imajin.tools.layers import remove_layers_by_name as _remove_layers_by_name
@@ -311,4 +315,46 @@ def export_table(
         "format": fmt,
         "n_rows": int(len(df)),
         "n_cols": int(len(df.columns)),
+    }
+
+
+@tool(
+    description="Import a CSV (default) or Parquet file from disk as a session table — the "
+    "counterpart to export_table. Use this to pull externally-prepared or externally-merged "
+    "tabular data (e.g. a combined per-replicate CSV) back into the session so the same table "
+    "tools operate on it: compare_groups (incl. paired), summarize_experiment, filter_table, "
+    "and the plot_* figures. format 'auto' picks parquet for .parquet/.pq, else CSV. Returns "
+    "the registered table name and its columns so you can pick value/group/sample columns.",
+    phase="4",
+)
+def import_table(
+    path: str, table_name: str | None = None, format: str = "auto"
+) -> dict[str, Any]:
+    src = normalize_user_path(path).resolve()
+    if not src.is_file():
+        raise FileNotFoundError(f"no such file: {src}")
+
+    fmt = format.lower()
+    if fmt == "auto":
+        fmt = "parquet" if src.suffix.lower() in (".parquet", ".pq") else "csv"
+    if fmt == "csv":
+        df = pd.read_csv(src)
+    elif fmt == "parquet":
+        df = pd.read_parquet(src)
+    else:
+        raise ValueError(f"unsupported format: {format!r} (csv, parquet, auto)")
+
+    name = call_on_main(
+        put_table,
+        table_name or src.stem,
+        df,
+        {"tool": "import_table", "source_path": str(src), "format": fmt},
+    )
+    return {
+        "table_name": name,
+        "path": str(src),
+        "format": fmt,
+        "n_rows": int(len(df)),
+        "n_cols": int(len(df.columns)),
+        "columns": list(df.columns),
     }

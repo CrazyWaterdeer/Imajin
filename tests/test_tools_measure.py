@@ -155,6 +155,112 @@ def test_summarize_table_mean(viewer) -> None:
     assert summary["values"]["mean_intensity_ch_green"] == pytest.approx(105.0)
 
 
+def test_combine_tables_concats_with_explicit_labels() -> None:
+    state.put_table("rep1", pd.DataFrame({"red": [80.0, 79.0], "region": ["inside", "outside"]}))
+    state.put_table("rep2", pd.DataFrame({"red": [58.0, 61.0], "region": ["inside", "outside"]}))
+    state.put_table("rep3", pd.DataFrame({"red": [76.0, 83.0], "region": ["inside", "outside"]}))
+
+    res = measure.combine_tables(
+        ["rep1", "rep2", "rep3"],
+        new_table_name="coloc_combined",
+        labels=["rep1", "rep2", "rep3"],
+    )
+
+    assert res["table_name"] == "coloc_combined"
+    assert res["n_rows"] == 6
+    assert res["n_sources"] == 3
+    df = state.get_table("coloc_combined")
+    assert list(df["sample_name"]) == ["rep1", "rep1", "rep2", "rep2", "rep3", "rep3"]
+    # ready for paired inside/outside analysis: 3 samples x 2 regions
+    assert df.groupby(["sample_name", "region"]).ngroups == 6
+
+
+def test_combine_tables_defaults_label_to_source_table_name() -> None:
+    state.put_table("t_a", pd.DataFrame({"v": [1.0]}))
+    state.put_table("t_b", pd.DataFrame({"v": [2.0]}))
+
+    res = measure.combine_tables(["t_a", "t_b"])
+
+    df = state.get_table(res["table_name"])
+    assert list(df["sample_name"]) == ["t_a", "t_b"]
+    assert res["labels"] == ["t_a", "t_b"]
+
+
+def test_combine_tables_unions_columns_with_nan_fill() -> None:
+    state.put_table("with_area", pd.DataFrame({"v": [1.0], "area": [10.0]}))
+    state.put_table("no_area", pd.DataFrame({"v": [2.0]}))
+
+    res = measure.combine_tables(["with_area", "no_area"], labels=["s1", "s2"])
+
+    df = state.get_table(res["table_name"])
+    assert "area" in df.columns
+    assert df.loc[df["sample_name"] == "s2", "area"].isna().all()
+    assert res["columns_not_in_all_sources"] == ["area"]
+
+
+def test_combine_tables_guards_existing_label_column() -> None:
+    state.put_table("already", pd.DataFrame({"v": [1.0], "sample_name": ["x"]}))
+    with pytest.raises(ValueError, match="already has"):
+        measure.combine_tables(["already"])
+    # explicit labels signal intent and override the guard
+    res = measure.combine_tables(["already"], labels=["forced"])
+    assert list(state.get_table(res["table_name"])["sample_name"]) == ["forced"]
+
+
+def test_combine_tables_rejects_mismatched_labels_length() -> None:
+    state.put_table("t1", pd.DataFrame({"v": [1.0]}))
+    state.put_table("t2", pd.DataFrame({"v": [2.0]}))
+    with pytest.raises(ValueError, match="one label per table"):
+        measure.combine_tables(["t1", "t2"], labels=["only_one"])
+
+
+def test_combine_tables_rejects_empty() -> None:
+    with pytest.raises(ValueError, match="at least one"):
+        measure.combine_tables([])
+
+
+def test_combine_tables_missing_table_raises() -> None:
+    state.put_table("real", pd.DataFrame({"v": [1.0]}))
+    with pytest.raises(KeyError):
+        measure.combine_tables(["real", "ghost"])
+
+
+def test_combined_table_feeds_paired_compare_groups() -> None:
+    from imajin.tools import stats
+
+    # 3 replicates, several inside/outside objects each (object-level rows)
+    for rep, (ins, out) in {
+        "rep1": (80.0, 79.0),
+        "rep2": (58.0, 61.0),
+        "rep3": (76.0, 83.0),
+    }.items():
+        state.put_table(
+            rep,
+            pd.DataFrame(
+                {
+                    "red": [ins, ins + 2, out, out + 2],
+                    "region": ["inside", "inside", "outside", "outside"],
+                }
+            ),
+        )
+
+    combined = measure.combine_tables(
+        ["rep1", "rep2", "rep3"], labels=["rep1", "rep2", "rep3"]
+    )["table_name"]
+
+    res = stats.compare_groups(
+        combined,
+        value_col="red",
+        group_col="region",
+        test="wilcoxon",
+        save_csv=False,
+    )
+    assert "wilcoxon" in res["test"]
+    # paired mode aggregates the per-object rows to one value per specimen
+    assert res["data_level"] == "sample"
+    assert isinstance(res["p_value"], float)
+
+
 def test_measure_intensity_rejects_shape_mismatch(viewer) -> None:
     labels, a, _ = _two_label_image()
     viewer.add_labels(labels, name="masks")
