@@ -1,4 +1,4 @@
-# imajin
+# Imajin
 
 Conversational confocal microscopy assistant. Loads Zeiss `.lsm` / `.czi` /
 OME-TIFF data into [napari](https://napari.org), runs the standard analysis stack
@@ -17,10 +17,10 @@ button click produce identical results and identical provenance entries.
 ## Why
 
 Confocal analysis today is split across Zen, Fiji/ImageJ, and ad-hoc Python.
-imajin bundles the routine pipeline — load, preprocess, segment, measure,
+Imajin bundles the routine pipeline — load, preprocess, segment, measure,
 visualize, write methods — into one app where you can either drive things
-manually or say "이 z-stack에서 세포 찾고 채널2 강도 측정해줘" and watch it
-happen.
+manually or say "find the cells in this z-stack and measure channel 2
+intensity" and watch it happen.
 
 ## Features
 
@@ -124,7 +124,17 @@ happen.
   points + mean±SEM, best for small n), draws **paired connecting lines**
   (`paired=True`) for within-subject designs, and **multiplicity-corrected
   post-hoc significance brackets** for 3+ groups, with palette / y-limits /
-  log-scale / point styling controls.
+  log-scale / point styling controls. `plot_grouped_bars` renders a two-factor
+  grouped ("paired") bar chart — control-vs-treated bars clustered per
+  condition, with per-condition significance. Both accept a **condition matrix**
+  (`condition_matrix=`) that draws filled ● / open ○ factor circles beneath the
+  bars in place of long compound tick labels. All figures share a
+  **colorblind-safe palette** (a de-emphasised slate-grey control) and Noto
+  Sans / Serif fonts, and **auto-format axis / tick / legend labels to
+  scientific typography** — raw column names never appear: underscores become
+  Title Case, units move into parentheses (`area_um2` → Area (µm²)), Greek and
+  special symbols are restored (`dff` → ΔF/F₀), and dimensionless intensity axes
+  fall back to (A.U.).
 - **3D + visualization**: `set_view`, `set_colormap`, `screenshot`,
   `max_projection`, `average_projection`, `orthogonal_views`,
   `animate_z_rotation` (mp4 / gif).
@@ -162,7 +172,7 @@ happen.
   (MICrONS/Allen) are out of scope. Not part of the default cell workflow.
 - **LLM-driven analysis**: three interchangeable chat backends behind one dock —
   (1) **Claude via subscription**, where the Claude Agent SDK drives your
-  logged-in `claude` CLI (no API key) and imajin's own tools are bridged in as an
+  logged-in `claude` CLI (no API key) and Imajin's own tools are bridged in as an
   in-process MCP server; (2) **Claude via Anthropic API key**, direct with prompt
   caching; and (3) any **OpenAI-compatible `/v1` endpoint** (OpenAI, Ollama,
   vLLM, LM Studio) through a translation layer. The API-backed Claude / OpenAI
@@ -215,7 +225,7 @@ whichever you have credentials for.
 [Claude Code](https://docs.anthropic.com/en/docs/claude-code) CLI installed and
 logged in (`claude` on your `PATH` with a Pro/Max login, or a
 `CLAUDE_CODE_OAUTH_TOKEN`), the "Claude … (subscription)" entries work with no
-further setup — imajin drives them through the Claude Agent SDK.
+further setup — Imajin drives them through the Claude Agent SDK.
 
 **Claude / OpenAI via API key.** Read from environment variables (or the in-app
 settings dock):

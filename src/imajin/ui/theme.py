@@ -333,9 +333,9 @@ class Theme:
             }}
 
             QLabel#chatPlaceholder {{
-                color: {cls.TEXT_MUTED};
+                color: {cls.TEXT_SECONDARY};
                 font-weight: normal;
-                padding: 24px 12px;
+                padding: 18px 16px;
             }}
 
             QFrame#bubbleUser {{
