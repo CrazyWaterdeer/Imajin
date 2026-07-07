@@ -79,16 +79,32 @@ def _sample_or_object_values(
     sample_col: str,
     level: Literal["auto", "sample", "object"],
     sample_agg: Literal["mean", "median"],
+    weight_col: str | None = None,
 ) -> tuple[pd.DataFrame, str]:
     if group_col not in df.columns:
         raise ValueError(f"group_col {group_col!r} not found in columns: {list(df.columns)}")
     if level in {"auto", "sample"} and sample_col in df.columns:
+        grouped = df.groupby([sample_col, group_col], dropna=False, sort=False)
         plot_df = (
-            df.groupby([sample_col, group_col], dropna=False, sort=False)[value_col]
+            grouped[value_col]
             .agg(n_objects="count", mean="mean", median="median")
             .reset_index()
         )
-        plot_df["plot_value"] = plot_df[sample_agg]
+        if weight_col is not None:
+            from imajin.tools.stats import _weighted_mean
+
+            weighted = (
+                grouped.apply(
+                    lambda g: _weighted_mean(g[value_col], g[weight_col]),
+                    include_groups=False,
+                )
+                .rename("weighted")
+                .reset_index()
+            )
+            plot_df = plot_df.merge(weighted, on=[sample_col, group_col], how="left")
+            plot_df["plot_value"] = plot_df["weighted"]
+        else:
+            plot_df["plot_value"] = plot_df[sample_agg]
         return plot_df, "sample"
     if level == "sample":
         raise ValueError(f"sample-level plot requested, but {sample_col!r} is absent")
@@ -210,6 +226,7 @@ def _distribution_statistics(
     stats_test: Literal["auto", "ttest", "welch", "mannwhitney", "anova", "kruskal"],
     show_stats: bool,
     n_groups: int,
+    weight_col: str | None = None,
 ) -> tuple[dict[str, Any] | None, float | None, str | None, str | None]:
     if not show_stats or n_groups < 2:
         return None, None, None, None
@@ -223,6 +240,7 @@ def _distribution_statistics(
             sample_col=sample_col,
             level=level,
             sample_agg=sample_agg,
+            weight_col=weight_col,
             test=stats_test,
             save_csv=True,
         )
@@ -249,6 +267,7 @@ def plot_group_distribution(
     sample_col: str = "sample_name",
     level: Literal["auto", "sample", "object"] = "auto",
     sample_agg: Literal["mean", "median"] = "mean",
+    weight_col: str | None = "auto",
     output_path: str | None = None,
     format: Literal["svg", "pdf", "png"] = "svg",
     title: str | None = None,
@@ -264,6 +283,9 @@ def plot_group_distribution(
     df, _dropped = finite_numeric_frame(get_table(table_name), value_col)
     if df.empty:
         raise ValueError(f"table {table_name!r} has no finite values in {value_col!r}")
+    from imajin.tools.stats import resolve_weight_col
+
+    weight = resolve_weight_col(df, weight_col, value_col)
     plot_df, data_level = _sample_or_object_values(
         df,
         value_col,
@@ -271,6 +293,7 @@ def plot_group_distribution(
         sample_col=sample_col,
         level=level,
         sample_agg=sample_agg,
+        weight_col=weight,
     )
     groups, values = _distribution_groups(plot_df, group_col=group_col)
     stats_result, p_value, p_label, stats_error = _distribution_statistics(
@@ -283,6 +306,7 @@ def plot_group_distribution(
         stats_test=stats_test,
         show_stats=show_stats,
         n_groups=len(groups),
+        weight_col=weight,
     )
 
     plt = _pyplot()

@@ -193,23 +193,66 @@ def _describe_by(df: pd.DataFrame, value_col: str, by: list[str]) -> pd.DataFram
     return pd.DataFrame(rows)
 
 
+def resolve_weight_col(
+    df: pd.DataFrame, weight_col: str | None, value_col: str
+) -> str | None:
+    """Resolve the sample-aggregation weight column.
+
+    ``"auto"`` → the ``area`` column (object voxel/pixel count from regionprops)
+    when it exists and isn't the value being compared, else unweighted. ``None`` /
+    ``"none"`` → unweighted. Any other string must name an existing column.
+    """
+    if weight_col in (None, "none", "None", ""):
+        return None
+    if weight_col == "auto":
+        if "area" in df.columns and value_col != "area":
+            return "area"
+        return None
+    if weight_col not in df.columns:
+        raise ValueError(
+            f"weight_col {weight_col!r} not found in columns: {list(df.columns)}"
+        )
+    return weight_col
+
+
+def _weighted_mean(values: Any, weights: Any) -> float:
+    v = pd.to_numeric(values, errors="coerce").to_numpy(dtype=float)
+    w = pd.to_numeric(weights, errors="coerce").to_numpy(dtype=float)
+    mask = np.isfinite(v) & np.isfinite(w) & (w > 0)
+    if not mask.any():
+        return float("nan")
+    return float(np.average(v[mask], weights=w[mask]))
+
+
 def _sample_level_frame(
     df: pd.DataFrame,
     value_col: str,
     *,
     sample_col: str,
     group_col: str,
+    weight_col: str | None = None,
 ) -> pd.DataFrame | None:
     if sample_col not in df.columns:
         return None
     by = [sample_col]
     if group_col in df.columns:
         by.append(group_col)
+    grouped = df.groupby(by, dropna=False, sort=False)
     summary = (
-        df.groupby(by, dropna=False, sort=False)[value_col]
+        grouped[value_col]
         .agg(n_objects="count", mean="mean", median="median", std="std", sem="sem")
         .reset_index()
     )
+    if weight_col is not None:
+        weighted = (
+            grouped.apply(
+                lambda g: _weighted_mean(g[value_col], g[weight_col]),
+                include_groups=False,
+            )
+            .rename("weighted")
+            .reset_index()
+        )
+        summary = summary.merge(weighted, on=by, how="left")
     return summary
 
 
@@ -221,6 +264,7 @@ def _analysis_frame(
     sample_col: str,
     level: SummaryLevel,
     sample_agg: SampleAgg,
+    weight_col: str | None = None,
 ) -> tuple[pd.DataFrame, str, str, list[str]]:
     warnings: list[str] = []
     if group_col not in df.columns:
@@ -231,9 +275,18 @@ def _analysis_frame(
             value_col,
             sample_col=sample_col,
             group_col=group_col,
+            weight_col=weight_col,
         )
         if sample_df is not None:
-            out = sample_df.rename(columns={sample_agg: "analysis_value"}).copy()
+            if weight_col is not None and "weighted" in sample_df.columns:
+                out = sample_df.rename(columns={"weighted": "analysis_value"}).copy()
+                warnings.append(
+                    f"per-sample values are area-weighted means (weighted by {weight_col!r}: "
+                    "total signal / total area), so small objects contribute in proportion to "
+                    "their size; pass weight_col=None for an unweighted per-object mean."
+                )
+            else:
+                out = sample_df.rename(columns={sample_agg: "analysis_value"}).copy()
             return out, "analysis_value", "sample", warnings
         if level == "sample":
             raise ValueError(
@@ -567,11 +620,14 @@ def _finalize_compare(
     warnings: list[str],
     group_counts: dict[str, int],
     save_csv: bool,
+    weighted_by: str | None = None,
 ) -> dict[str, Any]:
     """Shared tail for compare_groups: persist the result rows and build the return dict."""
     result_df = pd.DataFrame(rows)
     if warnings:
         result_df["warnings"] = "; ".join(warnings)
+    if weighted_by is not None:
+        result_df["weighted_by"] = weighted_by
     result_table = put_table(
         f"stats_compare__{slugify_result_name(table_name)}__{slugify_result_name(value_col)}",
         result_df,
@@ -582,6 +638,7 @@ def _finalize_compare(
             "group_col": group_col,
             "data_level": data_level,
             "sample_agg": sample_agg,
+            "weighted_by": weighted_by,
             "dropped_nonfinite": dropped,
         },
     )
@@ -596,6 +653,7 @@ def _finalize_compare(
         "group_col": group_col,
         "data_level": data_level,
         "sample_agg": sample_agg,
+        "weighted_by": weighted_by,
         "test": str(result_df.loc[0, "test"]),
         "p_value": float(result_df.loc[0, "p_value"]),
         "result_table": result_table,
@@ -612,7 +670,11 @@ def _finalize_compare(
     "values are used with a warning. Supports Welch t-test, Mann-Whitney U, ANOVA, "
     "and Kruskal-Wallis (independent), plus paired Wilcoxon signed-rank / paired-t "
     "(test='wilcoxon' / 'paired_t') for within-sample paired designs such as "
-    "inside-vs-outside a domain measured on the same specimen.",
+    "inside-vs-outside a domain measured on the same specimen. When aggregating "
+    "objects to a per-sample value, weight_col='auto' (default) weights by the `area` "
+    "column when present — i.e. total signal / total area, so small debris objects "
+    "count in proportion to their size rather than one-object-one-vote; pass "
+    "weight_col=None for a plain per-object mean (e.g. per-cell designs).",
     phase="7",
     worker=True,
 )
@@ -623,6 +685,7 @@ def compare_groups(
     sample_col: str = "sample_name",
     level: Literal["auto", "sample", "object"] = "auto",
     sample_agg: Literal["mean", "median"] = "mean",
+    weight_col: str | None = "auto",
     test: Literal[
         "auto", "ttest", "welch", "mannwhitney", "anova", "kruskal", "wilcoxon", "paired_t"
     ] = "auto",
@@ -634,6 +697,7 @@ def compare_groups(
     from scipy import stats as scipy_stats
 
     df, dropped = finite_numeric_frame(get_table(table_name), value_col)
+    weight = resolve_weight_col(df, weight_col, value_col)
     analysis, analysis_col, data_level, warnings = _analysis_frame(
         df,
         value_col,
@@ -641,7 +705,10 @@ def compare_groups(
         sample_col=sample_col,
         level=level,
         sample_agg=sample_agg,
+        weight_col=weight,
     )
+    # weighting only applies to sample-level aggregation
+    weighted_by = weight if data_level == "sample" else None
     if test in ("wilcoxon", "paired_t"):
         rows, group_counts, paired_warnings = _paired_compare(
             analysis,
@@ -665,6 +732,7 @@ def compare_groups(
             warnings=warnings + paired_warnings,
             group_counts=group_counts,
             save_csv=save_csv,
+            weighted_by=weighted_by,
         )
 
     if (
@@ -818,6 +886,7 @@ def compare_groups(
         warnings=warnings,
         group_counts=group_counts,
         save_csv=save_csv,
+        weighted_by=weighted_by,
     )
 
 

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 import numpy as np
 import pandas as pd
@@ -581,4 +581,156 @@ def combine_tables(
         "sources": sources,
         "columns": list(combined.columns),
         "columns_not_in_all_sources": [c for c in combined.columns if c not in shared],
+    }
+
+
+@tool(
+    description="Merge several columns into one by taking the first non-null value per row "
+    "(coalesce). Built for the manual per-file path: combining per-file tables leaves one "
+    "SPARSE intensity column per file (mean_intensity_<file1>, mean_intensity_<file2>, …), each "
+    "filled only for its file's rows, which compare_groups / plot_group_distribution cannot use. "
+    "Coalescing them into a single `mean_intensity` column fixes that. Select the columns "
+    "explicitly, or pass a `prefix` to match them (e.g. prefix='mean_intensity_'). Updates the "
+    "table in place unless new_table_name is given; source columns are dropped by default.",
+    phase="4",
+    worker=True,
+)
+def coalesce_columns(
+    table_name: str,
+    into: str,
+    columns: list[str] | None = None,
+    prefix: str | None = None,
+    drop_sources: bool = True,
+    new_table_name: str | None = None,
+) -> dict[str, Any]:
+    df = get_table(table_name).copy()
+    if prefix:
+        selected = [c for c in df.columns if c.startswith(prefix)]
+    else:
+        selected = list(columns or [])
+    if not selected:
+        raise ValueError(
+            "coalesce_columns selected no columns: pass `columns` explicitly or a `prefix` "
+            "that matches existing column names."
+        )
+    missing = [c for c in selected if c not in df.columns]
+    if missing:
+        raise ValueError(f"columns not in table {table_name!r}: {missing}")
+
+    src = df[selected]
+    # first non-null across the selected columns, left to right
+    coalesced = src.bfill(axis=1).iloc[:, 0]
+    ambiguous = int((src.notna().sum(axis=1) > 1).sum())
+    df[into] = coalesced
+    if drop_sources:
+        df = df.drop(columns=[c for c in selected if c != into])
+
+    spec = {"tool": "coalesce_columns", "into": into, "sources": selected}
+    if new_table_name:
+        name = call_on_main(put_table, new_table_name, df, spec)
+    else:
+        call_on_main(update_table, table_name, df)
+        name = table_name
+    return {
+        "table_name": name,
+        "into": into,
+        "n_sources": len(selected),
+        "sources": selected,
+        "n_filled": int(coalesced.notna().sum()),
+        "n_rows": int(len(df)),
+        "ambiguous_rows": ambiguous,
+        "columns": list(df.columns),
+    }
+
+
+@tool(
+    description="Add or overwrite a column by mapping an existing column through a user-provided "
+    "dict — e.g. assign a `group` from `sample_name` ({'mF_rectum_1': 'mated', 'vF_rectum_1': "
+    "'virgin', …}) so compare_groups / plots can split by group. The mapping is explicit and "
+    "user-confirmed; nothing is inferred from the names. Unmapped values receive `default` "
+    "(None leaves them blank). Updates the table in place unless new_table_name is given.",
+    phase="4",
+)
+def map_column(
+    table_name: str,
+    from_col: str,
+    mapping: dict[str, str],
+    into: str = "group",
+    default: str | None = None,
+    new_table_name: str | None = None,
+) -> dict[str, Any]:
+    df = get_table(table_name).copy()
+    if from_col not in df.columns:
+        raise ValueError(
+            f"from_col {from_col!r} not in table {table_name!r}: {list(df.columns)}"
+        )
+    keys = df[from_col].astype(str)
+    df[into] = keys.map(lambda v: mapping.get(v, default))
+    unmapped = sorted(set(keys.unique()) - set(mapping))
+
+    spec = {"tool": "map_column", "from_col": from_col, "into": into}
+    if new_table_name:
+        name = call_on_main(put_table, new_table_name, df, spec)
+    else:
+        call_on_main(update_table, table_name, df)
+        name = table_name
+    return {
+        "table_name": name,
+        "into": into,
+        "from_col": from_col,
+        "n_mapped": int(df[into].notna().sum()),
+        "n_rows": int(len(df)),
+        "unmapped_values": unmapped,
+        "distinct_groups": sorted(set(df[into].dropna().astype(str))),
+    }
+
+
+@tool(
+    description="Keep one representative row per group — e.g. the largest object per sample. "
+    "Groups by `group_by` (default 'sample_name') and within each group keeps the single row "
+    "with the max (or min) of `by`. Use `by='area', keep='max'` to keep each sample's main "
+    "region and drop small debris objects before a per-sample group comparison. Updates the "
+    "table in place unless new_table_name is given.",
+    phase="4",
+    worker=True,
+)
+def select_representative_rows(
+    table_name: str,
+    by: str,
+    group_by: str = "sample_name",
+    keep: Literal["max", "min"] = "max",
+    new_table_name: str | None = None,
+) -> dict[str, Any]:
+    df = get_table(table_name).copy()
+    for col in (by, group_by):
+        if col not in df.columns:
+            raise ValueError(
+                f"column {col!r} not in table {table_name!r}: {list(df.columns)}"
+            )
+    n_before = len(df)
+    order = pd.to_numeric(df[by], errors="coerce")
+    df = df.assign(_ord=order).sort_values(
+        "_ord", ascending=(keep == "min"), na_position="last"
+    )
+    reduced = (
+        df.drop_duplicates(subset=[group_by], keep="first")
+        .drop(columns="_ord")
+        .sort_index()
+        .reset_index(drop=True)
+    )
+
+    spec = {"tool": "select_representative_rows", "by": by, "group_by": group_by, "keep": keep}
+    if new_table_name:
+        name = call_on_main(put_table, new_table_name, reduced, spec)
+    else:
+        call_on_main(update_table, table_name, reduced)
+        name = table_name
+    return {
+        "table_name": name,
+        "by": by,
+        "group_by": group_by,
+        "keep": keep,
+        "n_rows_before": int(n_before),
+        "n_rows_after": int(len(reduced)),
+        "n_groups": int(reduced[group_by].nunique()),
     }

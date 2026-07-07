@@ -76,13 +76,21 @@ happen.
   (replicate id) — so the paired test spans replicates and the combined table exports as a
   single CSV. A CSV merged outside the app comes back in via `import_table` (the counterpart
   to `export_table`), so externally-combined data still plots and tests with the same tools.
+  Combining per-file tables leaves one sparse intensity column per file; `coalesce_columns`
+  collapses them into a single value column, `map_column` assigns a user-confirmed `group` from
+  `sample_name`, and `select_representative_rows` keeps each sample's main region (largest object)
+  before `compare_groups` — the whole pool-and-compare path stays in-app, no external scripting.
   **Per-cell** independence only holds for a single image / genuinely
   independent units. Classify on one channel and measure a *different* one — using the
   masking channel as the outcome is circular.
 - **Statistics (paired)**: `compare_groups` supports independent Welch / Mann-Whitney /
   ANOVA / Kruskal and **paired** Wilcoxon signed-rank / paired-t (`test="wilcoxon"` /
   `"paired_t"`) with signed rank-biserial / Cohen's dz effect sizes, for within-sample
-  designs like inside-vs-outside a domain.
+  designs like inside-vs-outside a domain. When aggregating objects to a per-sample value it
+  **area-weights by default** (`weight_col="auto"` → total signal / total area, using the
+  regionprops `area` column when present), so many small debris objects don't skew the sample
+  mean one-vote-each; `plot_group_distribution` matches, and both report `weighted_by`. Pass
+  `weight_col=None` for a plain per-object mean (e.g. per-cell designs).
 - **Quality control & ROI review**: QC metrics for label layers, measurement
   tables, and timecourses (`compute_segmentation_qc`, `compute_measurement_qc`,
   `compute_timecourse_qc`), pass / warning / fail status (`mark_qc_status`),
