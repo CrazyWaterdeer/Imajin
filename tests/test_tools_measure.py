@@ -261,6 +261,110 @@ def test_combined_table_feeds_paired_compare_groups() -> None:
     assert isinstance(res["p_value"], float)
 
 
+def test_coalesce_columns_by_prefix_merges_sparse_intensity() -> None:
+    # mimics combine_tables output: one sparse mean_intensity_<file> column per file
+    state.put_table(
+        "combined",
+        pd.DataFrame(
+            {
+                "sample_name": ["s1", "s2", "s3"],
+                "mean_intensity_fileA": [10.0, np.nan, np.nan],
+                "mean_intensity_fileB": [np.nan, 20.0, np.nan],
+                "mean_intensity_fileC": [np.nan, np.nan, 30.0],
+            }
+        ),
+    )
+    res = measure.coalesce_columns("combined", into="mean_intensity", prefix="mean_intensity_")
+
+    assert res["n_sources"] == 3
+    assert res["n_filled"] == 3
+    assert res["ambiguous_rows"] == 0
+    df = state.get_table("combined")  # updated in place
+    assert list(df["mean_intensity"]) == [10.0, 20.0, 30.0]
+    assert [c for c in df.columns if c.startswith("mean_intensity_")] == []  # sources dropped
+
+
+def test_coalesce_columns_flags_ambiguous_and_can_keep_sources() -> None:
+    state.put_table(
+        "t",
+        pd.DataFrame({"a": [1.0, np.nan], "b": [2.0, 5.0]}),  # row 0 has two non-nulls
+    )
+    res = measure.coalesce_columns(
+        "t", into="v", columns=["a", "b"], drop_sources=False, new_table_name="t_coalesced"
+    )
+    assert res["ambiguous_rows"] == 1
+    assert res["table_name"] == "t_coalesced"
+    out = state.get_table("t_coalesced")
+    assert list(out["v"]) == [1.0, 5.0]  # first non-null left-to-right
+    assert "a" in out.columns and "b" in out.columns  # kept
+    assert set(state.get_table("t").columns) == {"a", "b"}  # original untouched
+
+
+def test_coalesce_columns_no_match_raises() -> None:
+    state.put_table("t", pd.DataFrame({"x": [1.0]}))
+    with pytest.raises(ValueError, match="selected no columns"):
+        measure.coalesce_columns("t", into="v", prefix="mean_intensity_")
+
+
+def test_map_column_assigns_group_from_sample_name() -> None:
+    state.put_table(
+        "t",
+        pd.DataFrame({"sample_name": ["mF_1", "vF_1", "mF_2", "other"], "v": [1, 2, 3, 4]}),
+    )
+    res = measure.map_column(
+        "t",
+        from_col="sample_name",
+        mapping={"mF_1": "mated", "mF_2": "mated", "vF_1": "virgin"},
+        into="group",
+        default="unassigned",
+    )
+    df = state.get_table("t")
+    assert list(df["group"]) == ["mated", "virgin", "mated", "unassigned"]
+    assert res["unmapped_values"] == ["other"]
+    assert res["distinct_groups"] == ["mated", "unassigned", "virgin"]
+
+
+def test_map_column_missing_from_col_raises() -> None:
+    state.put_table("t", pd.DataFrame({"v": [1]}))
+    with pytest.raises(ValueError, match="from_col"):
+        measure.map_column("t", from_col="sample_name", mapping={}, into="group")
+
+
+def test_select_representative_rows_keeps_largest_per_group() -> None:
+    state.put_table(
+        "t",
+        pd.DataFrame(
+            {
+                "sample_name": ["s1", "s1", "s1", "s2", "s2"],
+                "area": [5.0, 100.0, 3.0, 8.0, 2.0],  # main region = largest area
+                "mean_intensity": [1.0, 99.0, 2.0, 88.0, 3.0],
+            }
+        ),
+    )
+    res = measure.select_representative_rows("t", by="area", keep="max", group_by="sample_name")
+
+    assert res["n_rows_before"] == 5
+    assert res["n_rows_after"] == 2
+    assert res["n_groups"] == 2
+    df = state.get_table("t")
+    # keeps the max-area object of each sample (drops debris)
+    assert sorted(df["mean_intensity"]) == [88.0, 99.0]
+
+
+def test_select_representative_rows_keep_min_and_new_table() -> None:
+    state.put_table(
+        "t",
+        pd.DataFrame({"sample_name": ["a", "a", "b"], "area": [5.0, 1.0, 9.0], "v": [10, 20, 30]}),
+    )
+    res = measure.select_representative_rows(
+        "t", by="area", keep="min", group_by="sample_name", new_table_name="smallest"
+    )
+    assert res["table_name"] == "smallest"
+    out = state.get_table("smallest")
+    assert sorted(out["v"]) == [20, 30]  # min-area row per group
+    assert len(state.get_table("t")) == 3  # original untouched
+
+
 def test_measure_intensity_rejects_shape_mismatch(viewer) -> None:
     labels, a, _ = _two_label_image()
     viewer.add_labels(labels, name="masks")

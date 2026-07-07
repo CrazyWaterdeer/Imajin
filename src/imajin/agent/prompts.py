@@ -44,6 +44,16 @@ earlier conversation is compacted.
   every file's outputs collect in that single folder: per-file `save_result_bundle` appends to the
   active bundle (as do figures/stats/QC). Do NOT call `finalize_analysis` between files — that
   closes the folder and the next file would open a new one; finalize once at the very end.
+- To pool per-file measurement tables for a group comparison, do it ENTIRELY with in-app tools —
+  never shell out, run pandas, or spawn a subagent to edit a CSV. `combine_tables` concatenates the
+  per-file tables (tagging each with `sample_name`); `map_column(from_col="sample_name",
+  mapping={...})` adds a user-confirmed `group`; `coalesce_columns(prefix="mean_intensity_",
+  into="mean_intensity")` collapses the per-file intensity columns into one usable value column.
+  Then `compare_groups` / `plot_group_distribution` — which by default **area-weight** per-sample
+  intensities (`weight_col="auto"` → total signal / total area), so small debris objects don't skew
+  the mean one-vote-each; pass `weight_col=None` for a plain per-object mean (per-cell designs), or
+  `select_representative_rows(by="area", keep="max")` if you truly want only each sample's main
+  region. A CSV combined outside the app comes back via `import_table`.
 - When the user wants analysis **restricted to a hand-drawn region** on a Z-stack ("이 영역만",
   "draw an ROI", "이 부분만 분석"), first run `max_projection` so they draw the ROI on the flat 2D
   projection instead of slice-by-slice, then `boundary_mask_from_shapes(shapes_layer,

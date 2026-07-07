@@ -64,6 +64,61 @@ def test_compare_groups_defaults_to_sample_level() -> None:
     assert row["p_value"] < 0.05
 
 
+def _debris_table() -> str:
+    # one large main region + many small debris per sample. Main regions are equal
+    # across groups; virgin just has MORE debris objects. Unweighted per-sample means
+    # deflate more for virgin (spurious difference); area weighting recovers equality.
+    rows: list[dict] = []
+    for s, main in [("m1", 8000.0), ("m2", 7800.0), ("m3", 8200.0)]:
+        rows.append({"sample_name": s, "group": "mated", "area": 1000.0, "mean_intensity": main})
+        rows += [{"sample_name": s, "group": "mated", "area": 5.0, "mean_intensity": 4000.0}] * 5
+    for s, main in [("v1", 8000.0), ("v2", 7900.0), ("v3", 8100.0)]:
+        rows.append({"sample_name": s, "group": "virgin", "area": 1000.0, "mean_intensity": main})
+        rows += [{"sample_name": s, "group": "virgin", "area": 5.0, "mean_intensity": 4000.0}] * 15
+    return state.put_table("debris", pd.DataFrame(rows), spec={"tool": "test"})
+
+
+def test_compare_groups_auto_weights_by_area() -> None:
+    table = _debris_table()
+    res = stats.compare_groups(table, "mean_intensity", group_col="group", save_csv=False)
+
+    assert res["weighted_by"] == "area"  # auto-detected the regionprops area column
+    assert res["data_level"] == "sample"
+    # main regions are equal across groups; area weighting recovers that -> not significant
+    assert res["p_value"] > 0.2
+    assert any("area-weighted" in w for w in res["warnings"])
+
+
+def test_compare_groups_weight_none_is_unweighted_and_more_significant() -> None:
+    table = _debris_table()
+    weighted = stats.compare_groups(table, "mean_intensity", group_col="group", save_csv=False)
+    unweighted = stats.compare_groups(
+        table, "mean_intensity", group_col="group", weight_col=None, save_csv=False
+    )
+
+    assert unweighted["weighted_by"] is None
+    # the debris artifact: unweighted comparison is far more "significant" than weighted
+    assert unweighted["p_value"] < weighted["p_value"]
+
+
+def test_compare_groups_auto_is_unweighted_without_area_column() -> None:
+    table = _endpoint_table()  # has no `area` column
+    res = stats.compare_groups(table, "mean_intensity", save_csv=False)
+    assert res["weighted_by"] is None
+
+
+def test_resolve_weight_col() -> None:
+    df = pd.DataFrame({"area": [1.0], "mean_intensity": [2.0], "v": [3.0]})
+    assert stats.resolve_weight_col(df, "auto", "mean_intensity") == "area"
+    # auto never weights the value by itself
+    assert stats.resolve_weight_col(df, "auto", "area") is None
+    assert stats.resolve_weight_col(df.drop(columns="area"), "auto", "v") is None
+    assert stats.resolve_weight_col(df, None, "v") is None
+    assert stats.resolve_weight_col(df, "v", "mean_intensity") == "v"
+    with pytest.raises(ValueError, match="weight_col"):
+        stats.resolve_weight_col(df, "missing", "v")
+
+
 def test_compare_groups_identical_constants_returns_p_one() -> None:
     df = pd.DataFrame(
         {
