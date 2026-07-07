@@ -39,3 +39,32 @@ def test_from_env_defaults_ui_scale_to_auto_when_missing(tmp_path: Path) -> None
     with patch.object(Settings, "secrets_path", classmethod(lambda cls: secrets)):
         s = Settings.from_env()
         assert s.ui_scale == "auto"
+
+
+def test_model_choice_persists_in_secrets_file(tmp_path: Path) -> None:
+    secrets = tmp_path / "secrets.json"
+    with patch.object(Settings, "secrets_path", classmethod(lambda cls: secrets)):
+        s = Settings()
+        s.default_provider = "claude-agent"
+        s.default_model = "opus"
+        s.save_secrets()
+
+        raw = json.loads(secrets.read_text())
+        assert raw["default_provider"] == "claude-agent"
+        assert raw["default_model"] == "opus"
+
+
+def test_from_env_reads_model_choice_from_file(tmp_path: Path) -> None:
+    secrets = tmp_path / "secrets.json"
+    secrets.write_text(json.dumps({"default_provider": "openai", "default_model": "gpt"}))
+    with patch.object(Settings, "secrets_path", classmethod(lambda cls: secrets)):
+        s = Settings.from_env()
+        assert (s.default_provider, s.default_model) == ("openai", "gpt")
+
+
+def test_from_env_defaults_model_choice_when_missing(tmp_path: Path) -> None:
+    secrets = tmp_path / "secrets.json"
+    secrets.write_text(json.dumps({"anthropic_api_key": "sk-x"}))
+    with patch.object(Settings, "secrets_path", classmethod(lambda cls: secrets)):
+        s = Settings.from_env()
+        assert (s.default_provider, s.default_model) == ("anthropic", "sonnet")

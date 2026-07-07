@@ -212,3 +212,108 @@ def test_chat_dock_updates_single_batch_progress_card(qtbot, viewer) -> None:
     assert "1/4 files processed" in text
     assert "sample_2.lsm" in text
     assert "measurement" in text
+
+
+def _all_available():
+    from imajin.ui.provider_status import ProviderStatus
+
+    return {k: ProviderStatus(True, None) for k in ("anthropic", "claude-agent", "openai", "ollama")}
+
+
+def test_model_picker_restores_preferred_when_available(qtbot) -> None:
+    from imajin.ui.chat_dock import _MODEL_CHOICES, _ModelPickerButton
+
+    btn = _ModelPickerButton(
+        _MODEL_CHOICES, statuses=_all_available(), preferred=("claude-agent", "opus")
+    )
+    qtbot.addWidget(btn)
+
+    _, kind, model = _MODEL_CHOICES[btn.currentIndex()]
+    assert (kind, model) == ("claude-agent", "opus")
+
+
+def test_model_picker_falls_back_when_preferred_unavailable(qtbot) -> None:
+    from imajin.ui.chat_dock import _MODEL_CHOICES, _ModelPickerButton
+    from imajin.ui.provider_status import ProviderStatus
+
+    statuses = {
+        "anthropic": ProviderStatus(True, None),
+        "claude-agent": ProviderStatus(False, "no login"),
+        "openai": ProviderStatus(False, "no API key"),
+        "ollama": ProviderStatus(False, "down"),
+    }
+    btn = _ModelPickerButton(_MODEL_CHOICES, statuses=statuses, preferred=("openai", "gpt"))
+    qtbot.addWidget(btn)
+
+    # preferred (openai) is unavailable -> first available choice (anthropic sonnet, idx 0)
+    assert btn.currentIndex() == 0
+
+
+def test_model_picker_user_click_emits_userSelected(qtbot) -> None:
+    from imajin.ui.chat_dock import _MODEL_CHOICES, _ModelPickerButton
+
+    btn = _ModelPickerButton(
+        _MODEL_CHOICES, statuses=_all_available(), preferred=("anthropic", "sonnet")
+    )
+    qtbot.addWidget(btn)
+
+    with qtbot.waitSignal(btn.userSelected, timeout=500) as blocker:
+        btn.setCurrentIndex(3)
+    assert blocker.args == [3]
+
+
+def test_model_picker_auto_fallback_does_not_emit_userSelected(qtbot) -> None:
+    from imajin.ui.chat_dock import _MODEL_CHOICES, _ModelPickerButton
+    from imajin.ui.provider_status import ProviderStatus
+
+    btn = _ModelPickerButton(
+        _MODEL_CHOICES, statuses=_all_available(), preferred=("openai", "gpt")
+    )
+    qtbot.addWidget(btn)
+    assert _MODEL_CHOICES[btn.currentIndex()][1] == "openai"
+
+    user_events: list[int] = []
+    changed_events: list[int] = []
+    btn.userSelected.connect(user_events.append)
+    btn.currentIndexChanged.connect(changed_events.append)
+
+    # openai goes unavailable -> auto-fallback, must not be persisted as a user choice
+    statuses = _all_available()
+    statuses["openai"] = ProviderStatus(False, "no API key")
+    btn.refresh_statuses(statuses)
+
+    assert btn.currentIndex() == 0  # fell back to first available
+    assert changed_events == [0]  # a change did happen
+    assert user_events == []  # but it was not a user selection
+
+
+def test_chat_dock_persists_and_restores_model_choice(qtbot, viewer, tmp_path, monkeypatch) -> None:
+    import json
+    from unittest.mock import patch
+
+    from imajin.config import Settings
+    from imajin.ui import chat_dock as cd
+
+    monkeypatch.setattr(cd, "compute_statuses", lambda _s: _all_available())
+    secrets = tmp_path / "secrets.json"
+
+    with patch.object(Settings, "secrets_path", classmethod(lambda cls: secrets)):
+        settings = Settings()  # defaults: anthropic / sonnet -> index 0
+        dock = cd.ChatDock(viewer=viewer, settings=settings)
+        qtbot.addWidget(dock)
+        assert dock.model_picker.currentIndex() == 0
+
+        target = 3  # ("claude-agent", "opus")
+        dock.model_picker.setCurrentIndex(target)  # simulate a user pick
+
+        # in-memory + on-disk both updated
+        assert (settings.default_provider, settings.default_model) == ("claude-agent", "opus")
+        raw = json.loads(secrets.read_text())
+        assert (raw["default_provider"], raw["default_model"]) == ("claude-agent", "opus")
+
+        # a fresh load (restart) restores the same selection
+        restored = Settings.from_env()
+        assert (restored.default_provider, restored.default_model) == ("claude-agent", "opus")
+        dock2 = cd.ChatDock(viewer=viewer, settings=restored)
+        qtbot.addWidget(dock2)
+        assert dock2.model_picker.currentIndex() == target
