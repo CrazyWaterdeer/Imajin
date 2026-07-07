@@ -17,6 +17,46 @@ from qtpy.QtWidgets import (
     QWidget,
 )
 
+from imajin.ui.theme import Theme
+
+
+def _welcome_html() -> str:
+    """First-launch greeting shown in the empty transcript: the assistant, in
+    its own voice, saying what it can analyze plus a few example prompts.
+
+    Pure UI (never sent to the model), so it needs no provider and no API call.
+    """
+    accent = Theme.PRIMARY
+    strong = Theme.TEXT_PRIMARY
+    body = Theme.TEXT_SECONDARY
+    muted = Theme.TEXT_MUTED
+    return f"""
+<span style="color:{accent}; font-size:15px;"><b>Imajin — imaging analysis assistant</b></span>
+<br><br>
+<span style="color:{body};">Drag in an
+<span style="color:{strong};"><b>.lsm / .czi / OME-TIFF</b></span> image (or just tell me
+its file path), then say what you want in plain language and I'll run the whole
+pipeline — load, segment, measure, visualize, write it up. I can:</span>
+<ul>
+<li><span style="color:{strong};"><b>Segment</b></span><span style="color:{body};">
+ — cells, nuclei, or ROIs in 2D / 3D, or bright expression domains</span></li>
+<li><span style="color:{strong};"><b>Measure</b></span><span style="color:{body};">
+ — per-cell intensity &amp; size, or intensity over time (live / calcium imaging)</span></li>
+<li><span style="color:{strong};"><b>Compare</b></span><span style="color:{body};">
+ — colocalization, inside vs outside a domain, and groups with proper statistics</span></li>
+<li><span style="color:{strong};"><b>Visualize</b></span><span style="color:{body};">
+ — projections, 3D views, and publication-ready figures &amp; composites</span></li>
+<li><span style="color:{strong};"><b>Batch &amp; report</b></span><span style="color:{body};">
+ — replay one recipe across many samples, then write the methods</span></li>
+</ul>
+<span style="color:{body};">Try:</span><br>
+<span style="color:{muted};">
+&nbsp;&nbsp;“Find the cells in this z-stack and measure channel 2 intensity”<br>
+&nbsp;&nbsp;“Compare GFP intensity inside vs outside the red-channel domain”<br>
+&nbsp;&nbsp;“Segment in 3D and export a max-projection composite”
+</span>
+"""
+
 
 class MessageBubble(QFrame):
     """A single message rendered as a styled frame containing a wrapped label."""
@@ -89,11 +129,12 @@ class ChatTranscript(QScrollArea):
     def _show_placeholder(self) -> None:
         if self._placeholder_label is not None:
             return
-        self._placeholder_label = QLabel(
-            "Type a request below.   e.g. 이 z-stack에서 세포 찾고 채널2 강도 측정해줘"
-        )
+        self._placeholder_label = QLabel(_welcome_html())
         self._placeholder_label.setObjectName("chatPlaceholder")
-        self._placeholder_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._placeholder_label.setTextFormat(Qt.TextFormat.RichText)
+        self._placeholder_label.setAlignment(
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop
+        )
         self._placeholder_label.setWordWrap(True)
         self._vbox.insertWidget(0, self._placeholder_label)
 
