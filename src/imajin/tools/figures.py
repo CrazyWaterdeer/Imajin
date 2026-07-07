@@ -134,6 +134,60 @@ def _pretty_label(text: Any) -> str:
     return f"{label} ({unit})" if unit else label
 
 
+# dimensionless quantities that must NOT get an "(A.U.)" suffix
+_DIMENSIONLESS = {
+    "count", "n", "number", "ratio", "fraction", "fold", "index", "score", "percent",
+    "proportion", "correlation", "coefficient", "pearson", "manders", "overlap", "r",
+}
+
+
+def _value_label(col: Any, explicit: str | None = None) -> str:
+    """Label for a measured-value axis. Explicit user text wins. Otherwise pretty-print the
+    column and, when no unit is present and the quantity isn't dimensionless, append (A.U.)."""
+    if explicit:
+        return explicit
+    label = _pretty_label(col)
+    if "(" in label:  # already carries a unit, e.g. Area (µm²)
+        return label
+    last = str(col).lower().replace("-", "_").split("_")[-1].strip(".")
+    if last in _DIMENSIONLESS or last in _LABEL_UNITS:
+        return label
+    return f"{label} (A.U.)"
+
+
+def _draw_condition_matrix(
+    ax: Any, x_positions: Any, matrix: dict[str, list[Any]] | None, *,
+    color: str = "#333333", hide_ticklabels: bool = True,
+) -> int:
+    """Filled(positive)/open(negative) circle grid beneath the x-axis — the molecular-biology
+    condition table. One row per factor (e.g. Treatment / Genotype / Activation), one column
+    per x position; a truthy level draws a filled ●, a falsy one an open ○. Reusable under any
+    categorical plot. Returns the number of factor rows drawn (0 if no matrix)."""
+    import matplotlib.transforms as mtransforms
+
+    if not matrix:
+        return 0
+    xs = [float(x) for x in x_positions]
+    n = len(xs)
+    trans = mtransforms.blended_transform_factory(ax.transData, ax.transAxes)
+    row_h = 0.085
+    y0 = -0.12
+    label_x = (min(xs) - 0.62) if xs else -0.62
+    for r, (factor, levels) in enumerate(matrix.items()):
+        y = y0 - r * row_h
+        for c in range(n):
+            on = bool(levels[c]) if c < len(levels) else False
+            ax.plot(
+                xs[c], y, marker="o", markersize=7, transform=trans, clip_on=False, zorder=6,
+                markerfacecolor=(color if on else "white"), markeredgecolor=color, markeredgewidth=1.1,
+            )
+        ax.text(label_x, y, _pretty_label(factor), transform=trans, ha="right", va="center",
+                fontsize=7.5, clip_on=False)
+    if hide_ticklabels:
+        ax.set_xticklabels([])
+    return len(matrix)
+
+
 def _figure_path(stem: str, output_path: str | None, fmt: str) -> Path:
     suffix = fmt.lower().lstrip(".")
     if output_path:
@@ -422,6 +476,7 @@ def plot_group_distribution(
     kind: Literal["box", "bar", "violin", "dots"] = "box",
     paired: bool = False,
     show_posthoc: bool = True,
+    condition_matrix: dict[str, list[bool]] | None = None,
     palette: list[str] | None = None,
     output_path: str | None = None,
     format: Literal["svg", "pdf", "png"] = "svg",
@@ -539,7 +594,7 @@ def plot_group_distribution(
         )
     else:
         ax.set_xticklabels([_pretty_label(g) for g in groups], rotation=25, ha="right")
-    ax.set_ylabel(ylabel or _pretty_label(value_col))
+    ax.set_ylabel(_value_label(value_col, ylabel))
     if title:
         ax.set_title(title)
 
@@ -548,6 +603,8 @@ def plot_group_distribution(
     elif p_label:
         _annotate_p_value(ax, positions=positions, values=values, p_value=p_value, label=p_label)
 
+    if condition_matrix:
+        _draw_condition_matrix(ax, positions, condition_matrix)
     _style_axes(ax)
     if log_y:
         ax.set_yscale("log")
@@ -703,7 +760,7 @@ def plot_timecourse(
             ax.fill_between(x, y - err, y + err, color=color, alpha=0.18, linewidth=0, zorder=2)
 
     ax.set_xlabel(_pretty_label(tcol))
-    ax.set_ylabel(ylabel or _pretty_label(value_col))
+    ax.set_ylabel(_value_label(value_col, ylabel))
     if title:
         ax.set_title(title)
     if len(groups) > 1:
@@ -851,8 +908,8 @@ def plot_scatter(
                 )
     else:
         r = np.nan
-    ax.set_xlabel(xlabel or (f"log₁₀ {_pretty_label(x_col)}" if log10 else _pretty_label(x_col)))
-    ax.set_ylabel(ylabel or (f"log₁₀ {_pretty_label(y_col)}" if log10 else _pretty_label(y_col)))
+    ax.set_xlabel(xlabel or (f"log₁₀ {_value_label(x_col)}" if log10 else _value_label(x_col)))
+    ax.set_ylabel(ylabel or (f"log₁₀ {_value_label(y_col)}" if log10 else _value_label(y_col)))
     if title:
         ax.set_title(title)
     _style_axes(ax)
@@ -930,7 +987,7 @@ def plot_dff_heatmap(
     ax.set_yticklabels([str(i) for i in piv.index])
     if title:
         ax.set_title(title)
-    fig.colorbar(im, ax=ax, label=_pretty_label(value_col))
+    fig.colorbar(im, ax=ax, label=_value_label(value_col))
     fig.tight_layout()
 
     out = _figure_path(f"{table_name}__{value_col}__dff_heatmap", output_path, format)
@@ -967,6 +1024,7 @@ def plot_grouped_bars(
     weight_col: str | None = "auto",
     show_points: bool = True,
     show_sig: bool = True,
+    condition_matrix: dict[str, list[bool]] | None = None,
     palette: list[str] | None = None,
     font: Literal["sans", "serif"] = "sans",
     output_path: str | None = None,
@@ -1084,16 +1142,17 @@ def plot_grouped_bars(
 
     ax.set_xticks(xcen)
     ax.set_xticklabels([_pretty_label(c) for c in conditions])
-    ax.set_ylabel(ylabel or _pretty_label(value_col))
+    ax.set_ylabel(_value_label(value_col, ylabel))
     if title:
         ax.set_title(title)
+    n_matrix = _draw_condition_matrix(ax, xcen, condition_matrix) if condition_matrix else 0
     handles = [
         Line2D([0], [0], marker="o", linestyle="none", markersize=8,
                markerfacecolor=colors[j % len(colors)], markeredgecolor="none",
                label=_pretty_label(g))
         for j, g in enumerate(groups)
     ]
-    ax.legend(handles=handles, loc="upper center", bbox_to_anchor=(0.5, -0.14),
+    ax.legend(handles=handles, loc="upper center", bbox_to_anchor=(0.5, -0.14 - 0.09 * n_matrix),
               ncol=min(ng, 4), frameon=False, handletextpad=0.3, columnspacing=1.3)
     _style_axes(ax)
     if ymin is not None or ymax is not None:

@@ -66,7 +66,8 @@ earlier conversation is compacted.
   n, non-normal, pseudoreplication) to the user instead of reporting a bare p-value.
 - Figure labels — scientific typography, never a raw column name. imajin auto-formats axis / tick /
   legend labels (underscores → spaces, Title Case, units in parentheses like (µm²)/(s), ΔF/F₀, SEM;
-  it keeps marker/gene acronyms such as GFP / ROI / Ch2 uppercase). When YOU pass a `title`,
+  it keeps marker/gene acronyms such as GFP / ROI / Ch2 uppercase; and a measured-value axis with no
+  known unit gets **(A.U.)** — e.g. intensity → "Mean Intensity (A.U.)"). When YOU pass a `title`,
   `xlabel`, or `ylabel`, follow the same convention: Title Case, no underscores, units in
   parentheses ("Mean Intensity (a.u.)"), Greek where standard (ΔF/F₀), and acronyms uppercase — do
   NOT hand a plot the bare column string.
@@ -78,6 +79,11 @@ earlier conversation is compacted.
   control/treated bars side by side per condition and annotates the within-condition significance
   (control vs treated). Do NOT compare bars across a different condition AND a different treatment at
   once (that confounds the two factors); compare like-with-like — same condition, control vs treated.
+  For a multi-factor layout, pass `condition_matrix={"Treatment":[false,true,…], "Genotype":[…]}`
+  (one on/off per column) to draw the molecular-biology **condition table** under the bars — a
+  **filled ● = present/positive, open ○ = absent/negative** circle per factor row. It works on
+  `plot_group_distribution` too (columns = its groups), so a bar chart where each bar is a
+  condition combo shows a clean circle grid instead of long compound tick labels.
 - When the user wants analysis **restricted to a hand-drawn region** on a Z-stack ("이 영역만",
   "draw an ROI", "이 부분만 분석"), first run `max_projection` so they draw the ROI on the flat 2D
   projection instead of slice-by-slice, then `boundary_mask_from_shapes(shapes_layer,

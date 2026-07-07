@@ -258,3 +258,31 @@ def test_plot_grouped_bars(tmp_path) -> None:
     svg = out.read_text(encoding="utf-8")
     assert "Mean Intensity" in svg and "Control" in svg and "Treated" in svg
     assert "mean_intensity" not in svg
+
+
+def test_value_label_appends_au_when_no_unit() -> None:
+    V = figures._value_label
+    assert V("mean_intensity") == "Mean Intensity (A.U.)"   # unitless -> A.U.
+    assert V("area_um2") == "Area (µm²)"                     # detected unit -> no A.U.
+    assert V("cell_count") == "Cell Count"                   # dimensionless -> no A.U.
+    assert V("mean_intensity", "My Label") == "My Label"     # explicit wins
+
+
+def test_condition_matrix_renders_factor_rows(tmp_path) -> None:
+    table = state.put_table(
+        "cm",
+        pd.DataFrame({"sample_name": [f"{g}{i}" for g in ("a", "b") for i in range(3)],
+                      "group": ["a", "a", "a", "b", "b", "b"],
+                      "mean_intensity": [1.0, 2, 3, 4, 5, 6]}),
+        spec={"tool": "test"},
+    )
+    out = tmp_path / "cm.svg"
+    res = figures.plot_group_distribution(
+        table, "mean_intensity", kind="bar",
+        condition_matrix={"Treatment": [False, True], "Genotype": [True, True]},
+        output_path=str(out),
+    )
+    svg = out.read_text(encoding="utf-8")
+    assert "Treatment" in svg and "Genotype" in svg          # factor row labels drawn
+    assert "Mean Intensity (A.U.)" in svg                    # unitless value axis -> A.U.
+    assert res["path"] == str(out)

@@ -67,6 +67,15 @@ imajin이 **무엇을**(분석 종류) · **어디에**(대상) · **어떻게**
 - **그리스/특수 기호**: `dff` → **ΔF/F₀**, `f0` → **F₀**, `log10` → **log₁₀**.
 - **약어·마커·채널은 대문자 유지**: `GFP`·`ROI`·`SEM`·`Ch2-T2`·`mCherry`는 그대로 (Title Case가 망치지 않음).
 - 통계 약어: `sem`→SEM, `sd`→SD, `ci`→CI.
+- **단위 미정 → (A.U.)**: 측정값 축에 알려진 단위가 없고 무차원(count/ratio 등)도 아니면 자동으로
+  **(A.U.)**를 붙임. 예: `mean_intensity` → **Mean Intensity (A.U.)** (형광강도는 임의단위).
+
+### 조건표 (condition matrix)
+바/박스 그래프 **아래에 요인별 원(circle)** 을 그려 각 열(바)의 조건을 표시하는 분자생물학
+표기법. `condition_matrix={"Treatment":[false,true,…], "Genotype":[…]}` — 요인마다 열별 on/off를
+주면 **positive는 채운 원(●), negative는 빈 원(○)** 으로 행을 그립니다(요인명은 왼쪽). 긴 복합
+틱 라벨(WT+treated 등) 대신 깔끔한 원 격자로 대체됩니다. `plot_group_distribution`(열=그룹)과
+`plot_grouped_bars`(열=조건 클러스터) 모두 지원.
 
 | 입력(컬럼) | 라벨 |
 |---|---|
