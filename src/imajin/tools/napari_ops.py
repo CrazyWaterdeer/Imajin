@@ -64,3 +64,24 @@ def add_labels_from_worker(
         scale=scale or None,
         metadata=metadata,
     )
+
+
+def add_points_from_worker(
+    data: Any,
+    *,
+    name: str,
+    scale: tuple[float, ...],
+    metadata: dict[str, Any],
+    **kwargs: Any,
+):
+    """Add a Points layer holding detections in data/index coordinates (the
+    canonical layer geometry frame — see ``analysis/coords.py``). napari applies
+    ``scale`` for rendering; the points array itself stays unscaled."""
+
+    return get_viewer().add_points(
+        data,
+        name=name,
+        scale=scale or None,
+        metadata=metadata,
+        **kwargs,
+    )
