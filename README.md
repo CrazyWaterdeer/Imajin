@@ -111,6 +111,11 @@ happen.
   `plot_scatter`) alongside the calcium ΔF/F0 heatmap, plus multi-channel RGB
   composites (`export_channel_composite_png`) with per-channel max / mean
   projection, role-aware colormaps (counterstain → gray), and a scale bar.
+  `plot_group_distribution` takes a `kind` (`box` / `bar` / `violin` / `dots` —
+  points + mean±SEM, best for small n), draws **paired connecting lines**
+  (`paired=True`) for within-subject designs, and **multiplicity-corrected
+  post-hoc significance brackets** for 3+ groups, with palette / y-limits /
+  log-scale / point styling controls.
 - **3D + visualization**: `set_view`, `set_colormap`, `screenshot`,
   `max_projection`, `average_projection`, `orthogonal_views`,
   `animate_z_rotation` (mp4 / gif).
