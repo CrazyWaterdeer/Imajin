@@ -102,6 +102,57 @@ def test_save_result_bundle_collects_labels_tables_and_qc(
     state.reset_tables()
 
 
+def test_save_result_bundle_appends_to_active_analysis_bundle(
+    viewer, tmp_path, monkeypatch
+) -> None:
+    from imajin.result_bundles import reset_process_bundle, start_analysis
+
+    monkeypatch.setenv("IMAJIN_RESULTS_DIR", str(tmp_path / "results"))
+    reset_process_bundle()
+    state.reset_tables()
+    state.put_table("m1", pd.DataFrame({"label": [1], "area": [10.0]}))
+    state.put_table("m2", pd.DataFrame({"label": [1], "area": [20.0]}))
+
+    started = start_analysis("session")
+    r1 = results.save_result_bundle(name="file1", table_names=["m1"])
+    r2 = results.save_result_bundle(name="file2", table_names=["m2"])
+
+    # sequential per-file saves collect into the one started bundle, not a folder each
+    assert r1["reused"] is True and r2["reused"] is True
+    assert r1["bundle_path"] == str(started)
+    assert r2["bundle_path"] == str(started)
+    tables = sorted(p.name for p in (started / "tables").glob("*.csv"))
+    assert tables == ["m1.csv", "m2.csv"]
+    reset_process_bundle()
+    state.reset_tables()
+
+
+def test_save_result_bundle_creates_then_reuses_without_start_analysis(
+    viewer, tmp_path, monkeypatch
+) -> None:
+    from imajin.result_bundles import reset_process_bundle
+
+    monkeypatch.setenv("IMAJIN_RESULTS_DIR", str(tmp_path / "results"))
+    reset_process_bundle()
+    state.reset_tables()
+    state.put_table("a", pd.DataFrame({"label": [1], "area": [1.0]}))
+    state.put_table("b", pd.DataFrame({"label": [1], "area": [2.0]}))
+
+    # no start_analysis: the first save creates + promotes a bundle, the next reuses it
+    first = results.save_result_bundle(name="fileA", table_names=["a"])
+    second = results.save_result_bundle(name="fileB", table_names=["b"])
+    assert first["reused"] is False
+    assert second["reused"] is True
+    assert second["bundle_path"] == first["bundle_path"]
+
+    # new_bundle=True is the escape hatch for a genuinely separate folder
+    forced = results.save_result_bundle(name="fileC", table_names=["b"], new_bundle=True)
+    assert forced["reused"] is False
+    assert forced["bundle_path"] != first["bundle_path"]
+    reset_process_bundle()
+    state.reset_tables()
+
+
 def test_save_result_bundle_uses_source_layer_anchor(viewer, tmp_path, monkeypatch) -> None:
     from imajin.result_bundles import reset_process_bundle
 

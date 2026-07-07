@@ -21,6 +21,7 @@ from imajin.tools.napari_ops import snapshot_layer
 from imajin.tools.registry import tool
 
 current_bundle = _bundle_io.current_bundle
+promote_to_process_bundle = _bundle_io.promote_to_process_bundle
 current_sample_slug = _bundle_io.current_sample_slug
 finalize_bundle_metadata = _bundle_io.finalize_bundle_metadata
 populate_sample_outputs = _bundle_io.populate_sample_outputs
@@ -119,9 +120,12 @@ def save_labels(
 
 
 @tool(
-    description="Save a result bundle containing labels TIFFs, measurement table CSVs, "
-    "QC PNGs, and metadata.json. Use after segmentation/measurement so all generated "
-    "outputs are in one folder.",
+    description="Collect outputs (labels TIFFs, measurement CSVs, QC PNGs, figures, "
+    "metadata.json) into the active analysis bundle. By default this APPENDS to the "
+    "bundle opened by start_analysis — or the one an earlier save/output created in this "
+    "task — so a sequential multi-file workflow (e.g. per-file ROI analysis) lands in ONE "
+    "folder. A new folder is created only when no bundle is active; pass new_bundle=True to "
+    "force a separate folder for a genuinely independent result.",
     phase="4",
 )
 def save_result_bundle(
@@ -131,13 +135,22 @@ def save_result_bundle(
     qc_png_paths: list[str] | None = None,
     figures: list[str] | None = None,
     metadata: dict[str, Any] | None = None,
+    new_bundle: bool = False,
 ) -> dict[str, Any]:
-    bundle = create_result_bundle(
-        name,
-        kind="single",
-        metadata=metadata,
-        root=_anchor_for_layers(labels_layers),
-    )
+    # Reuse the active bundle (start_analysis, a batch context, or an earlier output
+    # in this task) so per-file results accumulate in one folder. Only mint a new
+    # bundle when none is active or the caller forces it, and promote a fresh one to
+    # the process slot so subsequent tool calls in the same task share it too.
+    bundle = None if new_bundle else current_bundle()
+    reused = bundle is not None
+    if bundle is None:
+        bundle = create_result_bundle(
+            name,
+            kind="single",
+            metadata=metadata,
+            root=_anchor_for_layers(labels_layers),
+        )
+        promote_to_process_bundle(bundle)
     outputs: dict[str, list[str]] = {
         "labels": [],
         "tables": [],
@@ -214,4 +227,5 @@ def save_result_bundle(
         "bundle_path": str(bundle),
         "metadata_path": str(bundle / "metadata.json"),
         "outputs": outputs,
+        "reused": reused,
     }

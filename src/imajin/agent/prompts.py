@@ -40,6 +40,10 @@ earlier conversation is compacted.
   Shapes layer names — the next file must start with no leftover ROI drawings. This is manual
   one-at-a-time stepping; it is NOT the uniform many-sample batch (`run_recipe_on_samples`).
   Plain `load_file` does not unload anything.
+- For such a sequential one-at-a-time session, call `start_analysis(<name>)` ONCE at the start so
+  every file's outputs collect in that single folder: per-file `save_result_bundle` appends to the
+  active bundle (as do figures/stats/QC). Do NOT call `finalize_analysis` between files — that
+  closes the folder and the next file would open a new one; finalize once at the very end.
 - When the user wants analysis **restricted to a hand-drawn region** on a Z-stack ("이 영역만",
   "draw an ROI", "이 부분만 분석"), first run `max_projection` so they draw the ROI on the flat 2D
   projection instead of slice-by-slice, then `boundary_mask_from_shapes(shapes_layer,
