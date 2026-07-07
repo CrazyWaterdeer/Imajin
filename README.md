@@ -27,8 +27,9 @@ happen.
 > A user-facing **capabilities matrix** — analysis type × target × tools ×
 > statistics × graph options, plus a statistics-selection guide and typical
 > workflows — is in [docs/analysis_capabilities.md](docs/analysis_capabilities.md).
-> A rendered **figure gallery** (every plot type at default styling) is at
-> [docs/gallery/index.html](docs/gallery/index.html) — open it in a browser.
+> A **figure gallery** (every plot type at default styling) is in
+> [docs/gallery/](docs/gallery/) — it renders on GitHub; the interactive
+> [index.html](docs/gallery/index.html) opens the same thing in a browser.
 > The enduring **design principles** (metadata vs meaning, no filename parsing,
 > channel roles, data models) are in [docs/design_principles.md](docs/design_principles.md).
 
