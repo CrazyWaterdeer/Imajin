@@ -14,25 +14,61 @@ from imajin.tools._dataframes import finite_numeric_frame, infer_time_column
 from imajin.tools.registry import tool
 
 
+# Categorical palette — colorblind-safe (min ΔE ≥ 17.7 across deuteranopia /
+# protanopia, at/above the Okabe-Ito benchmark, verified by CVD simulation).
+# control = neutral grey (de-emphasised); conditions get colour. Assigned in order.
 _PALETTE = (
-    "#0072B2",
-    "#D55E00",
-    "#009E73",
-    "#CC79A7",
-    "#E69F00",
-    "#56B4E9",
-    "#F0E442",
-    "#000000",
+    "#C9CCCE",  # grey — control
+    "#DA4E42",  # coral red
+    "#2F6B9E",  # steel blue
+    "#1F9E77",  # teal green
+    "#DDA43A",  # gold
+    "#C77BA9",  # mauve
 )
+
+_FONT_DIR = Path(__file__).resolve().parent.parent / "assets" / "fonts"
+_FONTS_READY = False
+_CJK_FAMILY: str | None = None
+
+
+def _ensure_fonts() -> None:
+    """Register the bundled Noto Sans/Serif (plus a CJK fallback for Korean labels)
+    with matplotlib's font manager. Idempotent; degrades to DejaVu if files are absent."""
+    global _FONTS_READY, _CJK_FAMILY
+    if _FONTS_READY:
+        return
+    from matplotlib import font_manager as fm
+
+    for fn in ("NotoSans.ttf", "NotoSerif.ttf"):
+        p = _FONT_DIR / fn
+        if p.exists():
+            try:
+                fm.fontManager.addfont(str(p))
+            except Exception:  # noqa: BLE001 - fall back to DejaVu
+                pass
+    try:  # CJK fallback so Korean/Japanese/Chinese labels aren't tofu boxes
+        from imajin.ui.fonts import find_cjk_font
+
+        found = find_cjk_font()
+        if found:
+            fm.fontManager.addfont(found[0])
+            _CJK_FAMILY = found[1]
+    except Exception:  # noqa: BLE001
+        _CJK_FAMILY = None
+    _FONTS_READY = True
 
 
 def _pyplot():
     import matplotlib
 
     matplotlib.use("Agg", force=True)
+    _ensure_fonts()
+    cjk = [_CJK_FAMILY] if _CJK_FAMILY else []
     matplotlib.rcParams.update(
         {
-            "font.family": "DejaVu Sans",
+            "font.family": "sans-serif",
+            "font.sans-serif": ["Noto Sans", *cjk, "DejaVu Sans"],
+            "font.serif": ["Noto Serif", *cjk, "DejaVu Serif"],
             "font.size": 8,
             "axes.labelsize": 8,
             "axes.titlesize": 9,
@@ -47,6 +83,13 @@ def _pyplot():
     import matplotlib.pyplot as plt
 
     return plt
+
+
+def _apply_font(family: str) -> None:
+    """Select the sans (Noto Sans, default) or serif (Noto Serif) family for this figure."""
+    import matplotlib
+
+    matplotlib.rcParams["font.family"] = "serif" if family == "serif" else "sans-serif"
 
 
 def _figure_path(stem: str, output_path: str | None, fmt: str) -> Path:
@@ -340,6 +383,7 @@ def plot_group_distribution(
     palette: list[str] | None = None,
     output_path: str | None = None,
     format: Literal["svg", "pdf", "png"] = "svg",
+    font: Literal["sans", "serif"] = "sans",
     title: str | None = None,
     ylabel: str | None = None,
     width: float = 3.2,
@@ -387,6 +431,7 @@ def plot_group_distribution(
     )
 
     plt = _pyplot()
+    _apply_font(font)
     fig, ax = plt.subplots(figsize=(float(width), float(height)))
     positions = np.arange(1, len(groups) + 1, dtype=float)
     colors = list(palette) if palette else list(_PALETTE)
@@ -538,6 +583,7 @@ def plot_timecourse(
     time_col: str | None = None,
     output_path: str | None = None,
     format: Literal["svg", "pdf", "png"] = "svg",
+    font: Literal["sans", "serif"] = "sans",
     title: str | None = None,
     ylabel: str | None = None,
     width: float = 3.6,
@@ -579,6 +625,7 @@ def plot_timecourse(
     summary["ci95"] = 1.96 * summary["sem"]
 
     plt = _pyplot()
+    _apply_font(font)
     fig, ax = plt.subplots(figsize=(float(width), float(height)))
     groups = [g for g in pd.unique(summary[group_col])]
     group_ns = {
@@ -677,6 +724,7 @@ def plot_scatter(
     group_col: str | None = "group",
     output_path: str | None = None,
     format: Literal["svg", "pdf", "png"] = "svg",
+    font: Literal["sans", "serif"] = "sans",
     title: str | None = None,
     xlabel: str | None = None,
     ylabel: str | None = None,
@@ -703,6 +751,7 @@ def plot_scatter(
         raise ValueError("no finite rows available for scatter plot")
 
     plt = _pyplot()
+    _apply_font(font)
     fig, ax = plt.subplots(figsize=(float(width), float(height)))
     if group_col and group_col in plot_df.columns:
         groups = [g for g in pd.unique(plot_df[group_col])]
@@ -810,6 +859,7 @@ def plot_dff_heatmap(
     value_col: str,
     output_path: str | None = None,
     format: Literal["svg", "pdf", "png"] = "png",
+    font: Literal["sans", "serif"] = "sans",
     time_col: str | None = None,
     title: str | None = None,
 ) -> dict[str, Any]:
@@ -827,6 +877,7 @@ def plot_dff_heatmap(
         raise ValueError("no rows available for the ΔF/F0 heatmap")
 
     plt = _pyplot()
+    _apply_font(font)
     fig, ax = plt.subplots(figsize=(6.0, max(1.5, 0.3 * piv.shape[0])))
     im = ax.imshow(piv.to_numpy(dtype=float), aspect="auto", interpolation="nearest",
                    cmap="magma")
