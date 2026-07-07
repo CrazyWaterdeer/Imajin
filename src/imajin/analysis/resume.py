@@ -5,8 +5,6 @@ Pure and headless (no napari, no session). A source file's identity is its path
 slashes, so the same file matches across mounts/platforms — WSL ``/mnt/d/exp/a.lsm``
 and Windows ``D:\\exp\\a.lsm`` under a shared anchor both key to ``a.lsm``. This is
 what makes cross-session/cross-machine resume work; absolute paths would not match.
-
-See ``docs/superpowers/specs/2026-07-06-resume-batch-from-bundle-design.md``.
 """
 from __future__ import annotations
 
