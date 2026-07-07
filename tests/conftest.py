@@ -193,6 +193,12 @@ class _FakeViewer:
         self.layers.append(layer)
         return layer
 
+    def add_points(self, data, **kwargs):
+        name = kwargs.pop("name", "points")
+        layer = _FakeLayer(np.asarray(data), str(name), kind="points", **kwargs)
+        self.layers.append(layer)
+        return layer
+
     def screenshot(self, path=None, canvas_only=True):
         arr = np.zeros((32, 32, 3), dtype=np.uint8)
         if path:

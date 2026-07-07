@@ -5,6 +5,7 @@ from typing import Any
 import numpy as np
 
 from imajin.agent.qt_dispatch import call_on_main
+from imajin.analysis import coords
 from imajin.session import get_layer
 from imajin.tools._trace_image import _binary_from_layer_data, _materialize
 from imajin.tools._trace_store import (
@@ -259,14 +260,19 @@ def set_soma_location(
         data = _materialize(L.data)
         if data.size == 0:
             raise ValueError(f"point layer {point_layer!r} is empty")
-        point = np.asarray(data, dtype=float).reshape(-1, data.shape[-1])[0]
+        index = np.asarray(data, dtype=float).reshape(-1, data.shape[-1])[0]
     else:
         L = get_layer(str(mask_layer))
         data = _materialize(L.data) > 0
         if not data.any():
             raise ValueError(f"mask layer {mask_layer!r} is empty")
-        point = np.asarray(ndi.center_of_mass(data), dtype=float)
-        point = point * np.asarray(_scale_tuple(tuple(getattr(L, "scale", ())), data.ndim))
+        index = np.asarray(ndi.center_of_mass(data), dtype=float)
+    # Store the soma in the skeleton's scale-only µm frame (skel.coordinates *
+    # spacing), so it lines up with node coordinates in Sholl / SWC export.
+    # Both paths convert index -> µm through the same helper; previously the
+    # point path stored raw data coordinates (unscaled), mismatching the mask
+    # path and breaking soma-relative metrics whenever scale != 1.
+    point = coords.point_to_world(index, L, use_translate=False)
     entry.record.soma = tuple(float(v) for v in point)
     return {"skeleton_id": skeleton_id, "soma": entry.record.soma}
 
