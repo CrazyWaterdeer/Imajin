@@ -18,7 +18,7 @@ from imajin.tools.registry import tool
 # protanopia, at/above the Okabe-Ito benchmark, verified by CVD simulation).
 # control = neutral grey (de-emphasised); conditions get colour. Assigned in order.
 _PALETTE = (
-    "#C9CCCE",  # grey — control
+    "#636867",  # slate grey — control
     "#DA4E42",  # coral red
     "#2F6B9E",  # steel blue
     "#1F9E77",  # teal green
