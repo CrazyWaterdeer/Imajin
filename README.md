@@ -47,7 +47,9 @@ happen.
 - **Measurement**: scikit-image `regionprops_table` per Labels layer with
   per-channel intensity columns, manual-edit-aware refresh, pandas
   `query`-style filter, group-by summary, and ROI intensity-over-time tables
-  for live imaging / time-series data. Tables persist in a session registry
+  for live imaging / time-series data. `measure_projected_intensity` projects
+  the z-stack first (mean by default — the standard for intensity comparison)
+  and measures 2D ROIs on the result. Tables persist in a session registry
   and surface in a layer-linked Qt table dock.
 - **Colocalization**: Manders M1/M2 (Otsu / zero / scalar threshold modes)
   and Pearson correlation, both mask-aware.
@@ -87,9 +89,12 @@ happen.
   `extract_timecourse_features`).
 - **Publication figures**: styled matplotlib group-distribution, time-course,
   and scatter plots (`plot_group_distribution`, `plot_timecourse`,
-  `plot_scatter`) alongside the calcium ΔF/F0 heatmap.
+  `plot_scatter`) alongside the calcium ΔF/F0 heatmap, plus multi-channel RGB
+  composites (`export_channel_composite_png`) with per-channel max / mean
+  projection, role-aware colormaps (counterstain → gray), and a scale bar.
 - **3D + visualization**: `set_view`, `set_colormap`, `screenshot`,
-  `max_projection`, `orthogonal_views`, `animate_z_rotation` (mp4 / gif).
+  `max_projection`, `average_projection`, `orthogonal_views`,
+  `animate_z_rotation` (mp4 / gif).
 - **Experiment annotations**: samples, replicates, files, and layer groups can
   be annotated as control / treatment / genotype / condition groups for
   report generation and group summaries.
@@ -100,7 +105,11 @@ happen.
   (`summarize_experiment`), and track progress (`get_batch_progress`). Results
   export as self-contained bundles (`save_result_bundle`) next to the input
   data; `generate_report` / `generate_experiment_report` render session- and
-  experiment-level HTML or markdown.
+  experiment-level HTML or markdown. A half-finished batch resumes from its own
+  output: `plan_resume` locates the prior bundle and diffs analysed vs pending
+  files, then `open_result_bundle` re-imports its recipe and appends only the
+  pending ones. For manual one-file-at-a-time review, `advance_to_file` steps to
+  the next file while freeing each finished file's layers from memory.
 - **Cell tracking**: `track_cells` via [btrack](https://github.com/quantumjot/btrack)
   on T-axis Labels.
 - **Calcium imaging (v1)**: rolling-percentile ΔF/F0, honest defocus +
@@ -191,10 +200,10 @@ export OPENAI_API_KEY=sk-...               # OpenAI / Anthropic-compat backends
 Core workflows are implemented (file loading → preprocessing → segmentation →
 measurement/time-course measurement → colocalization → 3D views → reporting),
 including folder-batch recipes that emit self-contained result bundles next to
-the input data. Sessions are ephemeral; reproducibility comes from bundle
-metadata and recipe import rather than project files. Offscreen Qt tests skip
-OpenGL screenshot/animation paths; heavy model/API paths remain marked as
-`slow` or `integration`.
+the input data. Sessions are ephemeral; reproducibility — and resuming a
+half-finished batch — comes from bundle metadata and recipe import rather than
+project files. Offscreen Qt tests skip OpenGL screenshot/animation paths; heavy
+model/API paths remain marked as `slow` or `integration`.
 
 ## License
 
