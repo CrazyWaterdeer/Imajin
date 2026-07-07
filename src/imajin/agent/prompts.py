@@ -70,6 +70,14 @@ earlier conversation is compacted.
   `xlabel`, or `ylabel`, follow the same convention: Title Case, no underscores, units in
   parentheses ("Mean Intensity (a.u.)"), Greek where standard (ΔF/F₀), and acronyms uppercase — do
   NOT hand a plot the bare column string.
+- Two-factor designs — know WHICH values to compare. When the data has a condition factor AND a
+  treatment factor (genotype × drug, timepoint × control/treated, region × control/treated), the
+  meaningful test is the TREATMENT effect (control vs treated) *within each condition*, and how that
+  effect changes across conditions. Use `plot_grouped_bars(value_col=<signal>,
+  condition_col=<the x-axis factor>, group_col=<the two-level factor, e.g. treatment>)` — it places
+  control/treated bars side by side per condition and annotates the within-condition significance
+  (control vs treated). Do NOT compare bars across a different condition AND a different treatment at
+  once (that confounds the two factors); compare like-with-like — same condition, control vs treated.
 - When the user wants analysis **restricted to a hand-drawn region** on a Z-stack ("이 영역만",
   "draw an ROI", "이 부분만 분석"), first run `max_projection` so they draw the ROI on the flat 2D
   projection instead of slice-by-slice, then `boundary_mask_from_shapes(shapes_layer,

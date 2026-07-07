@@ -944,3 +944,181 @@ def plot_dff_heatmap(
     plt.close(fig)
     return {"path": path, "format": format, "table_name": table_name,
             "value_col": value_col, "n_traces": int(piv.shape[0])}
+
+
+@tool(
+    description="Grouped ('paired') bar chart for a two-factor design. Within each "
+    "`condition_col` cluster on the x-axis, one bar per `group_col` level (e.g. control vs "
+    "treated) is drawn side by side with only a small gap, so the control-vs-treated difference "
+    "is read WITHIN each condition and compared across conditions. Bars are sample-level "
+    "mean ± SEM with points overlaid; group_col sets the bar colour (palette) and a circle "
+    "legend sits below; for two groups an assumption-aware per-condition significance star "
+    "(control vs the other group) is annotated over each cluster. Use this — not two separate "
+    "plots — when the question is 'does the control/treated difference change across conditions'.",
+    phase="7",
+    worker=True,
+)
+def plot_grouped_bars(
+    table_name: str,
+    value_col: str,
+    condition_col: str,
+    group_col: str = "group",
+    sample_col: str = "sample_name",
+    weight_col: str | None = "auto",
+    show_points: bool = True,
+    show_sig: bool = True,
+    palette: list[str] | None = None,
+    font: Literal["sans", "serif"] = "sans",
+    output_path: str | None = None,
+    format: Literal["svg", "pdf", "png"] = "svg",
+    title: str | None = None,
+    ylabel: str | None = None,
+    width: float = 4.4,
+    height: float = 3.4,
+    dpi: int = 600,
+    ymin: float | None = None,
+    ymax: float | None = None,
+    store_plot_data: bool = True,
+) -> dict[str, Any]:
+    from matplotlib.lines import Line2D
+
+    from imajin.tools.stats import _auto_select_test, _weighted_mean, resolve_weight_col
+
+    df, _dropped = finite_numeric_frame(get_table(table_name), value_col)
+    for col in (condition_col, group_col):
+        if col not in df.columns:
+            raise ValueError(f"column {col!r} not in table {table_name!r}: {list(df.columns)}")
+    weight = resolve_weight_col(df, weight_col, value_col)
+
+    if sample_col in df.columns:
+        def _agg(g: pd.DataFrame) -> float:
+            if weight:
+                return _weighted_mean(g[value_col], g[weight])
+            return float(np.nanmean(pd.to_numeric(g[value_col], errors="coerce")))
+
+        per = (
+            df.groupby([condition_col, group_col, sample_col], sort=False)
+            .apply(_agg, include_groups=False)
+            .rename("v")
+            .reset_index()
+        )
+        data_level = "sample"
+    else:
+        per = df[[condition_col, group_col]].copy()
+        per["v"] = pd.to_numeric(df[value_col], errors="coerce")
+        data_level = "object"
+    per = per[np.isfinite(per["v"])]
+
+    conditions = list(pd.unique(per[condition_col]))
+    groups = list(pd.unique(per[group_col]))
+    colors = list(palette) if palette else list(_PALETTE)
+    summ = (
+        per.groupby([condition_col, group_col], sort=False)["v"]
+        .agg(mean="mean", sem="sem", n="count")
+        .reset_index()
+    )
+
+    def _cell(cond: Any, grp: Any) -> tuple[float, float, int] | None:
+        r = summ[(summ[condition_col] == cond) & (summ[group_col] == grp)]
+        if r.empty:
+            return None
+        sem = float(r["sem"].iloc[0])
+        return float(r["mean"].iloc[0]), (0.0 if not np.isfinite(sem) else sem), int(r["n"].iloc[0])
+
+    def _vals(cond: Any, grp: Any) -> np.ndarray:
+        v = per[(per[condition_col] == cond) & (per[group_col] == grp)]["v"].to_numpy(dtype=float)
+        return v[np.isfinite(v)]
+
+    plt = _pyplot()
+    _apply_font(font)
+    fig, ax = plt.subplots(figsize=(float(width), float(height)))
+    ng = len(groups)
+    band = 0.8
+    bw = band / max(ng, 1)
+    xcen = np.arange(len(conditions), dtype=float)
+    rng = np.random.default_rng(12345)
+
+    for j, grp in enumerate(groups):
+        color = colors[j % len(colors)]
+        xs = xcen - band / 2 + (j + 0.5) * bw
+        heights = [(_cell(c, grp) or (np.nan, 0.0, 0))[0] for c in conditions]
+        sems = [(_cell(c, grp) or (np.nan, 0.0, 0))[1] for c in conditions]
+        ax.bar(xs, heights, width=bw * 0.9, color=color, linewidth=0, alpha=0.9, zorder=1)
+        ax.errorbar(xs, heights, yerr=sems, fmt="none", ecolor="#222222", elinewidth=1.0, capsize=3, zorder=3)
+        if show_points:
+            for i, cond in enumerate(conditions):
+                vv = _vals(cond, grp)
+                if vv.size:
+                    jit = rng.uniform(-bw * 0.26, bw * 0.26, size=vv.size)
+                    ax.scatter(np.full(vv.size, xs[i]) + jit, vv, s=13, color=color,
+                               edgecolor="white", linewidth=0.4, zorder=4, alpha=0.95)
+
+    sig_rows: list[dict[str, Any]] = []
+    if show_sig and ng == 2:
+        from scipy import stats as _ss
+
+        g0, g1 = groups
+        finite_all = per["v"].to_numpy(dtype=float)
+        yr = (float(np.nanmax(finite_all)) - float(np.nanmin(finite_all))) or 1.0
+        for i, cond in enumerate(conditions):
+            a, b = _vals(cond, g0), _vals(cond, g1)
+            if a.size < 2 or b.size < 2:
+                continue
+            test, _diag, _notes = _auto_select_test([(g0, a), (g1, b)])
+            try:
+                if test == "welch":
+                    p = float(_ss.ttest_ind(a, b, equal_var=False).pvalue)
+                else:
+                    p = float(_ss.mannwhitneyu(a, b, alternative="two-sided").pvalue)
+            except Exception:  # noqa: BLE001
+                continue
+            sig_rows.append({str(condition_col): cond, "test": test, "p_value": p})
+            x0 = xcen[i] - band / 2 + 0.5 * bw
+            x1 = xcen[i] + band / 2 - 0.5 * bw
+            c0, c1 = _cell(cond, g0), _cell(cond, g1)
+            tops = [np.nanmax(a) if a.size else 0.0, np.nanmax(b) if b.size else 0.0,
+                    (c0[0] + c0[1]) if c0 else 0.0, (c1[0] + c1[1]) if c1 else 0.0]
+            y = max(tops) + 0.06 * yr
+            ax.plot([x0, x0, x1, x1], [y, y + 0.02 * yr, y + 0.02 * yr, y], color="#333333", linewidth=0.8)
+            ax.text((x0 + x1) / 2, y + 0.02 * yr, _p_stars(p) or "ns", ha="center", va="bottom", fontsize=8)
+
+    ax.set_xticks(xcen)
+    ax.set_xticklabels([_pretty_label(c) for c in conditions])
+    ax.set_ylabel(ylabel or _pretty_label(value_col))
+    if title:
+        ax.set_title(title)
+    handles = [
+        Line2D([0], [0], marker="o", linestyle="none", markersize=8,
+               markerfacecolor=colors[j % len(colors)], markeredgecolor="none",
+               label=_pretty_label(g))
+        for j, g in enumerate(groups)
+    ]
+    ax.legend(handles=handles, loc="upper center", bbox_to_anchor=(0.5, -0.14),
+              ncol=min(ng, 4), frameon=False, handletextpad=0.3, columnspacing=1.3)
+    _style_axes(ax)
+    if ymin is not None or ymax is not None:
+        lo, hi = ax.get_ylim()
+        ax.set_ylim(bottom=ymin if ymin is not None else lo, top=ymax if ymax is not None else hi)
+    fig.tight_layout()
+
+    out = _figure_path(f"{table_name}__{value_col}__grouped_bars", output_path, format)
+    path = _save_figure(fig, out, dpi=dpi, metadata={
+        "tool": "plot_grouped_bars", "table_name": table_name, "value_col": value_col,
+        "condition_col": condition_col, "group_col": group_col, "data_level": data_level,
+    })
+    plt.close(fig)
+
+    plot_table = None
+    if store_plot_data:
+        plot_table = put_table(
+            f"plotdata_grouped__{value_col}", summ,
+            spec={"tool": "plot_grouped_bars", "source_table": table_name, "value_col": value_col,
+                  "condition_col": condition_col, "group_col": group_col},
+        )
+
+    return {
+        "path": path, "format": format, "table_name": table_name, "value_col": value_col,
+        "condition_col": condition_col, "group_col": group_col, "data_level": data_level,
+        "conditions": [str(c) for c in conditions], "groups": [str(g) for g in groups],
+        "significance": sig_rows or None, "plot_table": plot_table,
+    }
