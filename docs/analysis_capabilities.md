@@ -1,83 +1,87 @@
-# Imajin 분석 능력 매트릭스 (사용자 가이드)
+# Imajin Analysis Capabilities Matrix (User Guide)
 
-imajin이 **무엇을**(분석 종류) · **어디에**(대상) · **어떻게**(도구) 수행하고, 각 분석에
-어떤 **통계**와 **그래프**가 붙는지 정리한 참조 문서입니다. 챗독에서 자연어로 요청하든
-수동 dock에서 버튼으로 하든 같은 도구가 실행됩니다.
+A reference for **what** Imajin does (analysis type), **where** it acts (target),
+and **how** (tools), plus which **statistics** and **graphs** attach to each
+analysis. The same tools run whether you ask in natural language from the chat
+dock or click a button in the manual dock.
 
-> 표기: `도구이름`은 챗 에이전트가 호출하는 tool 함수입니다. "대상"은 그 분석이 실제로
-> 소비하는 napari 레이어/채널/표를 뜻합니다.
+> Notation: `tool_name` is the tool function the chat agent calls. "Target"
+> means the napari layer / channel / table the analysis actually consumes.
 
-## 능력 매트릭스
+## Capability matrix
 
-| 분석 종류 | 대상 | 주요 도구 (방식) | 통계 | 그래프 |
+| Analysis type | Target | Main tools (how) | Statistics | Graphs |
 |---|---|---|---|---|
-| 파일 로드 · 메타데이터 | `.lsm` / `.czi` / OME-TIFF | `load_file`, `reload_file`, `advance_to_file`(순차 언로드) | — | — |
-| 채널 주석 · 해석 | image 레이어 | `annotate_channel`, `resolve_target_channel`, `detect_counterstain_channel` | — | — |
-| 전처리 | target 채널 | `rolling_ball_background`, `auto_contrast`, `gaussian_denoise` | — | — |
-| 세포/객체 분할 | target 채널 | `segment_target_objects`, `auto_segment_target`, `segment_3d_cells_auto`, `cellpose_sam`, `analyze_target_cells`(원샷 분할+측정) | — | QC 오버레이 (`compute_segmentation_qc`) |
-| 발현 도메인 분할 | 채널 강도 | `segment_intensity_regions`, `segment_expression_domain` | — | — |
-| ROI 제한 분할 | Shapes + 참조 레이어 | `boundary_mask_from_shapes` → `boundary_mask=` 로 전달 | — | — |
-| **강도 측정 (객체별)** | labels × 채널 | `measure_intensity`, `measure_projected_intensity`(투영 후 측정), `refresh_measurement` | `describe_table`, `compare_groups` | `plot_group_distribution` |
-| **시계열 강도 (ROI over time)** | ROI labels × T | `measure_intensity_over_time`, `extract_timepoint` | `normalize_timecourse`, `extract_timecourse_features` | `plot_timecourse` |
-| 콜로컬라이제이션 | 채널 쌍 | `manders_coefficients`(M1/M2), `pearson_correlation` | — | `plot_scatter` |
-| **inside / outside 도메인** | 채널 마스크 | `mask_logic`, `partition_inside_outside`, `classify_labels_by_mask` | `compare_groups`(**paired** wilcoxon) | `plot_group_distribution`(`paired=True`) |
-| 칼슘 이미징 | ROI × T movie | `assess_calcium_timecourse`(ΔF/F0+게이팅), `correct_calcium_motion`, `stabilize_calcium_dense` | — | `plot_dff_heatmap` |
-| 세포 추적 | T축 labels | `track_cells` (btrack) | — | — |
-| 신경 형태 (고급, 별도 워크플로) | 스켈레톤 / 트레이스 | `enhance_neural_processes`, `skeletonize`, `prune_skeleton`, `compute_sholl_analysis`, `extract_branch_metrics`, `classify_neuron_type`, `find_similar_neurons`, `export_neural_trace` | 형태 지표 | Sholl 등 전용 |
-| **표 정리 · 풀링** | 세션 테이블 | `combine_tables`(파일별 표 합치기+`sample_name` 태깅), `import_table`(외부 CSV→세션), `coalesce_columns`(sparse 강도컬럼 통합), `map_column`(그룹 부여), `select_representative_rows`(주 영역만), `filter_table`, `summarize_table`, `export_table` | — | — |
-| **통계** | 측정 표 | `describe_table`, `compare_groups`, `summarize_experiment` | (본체) | `plot_group_distribution` |
-| QC · ROI 리뷰 | labels / 표 / 타임코스 | `compute_segmentation_qc`, `compute_measurement_qc`, `compute_timecourse_qc`, `mark_qc_status`, `review_target_roi`, `jump_to_object` | — | 라벨 아웃라인 |
-| 배치 · 실험 | 파일 그룹 | `register_files`, `annotate_samples`, `create_analysis_recipe`, `run_recipe_on_samples`, `get_batch_progress`, `plan_resume` → `open_result_bundle`(재개) | `summarize_experiment` | 실험 리포트 |
-| 리포트 | 세션 / 실험 | `save_result_bundle`(결과 한 폴더로), `generate_report`, `generate_experiment_report`, `generate_methods` | — | — |
-| 시각화 · 3D | 레이어 | `set_view`, `set_colormap`, `max_projection`, `average_projection`, `orthogonal_views`, `animate_z_rotation`, `export_channel_composite_png`, `screenshot` | — | — |
+| File load · metadata | `.lsm` / `.czi` / OME-TIFF | `load_file`, `reload_file`, `advance_to_file` (sequential unload) | — | — |
+| Channel annotation · interpretation | image layer | `annotate_channel`, `resolve_target_channel`, `detect_counterstain_channel` | — | — |
+| Preprocessing | target channel | `rolling_ball_background`, `auto_contrast`, `gaussian_denoise` | — | — |
+| Cell / object segmentation | target channel | `segment_target_objects`, `auto_segment_target`, `segment_3d_cells_auto`, `cellpose_sam`, `analyze_target_cells` (one-shot segment + measure) | — | QC overlay (`compute_segmentation_qc`) |
+| Expression-domain segmentation | channel intensity | `segment_intensity_regions`, `segment_expression_domain` | — | — |
+| ROI-restricted segmentation | Shapes + reference layer | `boundary_mask_from_shapes` → pass as `boundary_mask=` | — | — |
+| **Intensity measurement (per object)** | labels × channel | `measure_intensity`, `measure_projected_intensity` (measure after projection), `refresh_measurement` | `describe_table`, `compare_groups` | `plot_group_distribution` |
+| **Timecourse intensity (ROI over time)** | ROI labels × T | `measure_intensity_over_time`, `extract_timepoint` | `normalize_timecourse`, `extract_timecourse_features` | `plot_timecourse` |
+| Colocalization | channel pair | `manders_coefficients` (M1/M2), `pearson_correlation` | — | `plot_scatter` |
+| **inside / outside domain** | channel mask | `mask_logic`, `partition_inside_outside`, `classify_labels_by_mask` | `compare_groups` (**paired** wilcoxon) | `plot_group_distribution` (`paired=True`) |
+| Calcium imaging | ROI × T movie | `assess_calcium_timecourse` (ΔF/F0 + gating), `correct_calcium_motion`, `stabilize_calcium_dense` | — | `plot_dff_heatmap` |
+| Cell tracking | T-axis labels | `track_cells` (btrack) | — | — |
+| Neural morphology (advanced, separate workflow) | skeleton / trace | `enhance_neural_processes`, `skeletonize`, `prune_skeleton`, `compute_sholl_analysis`, `extract_branch_metrics`, `classify_neuron_type`, `find_similar_neurons`, `export_neural_trace` | morphometrics | Sholl, etc. |
+| **Table wrangling · pooling** | session tables | `combine_tables` (merge per-file tables + `sample_name` tag), `import_table` (external CSV → session), `coalesce_columns` (merge sparse intensity columns), `map_column` (assign group), `select_representative_rows` (main region only), `filter_table`, `summarize_table`, `export_table` | — | — |
+| **Statistics** | measurement table | `describe_table`, `compare_groups`, `summarize_experiment` | (core) | `plot_group_distribution` |
+| QC · ROI review | labels / table / timecourse | `compute_segmentation_qc`, `compute_measurement_qc`, `compute_timecourse_qc`, `mark_qc_status`, `review_target_roi`, `jump_to_object` | — | label outlines |
+| Batch · experiment | file group | `register_files`, `annotate_samples`, `create_analysis_recipe`, `run_recipe_on_samples`, `get_batch_progress`, `plan_resume` → `open_result_bundle` (resume) | `summarize_experiment` | experiment report |
+| Reporting | session / experiment | `save_result_bundle` (outputs into one folder), `generate_report`, `generate_experiment_report`, `generate_methods` | — | — |
+| Visualization · 3D | layer | `set_view`, `set_colormap`, `max_projection`, `average_projection`, `orthogonal_views`, `animate_z_rotation`, `export_channel_composite_png`, `screenshot` | — | — |
 
-## 그래프 옵션 상세
+## Graph options in detail
 
-### `plot_group_distribution` — 그룹 비교 (가장 옵션이 많음)
-| 옵션 | 값 | 설명 |
+### `plot_group_distribution` — group comparison (the most options)
+| Option | Values | Description |
 |---|---|---|
-| `kind` | `box`(기본) / `bar` / `violin` / `dots` | `dots` = 모든 점 + 평균±SEM crossbar (**소표본 정석**); `bar` = 평균+SEM 막대 |
-| `paired` | `True` / `False` | 같은 `sample_name`이 두 그룹에 있을 때 **샘플별 연결선** (inside/outside, 전/후) |
-| `show_posthoc` | `True`(기본) | 3그룹↑에서 **보정된 사후검정 유의성 bracket** (Games-Howell / Dunn+Holm) 자동 표시 |
-| `weight_col` | `auto`(기본) / `None` / 컬럼명 | 객체→샘플 집계 시 **면적가중**(area 있으면 total/total). `None`=무가중 |
-| `level` | `auto` / `sample` / `object` | 샘플단위 집계 vs 객체단위 |
-| `palette` | `["#..","#.."]` | 그룹 색 지정 |
-| `ymin` / `ymax` / `log_y` / `zero_baseline` | | y축 범위 · 로그 · 0부터 시작 |
-| `point_size` / `jitter` / `show_points` | | 점 크기 · 흩뿌림 폭 · 점 표시 여부 |
-| `show_n` / `show_stats` / `stats_test` | | n 라벨 · 유의성 표시 · 검정 종류 |
-| `format` / `title` / `ylabel` / `width` / `height` / `dpi` | | svg(기본)/pdf/png, 크기 |
+| `kind` | `box` (default) / `bar` / `violin` / `dots` | `dots` = all points + mean±SEM crossbar (**the standard for small n**); `bar` = mean + SEM bars |
+| `paired` | `True` / `False` | **per-sample connecting lines** when the same `sample_name` appears in two groups (inside/outside, before/after) |
+| `show_posthoc` | `True` (default) | auto-draws **corrected post-hoc significance brackets** (Games-Howell / Dunn+Holm) for 3+ groups |
+| `weight_col` | `auto` (default) / `None` / column name | **area-weighting** when aggregating objects → sample (total/total when area present). `None` = unweighted |
+| `level` | `auto` / `sample` / `object` | sample-level aggregation vs. object-level |
+| `palette` | `["#..","#.."]` | group colors |
+| `ymin` / `ymax` / `log_y` / `zero_baseline` | | y-axis range · log · start at 0 |
+| `point_size` / `jitter` / `show_points` | | point size · jitter width · show points |
+| `show_n` / `show_stats` / `stats_test` | | n labels · significance display · test type |
+| `format` / `title` / `ylabel` / `width` / `height` / `dpi` | | svg (default) / pdf / png, size |
 
-### 그 외 플롯
-- **`plot_grouped_bars`** — 두 요인(condition × treatment) grouped/"paired" 막대. `condition_col`이
-  x축 클러스터, `group_col`(control/treated)이 그 안에 나란히 붙는 막대(색 구분). 샘플단위
-  mean±SEM + 점, 하단 **원(circle) 범례**, 2그룹이면 **조건별 control-vs-treated 유의성**을 자동
-  표기. "처리 효과가 조건에 따라 달라지는가"를 볼 때 사용.
-- **`plot_timecourse`** — 평균선 + 구간(`interval`: `sem`/`ci95`/`none`), 개별 트레이스(`show_individual`, `max_individual_traces`).
-- **`plot_scatter`** — 두 수치 컬럼 산점도, 그룹 색(`group_col`), 로그(`log10`), 회귀선(`fit_line`).
-- **`plot_dff_heatmap`** — 칼슘 ΔF/F0 래스터 히트맵.
-- **`export_channel_composite_png`** — 다채널 RGB 합성 이미지(채널별 max/mean 투영, 역할별 컬러맵, 스케일바).
+### Other plots
+- **`plot_grouped_bars`** — two-factor (condition × treatment) grouped/"paired" bars. `condition_col`
+  forms the x-axis clusters and `group_col` (control/treated) places bars side by side within each
+  (color-coded). Sample-level mean±SEM + points, a **circle legend** at the bottom, and for 2 groups
+  **per-condition control-vs-treated significance** is annotated automatically. Use it to see "does
+  the treatment effect depend on condition."
+- **`plot_timecourse`** — mean line + band (`interval`: `sem`/`ci95`/`none`), individual traces (`show_individual`, `max_individual_traces`).
+- **`plot_scatter`** — scatter of two numeric columns, group color (`group_col`), log (`log10`), regression line (`fit_line`).
+- **`plot_dff_heatmap`** — calcium ΔF/F0 raster heatmap.
+- **`export_channel_composite_png`** — multi-channel RGB composite (per-channel max/mean projection, role-aware colormaps, scale bar).
 
-## 그림 표기 규칙 (scientific labeling)
+## Figure labeling rules (scientific labeling)
 
-그래프에는 **raw 컬럼명이 절대 나오지 않습니다.** 축·틱·범례·컬러바 라벨은 자동으로 과학
-표기법에 맞게 정제됩니다(`_pretty_label`). 규칙:
+**Raw column names never appear in figures.** Axis, tick, legend, and colorbar labels are
+automatically cleaned into scientific typography (`_pretty_label`). Rules:
 
-- **underscore 제거 + Title Case**: `mean_intensity` → **Mean Intensity**, `outside_green` → **Outside Green**.
-- **단위는 괄호로**: `area_um2` → **Area (µm²)**, `time_s` → **Time (s)**, `volume_um3` → **Volume (µm³)**.
-- **그리스/특수 기호**: `dff` → **ΔF/F₀**, `f0` → **F₀**, `log10` → **log₁₀**.
-- **약어·마커·채널은 대문자 유지**: `GFP`·`ROI`·`SEM`·`Ch2-T2`·`mCherry`는 그대로 (Title Case가 망치지 않음).
-- 통계 약어: `sem`→SEM, `sd`→SD, `ci`→CI.
-- **단위 미정 → (A.U.)**: 측정값 축에 알려진 단위가 없고 무차원(count/ratio 등)도 아니면 자동으로
-  **(A.U.)**를 붙임. 예: `mean_intensity` → **Mean Intensity (A.U.)** (형광강도는 임의단위).
+- **remove underscores + Title Case**: `mean_intensity` → **Mean Intensity**, `outside_green` → **Outside Green**.
+- **units in parentheses**: `area_um2` → **Area (µm²)**, `time_s` → **Time (s)**, `volume_um3` → **Volume (µm³)**.
+- **Greek / special symbols**: `dff` → **ΔF/F₀**, `f0` → **F₀**, `log10` → **log₁₀**.
+- **abbreviations / markers / channels stay uppercase**: `GFP` · `ROI` · `SEM` · `Ch2-T2` · `mCherry` are kept as-is (Title Case won't break them).
+- statistics abbreviations: `sem`→SEM, `sd`→SD, `ci`→CI.
+- **unknown unit → (A.U.)**: when a measurement axis has no known unit and is not dimensionless
+  (count/ratio, etc.), **(A.U.)** is appended automatically. Example: `mean_intensity` → **Mean
+  Intensity (A.U.)** (fluorescence intensity is in arbitrary units).
 
-### 조건표 (condition matrix)
-바/박스 그래프 **아래에 요인별 원(circle)** 을 그려 각 열(바)의 조건을 표시하는 분자생물학
-표기법. `condition_matrix={"Treatment":[false,true,…], "Genotype":[…]}` — 요인마다 열별 on/off를
-주면 **positive는 채운 원(●), negative는 빈 원(○)** 으로 행을 그립니다(요인명은 왼쪽). 긴 복합
-틱 라벨(WT+treated 등) 대신 깔끔한 원 격자로 대체됩니다. `plot_group_distribution`(열=그룹)과
-`plot_grouped_bars`(열=조건 클러스터) 모두 지원.
+### Condition matrix
+A molecular-biology notation that draws **per-factor circles beneath** the bar/box graph to indicate
+each column's (bar's) condition. `condition_matrix={"Treatment":[false,true,…], "Genotype":[…]}` —
+give each factor an on/off value per column and each row is drawn with **filled circles (●) for
+positive, open circles (○) for negative** (factor name on the left). It replaces long compound tick
+labels (WT+treated, etc.) with a clean circle grid. Supported by both `plot_group_distribution`
+(columns = groups) and `plot_grouped_bars` (columns = condition clusters).
 
-| 입력(컬럼) | 라벨 |
+| Input (column) | Label |
 |---|---|
 | `mean_intensity` | Mean Intensity |
 | `mean_intensity_GFP` | Mean Intensity GFP |
@@ -85,37 +89,38 @@ imajin이 **무엇을**(분석 종류) · **어디에**(대상) · **어떻게**
 | `dff` | ΔF/F₀ |
 | `time_s` | Time (s) |
 
-**직접 라벨을 줄 때도 같은 규칙을 따르세요**: `title`·`xlabel`·`ylabel`을 명시하면 그 값이
-그대로 쓰이므로 — Title Case, underscore 금지, 단위는 괄호("Mean Intensity (a.u.)"),
-표준 그리스 기호(ΔF/F₀), 약어 대문자. 폰트는 Noto Sans(기본)/Noto Serif(`font="serif"`).
+**Follow the same rules when you supply labels yourself**: `title` · `xlabel` · `ylabel`, when given,
+are used verbatim — so use Title Case, no underscores, units in parentheses ("Mean Intensity
+(a.u.)"), standard Greek symbols (ΔF/F₀), uppercase abbreviations. Fonts are Noto Sans (default) /
+Noto Serif (`font="serif"`).
 
-## 통계 선택 가이드
+## Statistics selection guide
 
-`compare_groups`가 핵심입니다. `test="auto"`(기본)는 **가정을 스스로 점검**합니다.
+`compare_groups` is the core. `test="auto"` (default) **checks the assumptions for you**.
 
-- **모수 vs 비모수**: Shapiro-Wilk 정규성 검정 → 정규면 **Welch**(2그룹)/**ANOVA**(3+), 비정규면 **Mann-Whitney**/**Kruskal**. 2·3그룹 철학 일관.
-- **paired(대응) 설계**: 같은 개체를 두 조건에서 측정(inside/outside, 전/후, 짝지음)했다면 **직접 `test="wilcoxon"`(또는 `"paired_t"`) 지정**. auto는 대응 구조를 감지하면 경고만 하고 자동 전환은 안 함(대응 여부는 실험 설계 주장이므로).
-- **면적가중**: 객체별 강도를 샘플로 합칠 때 기본이 **면적가중**(`weight_col="auto"`, area 있으면 total signal/total area). 작은 debris가 개수만큼 표를 행사하지 않음. per-cell처럼 각 객체가 독립 관측치면 `weight_col=None`.
-- **3그룹↑ 사후검정**: omnibus에 더해 **다중비교 보정된 쌍별 검정**을 `posthoc`로 반환(ANOVA→Games-Howell, Kruskal→Dunn's+Holm). 보정 없는 쌍별 비교를 직접 돌리지 말 것.
-- **주의**: 결과의 `warnings` / `test_selection`을 항상 확인 — 소표본(n<3), 비정규, **pseudoreplication**(세포를 독립 표본 취급) 경고가 여기 담김.
+- **parametric vs non-parametric**: Shapiro-Wilk normality test → **Welch** (2 groups) / **ANOVA** (3+) when normal, **Mann-Whitney** / **Kruskal** when not. Consistent philosophy across 2 and 3+ groups.
+- **paired design**: when the same unit is measured in two conditions (inside/outside, before/after, matched), **specify `test="wilcoxon"` (or `"paired_t"`) directly**. auto only warns when it detects a paired structure; it does not switch automatically (whether a design is paired is an experimental-design claim).
+- **area-weighting**: when pooling per-object intensity into a sample value, the default is **area-weighting** (`weight_col="auto"`, total signal / total area when area present), so small debris does not get one vote per object. Use `weight_col=None` when each object is an independent observation (per-cell).
+- **post-hoc for 3+ groups**: in addition to the omnibus, **multiplicity-corrected pairwise tests** are returned under `posthoc` (ANOVA→Games-Howell, Kruskal→Dunn's+Holm). Do not run uncorrected pairwise tests yourself.
+- **caution**: always check the result's `warnings` / `test_selection` — small-n (n<3), non-normality, and **pseudoreplication** (treating cells as independent samples) warnings live there.
 
-## 대표 워크플로
+## Representative workflows
 
-**① 단일 이미지 세포 측정**
-`load_file` → (필요시 `resolve_target_channel`) → `segment_target_objects` → `measure_intensity` → `describe_table` / `plot_group_distribution`.
+**① Single-image cell measurement**
+`load_file` → (if needed `resolve_target_channel`) → `segment_target_objects` → `measure_intensity` → `describe_table` / `plot_group_distribution`.
 
-**② 다중 파일 그룹 비교 (풀링)**
-파일별로 분할·측정 → `combine_tables`(sample_name 태깅) → `map_column`(sample→group) → `coalesce_columns`(강도 컬럼 통합) → (선택) `select_representative_rows`(주 영역만) → `compare_groups` → `plot_group_distribution`.
-외부에서 합친 CSV는 `import_table`로 되불러오면 동일하게 이어집니다.
+**② Multi-file group comparison (pooling)**
+Segment and measure per file → `combine_tables` (sample_name tagging) → `map_column` (sample→group) → `coalesce_columns` (merge intensity columns) → (optional) `select_representative_rows` (main region only) → `compare_groups` → `plot_group_distribution`.
+A CSV combined outside the app comes back in via `import_table` and continues identically.
 
-**③ inside / outside 도메인**
+**③ inside / outside domain**
 `segment_intensity_regions("green")` → `partition_inside_outside(green, specimen)` → `measure_intensity(partition, ["red"])` → `compare_groups(group_col="region", test="wilcoxon")` → `plot_group_distribution(paired=True)`.
 
-**④ 시계열 / 칼슘**
-`measure_intensity_over_time(ROI, movie)` → `normalize_timecourse` / `extract_timecourse_features` → `plot_timecourse`. 칼슘은 `assess_calcium_timecourse` → `plot_dff_heatmap`.
+**④ Timecourse / calcium**
+`measure_intensity_over_time(ROI, movie)` → `normalize_timecourse` / `extract_timecourse_features` → `plot_timecourse`. For calcium, `assess_calcium_timecourse` → `plot_dff_heatmap`.
 
-**⑤ 순차 다중 파일 (한 폴더에 수집)**
-`start_analysis(<이름>)` 한 번 호출 → 파일별 분석 → 각 `save_result_bundle`가 그 폴더에 append(파일 사이에 `finalize_analysis` 호출 금지) → 마지막에 `finalize_analysis`.
+**⑤ Sequential multi-file (collected into one folder)**
+Call `start_analysis(<name>)` once → analyze per file → each `save_result_bundle` appends to that folder (do not call `finalize_analysis` between files) → `finalize_analysis` at the end.
 
 ---
-*이 문서는 코드의 실제 등록 도구(110개)를 기준으로 작성되었습니다. 새 도구/옵션이 추가되면 함께 갱신하세요.*
+*This document is based on the tools actually registered in the code (110). Update it whenever new tools/options are added.*
