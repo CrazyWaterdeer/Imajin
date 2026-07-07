@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>imajin — Figure gallery</title>
+<style>
+  :root{
+    --bg:#F5F7FA; --surface:#FFFFFF; --plate:#FFFFFF;
+    --ink:#1A2029; --ink-soft:#5A6472; --ink-faint:#8A94A3;
+    --line:#E4E8EE; --line-soft:#EEF1F5;
+    --accent:#2F6DB4; --accent-tint:#ECF2F9; --accent-warm:#BE6E27;
+    --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,Roboto,"Helvetica Neue",Arial,sans-serif;
+    --mono:ui-monospace,"SF Mono","Cascadia Code","JetBrains Mono",Menlo,Consolas,monospace;
+    --shadow:0 1px 2px rgba(20,30,45,.04),0 8px 24px rgba(20,30,45,.05);
+  }
+  @media (prefers-color-scheme:dark){
+    :root{
+      --bg:#0E1217; --surface:#161C24; --plate:#FBFCFD;
+      --ink:#E7EBF1; --ink-soft:#98A2B1; --ink-faint:#6C7787;
+      --line:#252D38; --line-soft:#1C232E;
+      --accent:#6BA6E6; --accent-tint:#18222E; --accent-warm:#E19A52;
+      --shadow:0 1px 2px rgba(0,0,0,.25),0 10px 30px rgba(0,0,0,.35);
+    }
+  }
+  :root[data-theme="light"]{
+    --bg:#F5F7FA; --surface:#FFFFFF; --plate:#FFFFFF;
+    --ink:#1A2029; --ink-soft:#5A6472; --ink-faint:#8A94A3;
+    --line:#E4E8EE; --line-soft:#EEF1F5;
+    --accent:#2F6DB4; --accent-tint:#ECF2F9; --accent-warm:#BE6E27;
+    --shadow:0 1px 2px rgba(20,30,45,.04),0 8px 24px rgba(20,30,45,.05);
+  }
+  :root[data-theme="dark"]{
+    --bg:#0E1217; --surface:#161C24; --plate:#FBFCFD;
+    --ink:#E7EBF1; --ink-soft:#98A2B1; --ink-faint:#6C7787;
+    --line:#252D38; --line-soft:#1C232E;
+    --accent:#6BA6E6; --accent-tint:#18222E; --accent-warm:#E19A52;
+    --shadow:0 1px 2px rgba(0,0,0,.25),0 10px 30px rgba(0,0,0,.35);
+  }
+
+  *{box-sizing:border-box;}
+  body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);
+    line-height:1.55;-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility;}
+  .wrap{max-width:1140px;margin:0 auto;padding:clamp(22px,4vw,48px) clamp(18px,4vw,44px) 64px;}
+
+  /* masthead */
+  .mast{display:flex;flex-direction:column;gap:14px;padding-bottom:22px;
+    border-bottom:1px solid var(--line);}
+  .eyebrow{font-family:var(--mono);font-size:.72rem;letter-spacing:.16em;
+    text-transform:uppercase;color:var(--accent);margin:0;}
+  .mast h1{font-size:clamp(1.7rem,3.6vw,2.2rem);font-weight:680;letter-spacing:-.02em;
+    line-height:1.1;text-wrap:balance;margin:0;}
+  .dek{max-width:62ch;color:var(--ink-soft);font-size:1rem;margin:0;}
+  .meta{display:flex;flex-wrap:wrap;gap:8px 16px;font-family:var(--mono);font-size:.74rem;
+    color:var(--ink-faint);font-variant-numeric:tabular-nums;margin-top:2px;}
+  .meta b{color:var(--ink-soft);font-weight:600;}
+
+  /* sections */
+  .sec{margin-top:clamp(34px,5vw,52px);}
+  .sec__head{display:flex;flex-direction:column;gap:6px;margin-bottom:18px;}
+  .sec__head .eyebrow{color:var(--ink-faint);}
+  .sec__head h2{font-size:1.18rem;font-weight:640;letter-spacing:-.01em;margin:0;
+    color:var(--ink);}
+  .sec__intro{max-width:70ch;color:var(--ink-soft);font-size:.92rem;margin:2px 0 0;}
+
+  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:18px;}
+
+  .card{display:flex;flex-direction:column;gap:12px;background:var(--surface);
+    border:1px solid var(--line);border-radius:12px;padding:14px;box-shadow:var(--shadow);
+    transition:border-color .18s ease,transform .18s ease;}
+  .card:hover{border-color:color-mix(in srgb,var(--accent) 45%,var(--line));transform:translateY(-2px);}
+  .card--wide{grid-column:span 2;}
+  .card--full{grid-column:1/-1;}
+  @media (max-width:660px){.card--wide{grid-column:span 1;}}
+
+  .plate{background:var(--plate);border:1px solid var(--line-soft);border-radius:8px;
+    padding:10px;display:grid;place-items:center;
+    box-shadow:inset 0 0 0 1px rgba(255,255,255,.6);}
+  .plate img{width:100%;height:auto;display:block;border-radius:3px;}
+
+  figcaption{display:flex;flex-direction:column;gap:7px;}
+  .call{font-family:var(--mono);font-size:.74rem;color:var(--accent);
+    background:var(--accent-tint);border:1px solid color-mix(in srgb,var(--accent) 22%,transparent);
+    padding:3px 8px;border-radius:6px;align-self:flex-start;overflow-wrap:anywhere;}
+  .desc{font-size:.9rem;color:var(--ink-soft);margin:0;}
+
+  footer{margin-top:52px;padding-top:20px;border-top:1px solid var(--line);
+    display:flex;flex-wrap:wrap;gap:6px 18px;align-items:baseline;
+    font-family:var(--mono);font-size:.73rem;color:var(--ink-faint);}
+  footer .dot{color:var(--line);}
+
+  @media (prefers-reduced-motion:reduce){*{transition:none!important;}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="mast">
+    <p class="eyebrow">imajin · figure system</p>
+    <h1>Figure gallery</h1>
+    <p class="dek">Every figure type imajin currently produces, rendered at <b>default styling on
+      synthetic data</b> — a reference for the plotting tools' look, colour palette and options.</p>
+    <div class="meta"><span><b>5</b> tools</span><span class="dot">/</span><span><b>13</b> examples</span><span class="dot">/</span><span>matplotlib · SVG / PNG output</span></div>
+  </header>
+
+  <section class="sec"><header class="sec__head"><span class="eyebrow">design system()</span><h2>Palette &amp; typography</h2><p class="sec__intro">Control is a de-emphasised slate grey (#636867); conditions get colour. Colorblind-safe (min ΔE ≥ 15.2). Noto Sans (default) / Noto Serif. Axis, tick and legend labels are auto-formatted to scientific typography (Mean Intensity, µm², (A.U.)).</p></header><div class="grid">
+    <figure class="card card--full"><div class="plate"><img src="00_palette.png" alt="Verified under normal / deuteranopia / protanopia / grayscale" loading="lazy"></div><figcaption><code class="call">6-colour · colorblind-safe</code><p class="desc">Verified under normal / deuteranopia / protanopia / grayscale</p></figcaption></figure>
+    <figure class="card card--wide"><div class="plate"><img src="00_serif.png" alt="Noto Serif option (default is Noto Sans)" loading="lazy"></div><figcaption><code class="call">font="serif"</code><p class="desc">Noto Serif option (default is Noto Sans)</p></figcaption></figure>
+    </div></section>
+  <section class="sec"><header class="sec__head"><span class="eyebrow">plot_group_distribution()</span><h2>Group comparison</h2><p class="sec__intro">Chart kind, paired lines, post-hoc brackets and the condition matrix are all options of one tool.</p></header><div class="grid">
+    <figure class="card"><div class="plate"><img src="01_dist_box.png" alt="Box + points + mean ± 95% CI — default" loading="lazy"></div><figcaption><code class="call">kind="box"</code><p class="desc">Box + points + mean ± 95% CI — default</p></figcaption></figure>
+    <figure class="card"><div class="plate"><img src="01_dist_bar.png" alt="Mean + SEM bars + points" loading="lazy"></div><figcaption><code class="call">kind="bar"</code><p class="desc">Mean + SEM bars + points</p></figcaption></figure>
+    <figure class="card"><div class="plate"><img src="01_dist_violin.png" alt="Density + points" loading="lazy"></div><figcaption><code class="call">kind="violin"</code><p class="desc">Density + points</p></figcaption></figure>
+    <figure class="card"><div class="plate"><img src="01_dist_dots.png" alt="All points + mean ± SEM crossbar — best for small n" loading="lazy"></div><figcaption><code class="call">kind="dots"</code><p class="desc">All points + mean ± SEM crossbar — best for small n</p></figcaption></figure>
+    <figure class="card"><div class="plate"><img src="02_posthoc.png" alt="Omnibus + multiplicity-corrected post-hoc brackets" loading="lazy"></div><figcaption><code class="call">3 groups</code><p class="desc">Omnibus + multiplicity-corrected post-hoc brackets</p></figcaption></figure>
+    <figure class="card"><div class="plate"><img src="03_paired.png" alt="Within-subject connecting lines" loading="lazy"></div><figcaption><code class="call">paired=True</code><p class="desc">Within-subject connecting lines</p></figcaption></figure>
+    </div></section>
+  <section class="sec"><header class="sec__head"><span class="eyebrow">condition_matrix=()</span><h2>Condition matrix</h2><p class="sec__intro">Filled ● (positive) / open ○ (negative) circles per factor beneath the bars — replaces long compound tick labels. Reusable across plots.</p></header><div class="grid">
+    <figure class="card card--wide"><div class="plate"><img src="08_condition_matrix.png" alt="Treatment / Genotype condition table (columns = bars)" loading="lazy"></div><figcaption><code class="call">plot_group_distribution</code><p class="desc">Treatment / Genotype condition table (columns = bars)</p></figcaption></figure>
+    <figure class="card card--wide"><div class="plate"><img src="07_grouped_bars.png" alt="Grouped bars + condition table (Activation) + circle legend + per-condition significance" loading="lazy"></div><figcaption><code class="call">plot_grouped_bars</code><p class="desc">Grouped bars + condition table (Activation) + circle legend + per-condition significance</p></figcaption></figure>
+    </div></section>
+  <section class="sec"><header class="sec__head"><span class="eyebrow">plot_timecourse()</span><h2>Time series</h2><p class="sec__intro">Group mean ± SEM band over individual traces.</p></header><div class="grid">
+    <figure class="card card--wide"><div class="plate"><img src="04_timecourse.png" alt="Mean ± SEM band + individual traces" loading="lazy"></div><figcaption><code class="call">interval="sem"</code><p class="desc">Mean ± SEM band + individual traces</p></figcaption></figure>
+    </div></section>
+  <section class="sec"><header class="sec__head"><span class="eyebrow">plot_scatter()</span><h2>Correlation</h2><p class="sec__intro">Grouped colour + regression line + r / p.</p></header><div class="grid">
+    <figure class="card card--wide"><div class="plate"><img src="05_scatter.png" alt="Scatter + regression line" loading="lazy"></div><figcaption><code class="call">fit_line=True</code><p class="desc">Scatter + regression line</p></figcaption></figure>
+    </div></section>
+  <section class="sec"><header class="sec__head"><span class="eyebrow">plot_dff_heatmap()</span><h2>Calcium imaging</h2><p class="sec__intro">Cell × time ΔF/F₀.</p></header><div class="grid">
+    <figure class="card card--wide"><div class="plate"><img src="06_heatmap.png" alt="ΔF/F₀ raster heatmap" loading="lazy"></div><figcaption><code class="call">value_col="dff"</code><p class="desc">ΔF/F₀ raster heatmap</p></figcaption></figure>
+    </div></section>
+
+  <footer><span>All figures at tool defaults</span><span class="dot">·</span><span>synthetic data</span><span class="dot">·</span><span>reference preview</span></footer>
+</div>
+</body>
+</html>
