@@ -253,21 +253,39 @@ def _distribution_statistics(
         return None, None, None, f"{type(exc).__name__}: {exc}"
 
 
-def _draw_paired_lines(
-    ax: Any, positions: np.ndarray, plot_df: pd.DataFrame, *, group_col: str, sample_col: str, groups: list[Any]
-) -> None:
-    """Connect the same sample across two groups (within-subject / paired designs)."""
+def _draw_paired(
+    ax: Any, positions: np.ndarray, plot_df: pd.DataFrame, *, group_col: str, sample_col: str,
+    groups: list[Any], colors: list[str], point_size: float, jitter: float, seed: int,
+    data_level: str, show_points: bool,
+) -> bool:
+    """Before/after paired plot for two groups: each sample gets ONE horizontal offset
+    that is shared by its point in each group and by the connecting line, so points stay
+    spread (jittered) while every line joins its own two points. Returns False (no-op) when
+    the design isn't a 2-group within-subject one, so the caller falls back to normal points."""
     if len(groups) != 2 or sample_col not in plot_df.columns:
-        return
-    piv = plot_df.pivot_table(index=sample_col, columns=group_col, values="plot_value", aggfunc="first")
+        return False
     g0, g1 = groups
+    piv = plot_df.pivot_table(index=sample_col, columns=group_col, values="plot_value", aggfunc="first")
     if g0 not in piv.columns or g1 not in piv.columns:
-        return
+        return False
+    rng = np.random.default_rng(seed)
+    samples = list(piv.index)
+    offsets = {s: float(rng.uniform(-abs(jitter), abs(jitter))) for s in samples}
     x0, x1 = float(positions[0]), float(positions[1])
-    for _, row in piv.iterrows():
-        v0, v1 = row.get(g0), row.get(g1)
+    for s in samples:
+        v0, v1 = piv.loc[s, g0], piv.loc[s, g1]
         if pd.notna(v0) and pd.notna(v1):
-            ax.plot([x0, x1], [float(v0), float(v1)], color="#999999", linewidth=0.7, alpha=0.7, zorder=2)
+            ax.plot([x0 + offsets[s], x1 + offsets[s]], [float(v0), float(v1)],
+                    color="#999999", linewidth=0.7, alpha=0.7, zorder=2)
+    if show_points:
+        alpha = 0.9 if data_level == "sample" else 0.6
+        for gx, gname, color in ((x0, g0, colors[0]), (x1, g1, colors[1 % len(colors)])):
+            ys = piv[gname].to_numpy(dtype=float)
+            xs = np.array([gx + offsets[s] for s in samples], dtype=float)
+            m = np.isfinite(ys)
+            ax.scatter(xs[m], ys[m], s=point_size, color=color, alpha=alpha,
+                       edgecolor="white", linewidth=0.5, zorder=3)
+    return True
 
 
 def _annotate_posthoc(
@@ -392,8 +410,13 @@ def plot_group_distribution(
             body.set_alpha(0.22)
             body.set_edgecolor("#333333")
 
+    drew_paired = False
     if paired:
-        _draw_paired_lines(ax, positions, plot_df, group_col=group_col, sample_col=sample_col, groups=groups)
+        drew_paired = _draw_paired(
+            ax, positions, plot_df, group_col=group_col, sample_col=sample_col, groups=groups,
+            colors=colors, point_size=psize, jitter=jitter, seed=12345, data_level=data_level,
+            show_points=show_points,
+        )
 
     rng = np.random.default_rng(12345)
     for i, arr in enumerate(values):
@@ -405,10 +428,10 @@ def plot_group_distribution(
         sem = float(np.std(arr, ddof=1) / np.sqrt(arr.size)) if arr.size > 1 else 0.0
         if kind == "bar":
             ax.bar(x, mean, width=0.62, color=color, alpha=0.35, edgecolor=color, linewidth=1.0, zorder=1)
-        if show_points:
-            # paired: sit points exactly on the group center so the connecting lines
-            # (drawn center-to-center) actually join them — a before/after slopegraph.
-            jit = np.zeros(arr.size) if paired else rng.uniform(-abs(jitter), abs(jitter), size=arr.size)
+        if show_points and not drew_paired:
+            # _draw_paired already placed the points (sharing each sample's offset with its
+            # connecting line); only draw the ordinary jittered cloud when it didn't.
+            jit = rng.uniform(-abs(jitter), abs(jitter), size=arr.size)
             ax.scatter(
                 np.full(arr.size, x) + jit, arr, s=psize,
                 alpha=0.9 if data_level == "sample" else 0.5, color=color,
