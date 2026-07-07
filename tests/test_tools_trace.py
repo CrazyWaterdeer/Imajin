@@ -178,6 +178,43 @@ def test_sholl_analysis_outputs_radius_table(viewer) -> None:
     assert res["n_radii"] == len(df)
 
 
+def test_set_soma_from_point_is_scaled_to_microns(viewer) -> None:
+    # Regression: the point-layer path used to store raw data coordinates while
+    # the mask path stored µm, so soma-relative metrics broke whenever scale!=1.
+    trace.reset_skeletons()
+    scale = (0.5, 0.25)
+    viewer.add_labels(_make_branched_mask(), name="ymask", scale=scale)
+    skel = trace.skeletonize("ymask")
+    sid = skel["skeleton_id"]
+
+    viewer.add_points(np.array([[20.0, 30.0]]), name="soma_pt", scale=scale)
+    res = trace.set_soma_location(sid, point_layer="soma_pt")
+
+    # index (20, 30) -> µm (20*0.5, 30*0.25) = (10.0, 7.5); NOT the raw index.
+    assert np.allclose(res["soma"], (10.0, 7.5))
+    assert not np.allclose(res["soma"], (20.0, 30.0))
+
+
+def test_set_soma_point_and_mask_paths_agree(viewer) -> None:
+    # A single-voxel mask at (20, 30) and a point at (20, 30) must yield the
+    # same soma in µm — the two entry paths now share one coordinate convention.
+    trace.reset_skeletons()
+    scale = (0.5, 0.25)
+    viewer.add_labels(_make_branched_mask(), name="ymask2", scale=scale)
+    skel = trace.skeletonize("ymask2")
+    sid = skel["skeleton_id"]
+
+    viewer.add_points(np.array([[20.0, 30.0]]), name="pt", scale=scale)
+    soma_point = trace.set_soma_location(sid, point_layer="pt")["soma"]
+
+    dot = np.zeros((64, 64), dtype=np.uint8)
+    dot[20, 30] = 1
+    viewer.add_labels(dot, name="soma_mask", scale=scale)
+    soma_mask = trace.set_soma_location(sid, mask_layer="soma_mask")["soma"]
+
+    assert np.allclose(soma_point, soma_mask)
+
+
 def test_export_neural_trace_writes_swc_csv_and_tiff(viewer, tmp_path) -> None:
     trace.reset_skeletons()
     viewer.add_labels(_make_branched_mask(), name="ymask")
