@@ -29,6 +29,8 @@ happen.
 > workflows — is in [docs/analysis_capabilities.md](docs/analysis_capabilities.md).
 > A rendered **figure gallery** (every plot type at default styling) is at
 > [docs/gallery/index.html](docs/gallery/index.html) — open it in a browser.
+> The enduring **design principles** (metadata vs meaning, no filename parsing,
+> channel roles, data models) are in [docs/design_principles.md](docs/design_principles.md).
 
 - **File loading**: LSM (tifffile + `CZ_LSMINFO`), CZI (bioio-czi), OME-TIFF.
   LSM / TIFF / OME-TIFF are loaded into RAM by default for responsive Z-stack
