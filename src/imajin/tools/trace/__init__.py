@@ -31,6 +31,10 @@ from imajin.tools.trace.tracer import (
     build_rooted_tree,
     propose_filament_bridges,
 )
+from imajin.tools.trace.filament_analysis import (
+    compute_tree_topology,
+    measure_filament_diameter,
+)
 from imajin.tools.trace.connectome import query_connectome
 from imajin.tools.trace.classify import (
     add_reference_neuron,
@@ -60,6 +64,8 @@ __all__ = [
     "export_neural_trace",
     "propose_filament_bridges",
     "build_rooted_tree",
+    "measure_filament_diameter",
+    "compute_tree_topology",
     "query_connectome",
     "classify_neuron_type",
     "add_reference_neuron",

@@ -51,15 +51,26 @@ def _write_swc(entry: Any, path: Path) -> None:
     for node in disconnected:
         parent[node] = -1
 
+    radii = entry.record.parameters.get("node_radii_um")
+    radius_note = (
+        "measured from the segmented mask (measure_filament_diameter)"
+        if radii is not None
+        else "a placeholder (run measure_filament_diameter to fill it)"
+    )
     lines = [
         "# imajin SWC export",
-        "# type 3 is used for all process nodes; radius is a placeholder.",
+        f"# type 3 is used for all process nodes; radius is {radius_note}.",
         "# If no soma was annotated, the root is the first endpoint or node.",
     ]
     for node_id in range(n):
         x, y, z = swc_coords[node_id]
+        r = (
+            float(radii[node_id])
+            if radii is not None and node_id < len(radii)
+            else 0.5
+        )
         lines.append(
-            f"{node_id + 1} 3 {x:.6f} {y:.6f} {z:.6f} 0.5 "
+            f"{node_id + 1} 3 {x:.6f} {y:.6f} {z:.6f} {r:.6f} "
             f"{-1 if parent[node_id] < 0 else parent[node_id] + 1}"
         )
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
