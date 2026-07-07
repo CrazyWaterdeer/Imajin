@@ -4,8 +4,21 @@ Implementation plan for the approved scope from `imaris_gap_analysis.md`:
 Spots detection → spatial relationships → object-based colocalization, plus a
 connectivity-aware filament tracer with diameter analysis.
 
-Status: REVISED after one Codex review (2026-07-08). The review's valid points
-are folded in below; see "Codex triage" at the end for what was accepted/declined.
+Status: IMPLEMENTED (2026-07-08). Revised after one Codex review (valid points
+folded in — see "Codex triage" below), then Phases 0–5 built, tested, and merged
+to master. Deferred, as planned: deconvolution, dendritic-spine detection,
+`min_path` AutoPath.
+
+Delivered (12 new @tools, full suite 909 passed):
+- Phase 0 — `analysis/coords.py` coordinate contract; fixed `set_soma_location`.
+- Phase 1 — `detect_spots`, `compute_spots_qc` (`tools/spots.py`).
+- Phase 2 — `assign_objects_to_parents`, `measure_distance_to_reference`,
+  `nearest_neighbor_distances` (`tools/spatial.py`).
+- Phase 3 — `costes_threshold`, `costes_significance`, `object_colocalization`
+  (extended `tools/coloc.py`).
+- Phase 4 — `propose_filament_bridges`, `build_rooted_tree` (`tools/trace/tracer.py`).
+- Phase 5 — `measure_filament_diameter`, `compute_tree_topology`
+  (`tools/trace/filament_analysis.py`); SWC export now writes measured radii.
 
 ## Principles this plan must respect
 
