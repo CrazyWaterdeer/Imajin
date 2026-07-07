@@ -253,10 +253,58 @@ def _distribution_statistics(
         return None, None, None, f"{type(exc).__name__}: {exc}"
 
 
+def _draw_paired_lines(
+    ax: Any, positions: np.ndarray, plot_df: pd.DataFrame, *, group_col: str, sample_col: str, groups: list[Any]
+) -> None:
+    """Connect the same sample across two groups (within-subject / paired designs)."""
+    if len(groups) != 2 or sample_col not in plot_df.columns:
+        return
+    piv = plot_df.pivot_table(index=sample_col, columns=group_col, values="plot_value", aggfunc="first")
+    g0, g1 = groups
+    if g0 not in piv.columns or g1 not in piv.columns:
+        return
+    x0, x1 = float(positions[0]), float(positions[1])
+    for _, row in piv.iterrows():
+        v0, v1 = row.get(g0), row.get(g1)
+        if pd.notna(v0) and pd.notna(v1):
+            ax.plot([x0, x1], [float(v0), float(v1)], color="#999999", linewidth=0.7, alpha=0.7, zorder=2)
+
+
+def _annotate_posthoc(
+    ax: Any, positions: np.ndarray, values: list[np.ndarray], *, groups: list[Any], posthoc_rows: list[dict[str, Any]]
+) -> None:
+    """Stacked significance brackets for significant post-hoc pairs (p_adjusted < 0.05)."""
+    gpos = {str(g): float(positions[i]) for i, g in enumerate(groups)}
+    finite = [v[np.isfinite(v)] for v in values if len(v)]
+    if not finite:
+        return
+    allv = np.concatenate(finite)
+    y_max = float(allv.max())
+    y_range = (y_max - float(allv.min())) or max(abs(y_max), 1.0)
+    sig = [
+        r for r in posthoc_rows
+        if float(r.get("p_adjusted", 1.0)) < 0.05
+        and str(r["group_a"]) in gpos and str(r["group_b"]) in gpos
+    ]
+    sig.sort(key=lambda r: abs(gpos[str(r["group_a"])] - gpos[str(r["group_b"])]))
+    step, h = 0.09 * y_range, 0.02 * y_range
+    for lvl, r in enumerate(sig):
+        x0, x1 = sorted((gpos[str(r["group_a"])], gpos[str(r["group_b"])]))
+        y = y_max + step * (lvl + 1)
+        ax.plot([x0, x0, x1, x1], [y, y + h, y + h, y], color="#333333", linewidth=0.8)
+        ax.text((x0 + x1) / 2, y + h, _p_stars(float(r["p_adjusted"])) or "*", ha="center", va="bottom", fontsize=8)
+    if sig:
+        ax.set_ylim(top=y_max + step * (len(sig) + 1))
+
+
 @tool(
-    description="Export a publication-style group distribution figure from a numeric "
-    "measurement table. Defaults to sample-level means when sample_name is present, "
-    "with boxplot and jittered points. Saves SVG/PDF/PNG into figures/.",
+    description="Export a publication-style group distribution figure. kind picks the mark: "
+    "'box' (box+points, default), 'bar' (mean+SEM bar), 'violin', or 'dots' (all points + "
+    "mean±SEM crossbar — best for small n). Defaults to sample-level values when sample_name "
+    "is present. paired=True draws connecting lines between the same sample across two groups "
+    "(inside/outside, before/after). For 3+ groups it draws multiplicity-corrected post-hoc "
+    "significance brackets (Games-Howell/Dunn). Style via palette, ymin/ymax, log_y, "
+    "zero_baseline, point_size, jitter, show_points. Saves SVG/PDF/PNG into figures/.",
     phase="7",
     worker=True,
 )
@@ -268,6 +316,10 @@ def plot_group_distribution(
     level: Literal["auto", "sample", "object"] = "auto",
     sample_agg: Literal["mean", "median"] = "mean",
     weight_col: str | None = "auto",
+    kind: Literal["box", "bar", "violin", "dots"] = "box",
+    paired: bool = False,
+    show_posthoc: bool = True,
+    palette: list[str] | None = None,
     output_path: str | None = None,
     format: Literal["svg", "pdf", "png"] = "svg",
     title: str | None = None,
@@ -278,6 +330,13 @@ def plot_group_distribution(
     show_n: bool = True,
     show_stats: bool = True,
     stats_test: Literal["auto", "ttest", "welch", "mannwhitney", "anova", "kruskal"] = "auto",
+    ymin: float | None = None,
+    ymax: float | None = None,
+    log_y: bool = False,
+    zero_baseline: bool = False,
+    point_size: float | None = None,
+    jitter: float = 0.12,
+    show_points: bool = True,
     store_plot_data: bool = True,
 ) -> dict[str, Any]:
     df, _dropped = finite_numeric_frame(get_table(table_name), value_col)
@@ -311,72 +370,79 @@ def plot_group_distribution(
 
     plt = _pyplot()
     fig, ax = plt.subplots(figsize=(float(width), float(height)))
-    positions = np.arange(1, len(groups) + 1)
-    box = ax.boxplot(
-        values,
-        positions=positions,
-        widths=0.5,
-        patch_artist=True,
-        showfliers=False,
-        medianprops={"color": "#111111", "linewidth": 1.2},
-        whiskerprops={"color": "#333333", "linewidth": 0.9},
-        capprops={"color": "#333333", "linewidth": 0.9},
-        boxprops={"color": "#333333", "linewidth": 0.9},
-    )
-    for i, patch in enumerate(box["boxes"]):
-        patch.set_facecolor(_PALETTE[i % len(_PALETTE)])
-        patch.set_alpha(0.18)
+    positions = np.arange(1, len(groups) + 1, dtype=float)
+    colors = list(palette) if palette else list(_PALETTE)
+    psize = float(point_size) if point_size is not None else (22.0 if data_level == "sample" else 10.0)
+
+    if kind == "box":
+        box = ax.boxplot(
+            values, positions=positions, widths=0.5, patch_artist=True, showfliers=False,
+            medianprops={"color": "#111111", "linewidth": 1.2},
+            whiskerprops={"color": "#333333", "linewidth": 0.9},
+            capprops={"color": "#333333", "linewidth": 0.9},
+            boxprops={"color": "#333333", "linewidth": 0.9},
+        )
+        for i, patch in enumerate(box["boxes"]):
+            patch.set_facecolor(colors[i % len(colors)])
+            patch.set_alpha(0.18)
+    elif kind == "violin":
+        parts = ax.violinplot(values, positions=positions, showextrema=False)
+        for i, body in enumerate(parts["bodies"]):
+            body.set_facecolor(colors[i % len(colors)])
+            body.set_alpha(0.22)
+            body.set_edgecolor("#333333")
+
+    if paired:
+        _draw_paired_lines(ax, positions, plot_df, group_col=group_col, sample_col=sample_col, groups=groups)
 
     rng = np.random.default_rng(12345)
     for i, arr in enumerate(values):
         if arr.size == 0:
             continue
-        jitter = rng.uniform(-0.12, 0.12, size=arr.size)
-        ax.scatter(
-            np.full(arr.size, positions[i], dtype=float) + jitter,
-            arr,
-            s=22 if data_level == "sample" else 10,
-            alpha=0.9 if data_level == "sample" else 0.45,
-            color=_PALETTE[i % len(_PALETTE)],
-            edgecolor="#222222" if data_level == "sample" else "none",
-            linewidth=0.35,
-            zorder=3,
-        )
+        x = float(positions[i])
+        color = colors[i % len(colors)]
         mean = float(np.mean(arr))
         sem = float(np.std(arr, ddof=1) / np.sqrt(arr.size)) if arr.size > 1 else 0.0
-        ax.errorbar(
-            positions[i],
-            mean,
-            yerr=1.96 * sem,
-            fmt="D",
-            color="#111111",
-            markersize=3.5,
-            linewidth=0.9,
-            capsize=2,
-            zorder=4,
-        )
+        if kind == "bar":
+            ax.bar(x, mean, width=0.62, color=color, alpha=0.35, edgecolor=color, linewidth=1.0, zorder=1)
+        if show_points:
+            jit = rng.uniform(-abs(jitter), abs(jitter), size=arr.size)
+            ax.scatter(
+                np.full(arr.size, x) + jit, arr, s=psize,
+                alpha=0.9 if data_level == "sample" else 0.5, color=color,
+                edgecolor="#222222" if kind == "box" else "white", linewidth=0.5, zorder=3,
+            )
+        if kind in ("bar", "dots"):
+            ax.errorbar(x, mean, yerr=sem, fmt="none", ecolor="#111111", elinewidth=1.3, capsize=4, zorder=4)
+        if kind == "dots":
+            ax.plot([x - 0.22, x + 0.22], [mean, mean], color="#111111", linewidth=2.2, solid_capstyle="round", zorder=4)
+        if kind in ("box", "violin"):
+            ax.errorbar(x, mean, yerr=1.96 * sem, fmt="D", color="#111111", markersize=3.5, linewidth=0.9, capsize=2, zorder=4)
 
     ax.set_xticks(positions)
     if show_n:
         ax.set_xticklabels(
-            [f"{g}\nn={len(v)}" for g, v in zip(groups, values, strict=False)],
-            rotation=0,
-            ha="center",
+            [f"{g}\nn={len(v)}" for g, v in zip(groups, values, strict=False)], rotation=0, ha="center",
         )
     else:
         ax.set_xticklabels([str(g) for g in groups], rotation=25, ha="right")
     ax.set_ylabel(ylabel or value_col)
     if title:
         ax.set_title(title)
-    if p_label:
-        _annotate_p_value(
-            ax,
-            positions=positions,
-            values=values,
-            p_value=p_value,
-            label=p_label,
-        )
+
+    if len(groups) >= 3 and show_posthoc and stats_result and stats_result.get("posthoc"):
+        _annotate_posthoc(ax, positions, values, groups=groups, posthoc_rows=stats_result["posthoc"])
+    elif p_label:
+        _annotate_p_value(ax, positions=positions, values=values, p_value=p_value, label=p_label)
+
     _style_axes(ax)
+    if log_y:
+        ax.set_yscale("log")
+    elif zero_baseline:
+        ax.set_ylim(bottom=0.0)
+    if ymin is not None or ymax is not None:
+        lo, hi = ax.get_ylim()
+        ax.set_ylim(bottom=ymin if ymin is not None else lo, top=ymax if ymax is not None else hi)
     fig.tight_layout()
 
     out = _figure_path(f"{table_name}__{value_col}__distribution", output_path, format)

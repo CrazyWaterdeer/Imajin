@@ -131,3 +131,62 @@ def test_figure_writes_into_active_bundle(tmp_path, monkeypatch):
     assert any(o["kind"] == "figure" and o["path"] == f"figures/{out.name}" for o in outputs)
 
     reset_process_bundle()
+
+
+def _dist_table(name: str = "m") -> str:
+    return state.put_table(
+        name,
+        pd.DataFrame(
+            {
+                "sample_name": [f"c{i}" for i in range(4)] + [f"t{i}" for i in range(4)],
+                "group": ["control"] * 4 + ["treated"] * 4,
+                "mean_intensity": [1.0, 1.2, 0.9, 1.1, 2.5, 2.8, 2.6, 2.7],
+            }
+        ),
+        spec={"tool": "test"},
+    )
+
+
+@pytest.mark.parametrize("kind", ["box", "bar", "violin", "dots"])
+def test_plot_group_distribution_kind_variants(tmp_path, kind) -> None:
+    table = _dist_table()
+    out = tmp_path / f"{kind}.svg"
+    res = figures.plot_group_distribution(table, "mean_intensity", kind=kind, output_path=str(out))
+    assert res["path"] == str(out)
+    assert out.exists()
+    assert out.read_text(encoding="utf-8").lstrip().startswith("<?xml")
+
+
+def test_plot_paired_lines_and_style_options(tmp_path) -> None:
+    rows = []
+    for i in range(5):  # same samples in both groups -> paired connecting lines
+        rows += [
+            {"sample_name": f"s{i}", "group": "inside", "mean_intensity": 5.0 + i},
+            {"sample_name": f"s{i}", "group": "outside", "mean_intensity": 3.0 + i},
+        ]
+    table = state.put_table("io", pd.DataFrame(rows), spec={"tool": "test"})
+    out = tmp_path / "paired.png"
+    res = figures.plot_group_distribution(
+        table, "mean_intensity", group_col="group", kind="dots", paired=True,
+        palette=["#3E6DB5", "#E08214"], ymin=0.0, ymax=12.0, zero_baseline=True,
+        jitter=0.05, point_size=30.0, format="png", output_path=str(out),
+    )
+    assert res["path"] == str(out)
+    assert out.exists()
+
+
+def test_plot_posthoc_brackets_for_three_groups(tmp_path) -> None:
+    import numpy as np
+
+    rng = np.random.default_rng(1)
+    rows = []
+    for g, mu in [("a", 10.0), ("b", 12.0), ("c", 20.0)]:
+        for i in range(7):
+            rows.append({"sample_name": f"{g}{i}", "group": g, "mean_intensity": float(mu + rng.normal(0, 1.5))})
+    table = state.put_table("three", pd.DataFrame(rows), spec={"tool": "test"})
+    out = tmp_path / "three.svg"
+    res = figures.plot_group_distribution(
+        table, "mean_intensity", group_col="group", log_y=True, output_path=str(out)
+    )
+    assert len(res["groups"]) == 3
+    assert out.exists()
