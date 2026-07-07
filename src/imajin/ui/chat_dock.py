@@ -46,22 +46,36 @@ def _short_label(label: str) -> str:
 class _ModelPickerButton(QPushButton):
     """Pill-shaped button that opens a menu of model choices."""
 
-    currentIndexChanged = Signal(int)
+    currentIndexChanged = Signal(int)  # any change, including auto-fallback
+    userSelected = Signal(int)  # only a click in the menu (worth persisting)
 
     def __init__(
         self,
         choices: list[tuple[str, str, str]],
         statuses: dict[str, ProviderStatus] | None = None,
+        preferred: tuple[str, str] | None = None,
         parent=None,
     ) -> None:
         super().__init__(parent)
         self.setObjectName("modelBtn")
         self._choices = choices
         self._statuses: dict[str, ProviderStatus] = statuses or {}
-        # Default to first available choice; fall back to 0 if none available.
-        self._index = self._first_available_index()
+        # Restore the last-used (provider, model) choice when it's available;
+        # otherwise fall back to the first available choice.
+        self._index = self._resolve_initial_index(preferred)
         self._build_menu()
         self._refresh_text()
+
+    def _resolve_initial_index(self, preferred: tuple[str, str] | None) -> int:
+        if preferred is not None:
+            pref_kind, pref_model = preferred
+            for i, (_, kind, model) in enumerate(self._choices):
+                if kind == pref_kind and model == pref_model:
+                    st = self._statuses.get(kind)
+                    if st is None or st.available:
+                        return i
+                    break  # preferred choice exists but is currently unavailable
+        return self._first_available_index()
 
     def _first_available_index(self) -> int:
         for i, (_, kind, _) in enumerate(self._choices):
@@ -114,6 +128,10 @@ class _ModelPickerButton(QPushButton):
             return
         self._index = idx
         self._refresh_text()
+        # Only menu clicks reach setCurrentIndex, so this is a real user selection
+        # to persist. The refresh_statuses auto-fallback sets _index directly and
+        # emits only currentIndexChanged, so it never lands here.
+        self.userSelected.emit(idx)
         self.currentIndexChanged.emit(idx)
 
     def currentIndex(self) -> int:
@@ -242,8 +260,12 @@ class ChatDock(QWidget):
         toolbar.setSpacing(6)
 
         statuses = compute_statuses(self.settings)
-        self.model_picker = _ModelPickerButton(_MODEL_CHOICES, statuses=statuses)
+        preferred = (self.settings.default_provider, self.settings.default_model)
+        self.model_picker = _ModelPickerButton(
+            _MODEL_CHOICES, statuses=statuses, preferred=preferred
+        )
         self.model_picker.currentIndexChanged.connect(self._on_model_change)
+        self.model_picker.userSelected.connect(self._on_user_model_select)
         toolbar.addWidget(self.model_picker)
 
         toolbar.addStretch(1)
@@ -376,6 +398,17 @@ class ChatDock(QWidget):
         if self._runner is not None:
             self._append_system("Model changed — conversation reset.")
         self._release_runner()
+
+    def _on_user_model_select(self, index: int) -> None:
+        # Persist the user's pick so the next launch restores it. Best-effort: a
+        # write failure (e.g. read-only config dir) must not break model switching.
+        _, kind, model = _MODEL_CHOICES[index]
+        self.settings.default_provider = kind
+        self.settings.default_model = model
+        try:
+            self.settings.save_secrets()
+        except Exception:  # noqa: BLE001 - preference save is non-critical
+            pass
 
     def _on_clear(self) -> None:
         if self._runner is not None:

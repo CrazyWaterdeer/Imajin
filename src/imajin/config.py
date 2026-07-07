@@ -16,7 +16,10 @@ class Settings:
     openai_base_url: str = "https://api.openai.com/v1"
     ollama_base_url: str = "http://localhost:11434/v1"
     default_provider: str = "anthropic"
-    default_model: str = "claude-sonnet-4-6"
+    # Last-used model picker choice, stored as the picker's (provider, tier) tokens
+    # (e.g. provider "anthropic"/"claude-agent"/"openai"/"ollama", model "sonnet"/
+    # "opus"/"gpt"/…) so the chat dock can restore the selection across restarts.
+    default_model: str = "sonnet"
     ui_scale: str = "auto"
     data_dir: Path = field(
         default_factory=lambda: Path(platformdirs.user_data_dir("imajin"))
@@ -28,6 +31,8 @@ class Settings:
         "openai_base_url",
         "ollama_base_url",
         "ui_scale",
+        "default_provider",
+        "default_model",
     )
 
     @classmethod
@@ -61,6 +66,8 @@ class Settings:
                 "OLLAMA_BASE_URL", "ollama_base_url", "http://localhost:11434/v1"
             ),
             ui_scale=file_data.get("ui_scale") or "auto",
+            default_provider=file_data.get("default_provider") or "anthropic",
+            default_model=file_data.get("default_model") or "sonnet",
         )
 
     def save_secrets(self) -> None:
