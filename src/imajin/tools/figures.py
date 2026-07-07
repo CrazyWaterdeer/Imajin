@@ -406,7 +406,9 @@ def plot_group_distribution(
         if kind == "bar":
             ax.bar(x, mean, width=0.62, color=color, alpha=0.35, edgecolor=color, linewidth=1.0, zorder=1)
         if show_points:
-            jit = rng.uniform(-abs(jitter), abs(jitter), size=arr.size)
+            # paired: sit points exactly on the group center so the connecting lines
+            # (drawn center-to-center) actually join them — a before/after slopegraph.
+            jit = np.zeros(arr.size) if paired else rng.uniform(-abs(jitter), abs(jitter), size=arr.size)
             ax.scatter(
                 np.full(arr.size, x) + jit, arr, s=psize,
                 alpha=0.9 if data_level == "sample" else 0.5, color=color,
