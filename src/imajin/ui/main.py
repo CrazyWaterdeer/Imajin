@@ -253,9 +253,18 @@ def launch(settings: Any | None = None) -> int:
 
     _register_imajin_theme()
 
-    viewer = napari.Viewer(title="imajin")
+    viewer = napari.Viewer(title="Imajin")
     viewer.theme = "imajin"
     set_viewer(viewer)
+
+    # Hide napari's default centered welcome overlay (logo + shortcut hints) —
+    # Imajin shows its own guidance in the chat dock instead. Reaches into the
+    # private QtViewer (like _qt_window below); guard so a future napari can't
+    # break launch if the attribute moves.
+    try:
+        viewer.window._qt_viewer.show_welcome_screen = False
+    except AttributeError:
+        pass
 
     # Apply dark palette to QApplication so Qt's client-side decorations
     # (used under Wayland) draw a dark titlebar. Must run after Viewer
