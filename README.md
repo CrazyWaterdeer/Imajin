@@ -24,6 +24,10 @@ happen.
 
 ## Features
 
+> A user-facing **capabilities matrix** — analysis type × target × tools ×
+> statistics × graph options, plus a statistics-selection guide and typical
+> workflows — is in [docs/analysis_capabilities.md](docs/analysis_capabilities.md).
+
 - **File loading**: LSM (tifffile + `CZ_LSMINFO`), CZI (bioio-czi), OME-TIFF.
   LSM / TIFF / OME-TIFF are loaded into RAM by default for responsive Z-stack
   browsing, with automatic disk-backed memmap fallback when available RAM is
