@@ -5,12 +5,12 @@ split, issue #3). trace.py is a pure @tool wrapper layer, so this pins the
 *contract* the split must not change:
 
 * the registry entry (flags), ``inspect.signature`` and json-schema ``required``
-  for all 15 tools -- all are ``subagent="neural_tracer"`` specialist tools, so a
+  for every tool -- all are ``subagent="neural_tracer"`` specialist tools, so a
   silent flag flip would drop them from the neural-tracer agent's tool set;
-* the public + re-exported surface on ``imajin.tools.trace`` (15 tools plus
+* the public + re-exported surface on ``imajin.tools.trace`` (the tools plus
   ``reset_skeletons`` / ``_entry`` / ``list_trace_records`` -- the last is a
   ``report.py`` source import, not just a test read);
-* that all 15 stay in ``tools_for_anthropic("neural_tracer")``;
+* that all of them stay in ``tools_for_anthropic("neural_tracer")``;
 * a skeletonize -> analyze pipeline smoke (the existing test_tools_trace /
   test_tools_morphology suites pin the numeric detail; this guards that the moved
   tools still run end-to-end and the no-op statuses are unchanged).
@@ -40,13 +40,15 @@ TOOLS = [
     "compute_sholl_analysis",
     "compute_morphology_descriptors",
     "export_neural_trace",
+    "propose_filament_bridges",
+    "build_rooted_tree",
     "query_connectome",
     "classify_neuron_type",
     "add_reference_neuron",
     "find_similar_neurons",
 ]
 
-# Only these run on a worker thread; the rest are worker=False. (All 15 are
+# Only these run on a worker thread; the rest are worker=False. (All are
 # phase="6B", subagent="neural_tracer", manual=False, llm=True.)
 WORKER_TRUE = {
     "enhance_neural_processes",
@@ -68,6 +70,8 @@ SIG_GOLDEN: dict[str, tuple[str, list[str]]] = {
     "compute_sholl_analysis": ("(skeleton_id: 'str', center: 'str' = 'soma', radius_step_um: 'float' = 5.0, max_radius_um: 'float | None' = None) -> 'dict[str, Any]'", ["skeleton_id"]),
     "compute_morphology_descriptors": ("(skeleton_id: 'str') -> 'dict[str, Any]'", ["skeleton_id"]),
     "export_neural_trace": ("(skeleton_id: 'str', output_path: 'str', format: 'str' = 'swc') -> 'dict[str, Any]'", ["output_path", "skeleton_id"]),
+    "propose_filament_bridges": ("(skeleton_id: 'str', max_gap_um: 'float', support_layer: 'str | None' = None, min_support: 'float' = 0.2, max_tangent_angle_deg: 'float' = 60.0) -> 'dict[str, Any]'", ["max_gap_um", "skeleton_id"]),
+    "build_rooted_tree": ("(skeleton_id: 'str', apply_bridges: 'bool' = True) -> 'dict[str, Any]'", ["skeleton_id"]),
     "query_connectome": ("(skeleton_id: 'str', db: 'str' = 'neuprint', k: 'int' = 10) -> 'dict[str, Any]'", ["skeleton_id"]),
     "classify_neuron_type": ("(skeleton_id: 'str', reference: 'str' = 'default') -> 'dict[str, Any]'", ["skeleton_id"]),
     "add_reference_neuron": ("(skeleton_id: 'str', label: 'str', library_path: 'str' = 'default') -> 'dict[str, Any]'", ["label", "skeleton_id"]),
@@ -98,10 +102,10 @@ def test_public_and_reexported_surface() -> None:
         assert hasattr(trace, alias), alias
 
 
-def test_all_15_in_neural_tracer_tool_set() -> None:
+def test_all_neural_tracer_tools_in_set() -> None:
     names = {t["name"] for t in tools_for_anthropic(subagent="neural_tracer")}
     assert set(TOOLS) <= names
-    # These are the only neural_tracer tools; the split must not add/drop any.
+    # TOOLS must list exactly the neural_tracer tools — no accidental add/drop.
     assert names == set(TOOLS)
 
 
