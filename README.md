@@ -90,7 +90,9 @@ happen.
   parametric vs non-parametric from a **Shapiro-Wilk normality check** (consistently across 2 and
   3+ groups: Welch/ANOVA when normal, Mann-Whitney/Kruskal when not), warns when a group has n<3,
   flags a likely **paired design** (same sample in two groups) so you don't run an independent test
-  on within-subject data, and reports the rationale in `test_selection`. When aggregating objects to a per-sample value it
+  on within-subject data, and reports the rationale in `test_selection`. For 3+ groups it adds a
+  **multiplicity-corrected post-hoc** (Games-Howell for ANOVA, Dunn's + Holm for Kruskal) under
+  `posthoc`, so which pairs differ is answered without uncorrected multiple comparisons. When aggregating objects to a per-sample value it
   **area-weights by default** (`weight_col="auto"` → total signal / total area, using the
   regionprops `area` column when present), so many small debris objects don't skew the sample
   mean one-vote-each; `plot_group_distribution` matches, and both report `weighted_by`. Pass

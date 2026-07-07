@@ -622,6 +622,7 @@ def _finalize_compare(
     save_csv: bool,
     weighted_by: str | None = None,
     diagnostics: dict[str, Any] | None = None,
+    posthoc_rows: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Shared tail for compare_groups: persist the result rows and build the return dict."""
     result_df = pd.DataFrame(rows)
@@ -648,6 +649,20 @@ def _finalize_compare(
         row["value_col"] = value_col
     if save_csv:
         register_stats_rows(kind="compare", table=table_name, rows=out_rows)
+
+    posthoc_table: str | None = None
+    if posthoc_rows:
+        posthoc_table = put_table(
+            f"stats_posthoc__{slugify_result_name(table_name)}__{slugify_result_name(value_col)}",
+            pd.DataFrame(posthoc_rows),
+            spec={
+                "tool": "compare_groups",
+                "kind": "posthoc",
+                "source_table": table_name,
+                "value_col": value_col,
+                "group_col": group_col,
+            },
+        )
     return {
         "source_table": table_name,
         "value_col": value_col,
@@ -662,6 +677,8 @@ def _finalize_compare(
         "group_counts": group_counts,
         "dropped_nonfinite": dropped,
         "test_selection": diagnostics,
+        "posthoc": posthoc_rows,
+        "posthoc_table": posthoc_table,
         "warnings": warnings,
     }
 
@@ -745,6 +762,96 @@ def _within_subject_warning(
     )
 
 
+def _adjust_pvalues(pvals: list[float], method: str) -> list[float]:
+    """Holm-Bonferroni (step-down FWER) or Benjamini-Hochberg (step-up FDR) adjustment."""
+    m = len(pvals)
+    if m == 0 or method == "none":
+        return [min(max(p, 0.0), 1.0) for p in pvals]
+    order = sorted(range(m), key=lambda i: pvals[i])
+    adj = [0.0] * m
+    if method == "holm":
+        running = 0.0
+        for rank, idx in enumerate(order):
+            running = max(running, (m - rank) * pvals[idx])
+            adj[idx] = min(running, 1.0)
+    else:  # fdr_bh
+        running = 1.0
+        for rank in range(m - 1, -1, -1):
+            idx = order[rank]
+            running = min(running, pvals[idx] * m / (rank + 1))
+            adj[idx] = min(running, 1.0)
+    return adj
+
+
+def _games_howell(grouped: list[tuple[Any, np.ndarray]]) -> list[dict[str, Any]]:
+    """Games-Howell post-hoc (parametric, unequal variance). The studentized-range
+    p-value already controls the family-wise error rate, so p_adjusted == p_value."""
+    from scipy.stats import studentized_range
+
+    k = len(grouped)
+    stats_ = [(name, float(np.mean(v)), float(np.var(v, ddof=1)) if len(v) > 1 else 0.0, len(v)) for name, v in grouped]
+    rows: list[dict[str, Any]] = []
+    for i in range(k):
+        for j in range(i + 1, k):
+            na, ma, va, ni = stats_[i]
+            nb, mb, vb, nj = stats_[j]
+            se = float(np.sqrt(va / ni + vb / nj)) if ni and nj else 0.0
+            if se == 0.0:
+                t, df, p = 0.0, float("nan"), (1.0 if ma == mb else 0.0)
+            else:
+                t = (ma - mb) / se
+                df = (va / ni + vb / nj) ** 2 / (
+                    (va / ni) ** 2 / (ni - 1) + (vb / nj) ** 2 / (nj - 1)
+                )
+                p = float(min(studentized_range.sf(abs(t) * np.sqrt(2), k, df), 1.0))
+            rows.append({
+                "group_a": na, "group_b": nb, "mean_diff_a_minus_b": ma - mb,
+                "statistic": t, "df": df, "p_value": p, "p_adjusted": p,
+                "method": "games_howell",
+            })
+    return rows
+
+
+def _dunn(grouped: list[tuple[Any, np.ndarray]], correction: str) -> list[dict[str, Any]]:
+    """Dunn's post-hoc (non-parametric), using pooled tie-corrected rank variance,
+    with Holm/BH adjustment across the pairwise family."""
+    from scipy.stats import norm, rankdata
+
+    concat = np.concatenate([v for _, v in grouped])
+    n_total = concat.size
+    ranks = rankdata(concat)
+    _, counts = np.unique(concat, return_counts=True)
+    tie_term = float(np.sum(counts ** 3 - counts)) / (12.0 * (n_total - 1)) if n_total > 1 else 0.0
+    var_factor = n_total * (n_total + 1) / 12.0 - tie_term
+
+    mean_ranks: list[float] = []
+    sizes: list[int] = []
+    pos = 0
+    for _name, v in grouped:
+        r = ranks[pos: pos + len(v)]
+        pos += len(v)
+        mean_ranks.append(float(r.mean()))
+        sizes.append(len(v))
+
+    k = len(grouped)
+    raw: list[float] = []
+    pairs: list[tuple[int, int, float]] = []
+    for i in range(k):
+        for j in range(i + 1, k):
+            se = float(np.sqrt(var_factor * (1.0 / sizes[i] + 1.0 / sizes[j])))
+            z = (mean_ranks[i] - mean_ranks[j]) / se if se > 0 else 0.0
+            raw.append(float(min(2.0 * norm.sf(abs(z)), 1.0)))
+            pairs.append((i, j, z))
+    adjusted = _adjust_pvalues(raw, correction)
+    return [
+        {
+            "group_a": grouped[i][0], "group_b": grouped[j][0], "statistic": z,
+            "p_value": p, "p_adjusted": pa, "method": f"dunn+{correction}",
+        }
+        for (i, j, z), p, pa in zip(pairs, raw, adjusted)
+    ]
+
+
 @tool(
     description="Compare groups for a numeric measurement with conservative defaults. "
     "Uses sample-level means when sample_name is present; otherwise object-level "
@@ -758,7 +865,10 @@ def _within_subject_warning(
     "objects to a per-sample value, weight_col='auto' (default) weights by the `area` "
     "column when present — i.e. total signal / total area, so small debris objects "
     "count in proportion to their size rather than one-object-one-vote; pass "
-    "weight_col=None for a plain per-object mean (e.g. per-cell designs).",
+    "weight_col=None for a plain per-object mean (e.g. per-cell designs). For 3+ groups "
+    "it also runs a corrected post-hoc pairwise test (Games-Howell for ANOVA; Dunn's "
+    "with Holm correction for Kruskal), returned under `posthoc` — so which pairs differ "
+    "is answered without uncorrected multiple comparisons.",
     phase="7",
     worker=True,
 )
@@ -774,6 +884,8 @@ def compare_groups(
         "auto", "ttest", "welch", "mannwhitney", "anova", "kruskal", "wilcoxon", "paired_t"
     ] = "auto",
     reference_group: str | None = None,
+    posthoc: bool = True,
+    posthoc_correction: Literal["holm", "fdr_bh", "none"] = "holm",
     n_bootstrap: int = 5000,
     seed: int = 12345,
     save_csv: bool = True,
@@ -845,6 +957,7 @@ def compare_groups(
         warnings.append(paired_warning)
 
     rows: list[dict[str, Any]] = []
+    posthoc_rows: list[dict[str, Any]] | None = None
     group_counts = {str(name): int(len(values)) for name, values in grouped}
     object_counts = (
         df.groupby(group_col, dropna=False)[value_col].size().to_dict()
@@ -964,6 +1077,18 @@ def compare_groups(
         }
         rows.append(row)
 
+        if posthoc and n_groups >= 3:
+            try:
+                posthoc_rows = (
+                    _games_howell(grouped)
+                    if test_name == "one_way_anova"
+                    else _dunn(grouped, posthoc_correction)
+                )
+            except Exception as exc:  # noqa: BLE001 - post-hoc is advisory, never fatal
+                warnings.append(
+                    f"post-hoc pairwise test skipped: {type(exc).__name__}: {exc}"
+                )
+
     return _finalize_compare(
         rows,
         table_name=table_name,
@@ -977,6 +1102,7 @@ def compare_groups(
         save_csv=save_csv,
         weighted_by=weighted_by,
         diagnostics=diagnostics,
+        posthoc_rows=posthoc_rows,
     )
 
 
