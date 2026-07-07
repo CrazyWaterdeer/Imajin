@@ -515,3 +515,70 @@ def summarize_table(
         "by": group_by,
         "values": agg.to_dict(orient="index"),
     }
+
+
+@tool(
+    description="Concatenate several registered tables row-wise into one combined table, "
+    "tagging each source's rows with a replicate/specimen id in `label_column` "
+    "(default 'sample_name'). Use this to merge the per-file tables of the manual "
+    "per-image path — e.g. inside/outside coloc tables for rep1/rep2/rep3 — into a "
+    "single table that compare_groups (paired), summarize_experiment, the plot_* tools, "
+    "and export_table can consume. Pass `labels` to name each replicate (one per table, "
+    "same order); omit it to label rows by their source table name. Columns are unioned "
+    "across sources (cells missing in a source become NaN). Returns the new table name "
+    "and per-source row counts.",
+    phase="4",
+    worker=True,
+)
+def combine_tables(
+    table_names: list[str],
+    new_table_name: str | None = None,
+    label_column: str = "sample_name",
+    labels: list[str] | None = None,
+) -> dict[str, Any]:
+    if not table_names:
+        raise ValueError("combine_tables needs at least one table name.")
+    if labels is not None and len(labels) != len(table_names):
+        raise ValueError(
+            f"labels has {len(labels)} entries but table_names has {len(table_names)}; "
+            "pass exactly one label per table (same order)."
+        )
+
+    frames: list[pd.DataFrame] = []
+    sources: list[dict[str, Any]] = []
+    for i, tname in enumerate(table_names):
+        df = get_table(tname).copy()  # raises KeyError (with available names) if missing
+        label = labels[i] if labels is not None else tname
+        if label_column in df.columns and labels is None:
+            raise ValueError(
+                f"table {tname!r} already has a {label_column!r} column; pass explicit "
+                "labels=[...] (one per table) to set replicate ids without clobbering it, "
+                "or choose a different label_column."
+            )
+        df[label_column] = label
+        frames.append(df)
+        sources.append({"table": tname, "label": label, "n_rows": int(len(df))})
+
+    combined = pd.concat(frames, ignore_index=True, sort=False)
+
+    name = call_on_main(
+        put_table,
+        new_table_name or "combined",
+        combined,
+        spec={
+            "tool": "combine_tables",
+            "sources": list(table_names),
+            "label_column": label_column,
+        },
+    )
+    shared = set.intersection(*(set(f.columns) for f in frames))
+    return {
+        "table_name": name,
+        "n_rows": int(len(combined)),
+        "n_sources": len(table_names),
+        "label_column": label_column,
+        "labels": [s["label"] for s in sources],
+        "sources": sources,
+        "columns": list(combined.columns),
+        "columns_not_in_all_sources": [c for c in combined.columns if c not in shared],
+    }

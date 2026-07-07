@@ -143,3 +143,61 @@ def test_load_file_via_call_tool(viewer, tiny_ome_tiff: Path) -> None:
     res = call_tool("load_file", path=str(tiny_ome_tiff))
     assert "layer_names" in res
     assert len(viewer.layers) == 3
+
+
+def test_import_table_csv(tmp_path: Path) -> None:
+    import pandas as pd
+
+    state.reset_tables()
+    src = tmp_path / "coloc_red_merged.csv"
+    pd.DataFrame(
+        {"sample": [1, 1, 2], "region": ["green_coloc", "outside_green", "green_coloc"], "v": [1.0, 2.0, 3.0]}
+    ).to_csv(src, index=False)
+
+    res = files.import_table(str(src))
+
+    assert res["table_name"] == "coloc_red_merged"  # defaults to file stem
+    assert res["n_rows"] == 3
+    assert res["columns"] == ["sample", "region", "v"]
+    assert list(state.get_table("coloc_red_merged")["region"]) == [
+        "green_coloc",
+        "outside_green",
+        "green_coloc",
+    ]
+    state.reset_tables()
+
+
+def test_import_table_custom_name_and_parquet(tmp_path: Path) -> None:
+    import pandas as pd
+
+    state.reset_tables()
+    src = tmp_path / "data.parquet"
+    pd.DataFrame({"v": [1.0, 2.0]}).to_parquet(src, index=False)
+
+    res = files.import_table(str(src), table_name="mine")
+
+    assert res["table_name"] == "mine"
+    assert res["format"] == "parquet"  # auto-detected from suffix
+    assert state.get_table("mine").shape == (2, 1)
+    state.reset_tables()
+
+
+def test_import_table_missing_file_raises(tmp_path: Path) -> None:
+    with pytest.raises(FileNotFoundError):
+        files.import_table(str(tmp_path / "nope.csv"))
+
+
+def test_export_then_import_table_roundtrip(tmp_path: Path) -> None:
+    import pandas as pd
+
+    state.reset_tables()
+    df0 = pd.DataFrame({"a": [1, 2], "b": ["x", "y"]})
+    state.set_table("t", df0)
+    out = tmp_path / "out.csv"
+
+    files.export_table("t", str(out))
+    res = call_tool("import_table", path=str(out), table_name="back")
+
+    pd.testing.assert_frame_equal(state.get_table("back"), df0)
+    assert res["n_rows"] == 2
+    state.reset_tables()
