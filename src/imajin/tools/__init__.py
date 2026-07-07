@@ -16,6 +16,7 @@ from imajin.tools import channels  # noqa: F401, E402
 from imajin.tools import preprocess  # noqa: F401, E402
 from imajin.tools import segment  # noqa: F401, E402
 from imajin.tools import spots  # noqa: F401, E402
+from imajin.tools import spatial  # noqa: F401, E402
 from imajin.tools import boundary  # noqa: F401, E402
 from imajin.tools import measure  # noqa: F401, E402
 from imajin.tools import masks  # noqa: F401, E402
