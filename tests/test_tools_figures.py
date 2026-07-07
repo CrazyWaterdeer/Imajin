@@ -193,7 +193,7 @@ def test_plot_posthoc_brackets_for_three_groups(tmp_path) -> None:
 
 
 def test_new_palette_and_font_options(tmp_path) -> None:
-    assert figures._PALETTE[0] == "#C9CCCE"  # control = neutral grey
+    assert figures._PALETTE[0] == "#636867"  # control = slate grey
     assert figures._PALETTE[1] == "#DA4E42"  # coral red
     table = _dist_table()
 
