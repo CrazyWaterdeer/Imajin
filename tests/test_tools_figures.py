@@ -204,3 +204,30 @@ def test_new_palette_and_font_options(tmp_path) -> None:
     serif = tmp_path / "serif.svg"
     figures.plot_group_distribution(table, "mean_intensity", font="serif", output_path=str(serif))
     assert "Noto Serif" in serif.read_text(encoding="utf-8")
+
+
+def test_pretty_label_scientific_formatting() -> None:
+    P = figures._pretty_label
+    assert P("mean_intensity") == "Mean Intensity"
+    assert P("mean_intensity_GFP") == "Mean Intensity GFP"   # acronym kept uppercase
+    assert P("dff") == "ΔF/F₀"
+    assert P("area_um2") == "Area (µm²)"                      # trailing unit -> parens
+    assert P("time_s") == "Time (s)"
+    assert P("outside_green") == "Outside Green"
+    assert P("Ch2-T2") == "Ch2-T2"                            # intentional mixed case kept
+    assert "_" not in P("some_raw_column_name")
+
+
+def test_figure_labels_have_no_raw_underscores(tmp_path) -> None:
+    table = state.put_table(
+        "m",
+        pd.DataFrame({"sample_name": ["a0", "a1", "b0", "b1"],
+                      "group": ["green_coloc", "green_coloc", "outside_green", "outside_green"],
+                      "mean_intensity": [1.0, 2.0, 3.0, 4.0]}),
+        spec={"tool": "test"},
+    )
+    out = tmp_path / "lbl.svg"
+    figures.plot_group_distribution(table, "mean_intensity", output_path=str(out))
+    svg = out.read_text(encoding="utf-8")
+    assert "Mean Intensity" in svg and "Outside Green" in svg
+    assert "mean_intensity" not in svg and "outside_green" not in svg

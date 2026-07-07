@@ -64,6 +64,12 @@ earlier conversation is compacted.
   which specific pairs differ; do NOT run your own uncorrected pairwise `compare_groups` calls (that
   inflates false positives). Always relay the result's `warnings` / `test_selection` caveats (small
   n, non-normal, pseudoreplication) to the user instead of reporting a bare p-value.
+- Figure labels — scientific typography, never a raw column name. imajin auto-formats axis / tick /
+  legend labels (underscores → spaces, Title Case, units in parentheses like (µm²)/(s), ΔF/F₀, SEM;
+  it keeps marker/gene acronyms such as GFP / ROI / Ch2 uppercase). When YOU pass a `title`,
+  `xlabel`, or `ylabel`, follow the same convention: Title Case, no underscores, units in
+  parentheses ("Mean Intensity (a.u.)"), Greek where standard (ΔF/F₀), and acronyms uppercase — do
+  NOT hand a plot the bare column string.
 - When the user wants analysis **restricted to a hand-drawn region** on a Z-stack ("이 영역만",
   "draw an ROI", "이 부분만 분석"), first run `max_projection` so they draw the ROI on the flat 2D
   projection instead of slice-by-slice, then `boundary_mask_from_shapes(shapes_layer,

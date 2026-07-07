@@ -53,6 +53,29 @@ imajin이 **무엇을**(분석 종류) · **어디에**(대상) · **어떻게**
 - **`plot_dff_heatmap`** — 칼슘 ΔF/F0 래스터 히트맵.
 - **`export_channel_composite_png`** — 다채널 RGB 합성 이미지(채널별 max/mean 투영, 역할별 컬러맵, 스케일바).
 
+## 그림 표기 규칙 (scientific labeling)
+
+그래프에는 **raw 컬럼명이 절대 나오지 않습니다.** 축·틱·범례·컬러바 라벨은 자동으로 과학
+표기법에 맞게 정제됩니다(`_pretty_label`). 규칙:
+
+- **underscore 제거 + Title Case**: `mean_intensity` → **Mean Intensity**, `outside_green` → **Outside Green**.
+- **단위는 괄호로**: `area_um2` → **Area (µm²)**, `time_s` → **Time (s)**, `volume_um3` → **Volume (µm³)**.
+- **그리스/특수 기호**: `dff` → **ΔF/F₀**, `f0` → **F₀**, `log10` → **log₁₀**.
+- **약어·마커·채널은 대문자 유지**: `GFP`·`ROI`·`SEM`·`Ch2-T2`·`mCherry`는 그대로 (Title Case가 망치지 않음).
+- 통계 약어: `sem`→SEM, `sd`→SD, `ci`→CI.
+
+| 입력(컬럼) | 라벨 |
+|---|---|
+| `mean_intensity` | Mean Intensity |
+| `mean_intensity_GFP` | Mean Intensity GFP |
+| `area_um2` | Area (µm²) |
+| `dff` | ΔF/F₀ |
+| `time_s` | Time (s) |
+
+**직접 라벨을 줄 때도 같은 규칙을 따르세요**: `title`·`xlabel`·`ylabel`을 명시하면 그 값이
+그대로 쓰이므로 — Title Case, underscore 금지, 단위는 괄호("Mean Intensity (a.u.)"),
+표준 그리스 기호(ΔF/F₀), 약어 대문자. 폰트는 Noto Sans(기본)/Noto Serif(`font="serif"`).
+
 ## 통계 선택 가이드
 
 `compare_groups`가 핵심입니다. `test="auto"`(기본)는 **가정을 스스로 점검**합니다.
