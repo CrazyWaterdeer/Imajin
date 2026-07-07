@@ -621,6 +621,7 @@ def _finalize_compare(
     group_counts: dict[str, int],
     save_csv: bool,
     weighted_by: str | None = None,
+    diagnostics: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Shared tail for compare_groups: persist the result rows and build the return dict."""
     result_df = pd.DataFrame(rows)
@@ -660,16 +661,99 @@ def _finalize_compare(
         "csv_path": None,
         "group_counts": group_counts,
         "dropped_nonfinite": dropped,
+        "test_selection": diagnostics,
         "warnings": warnings,
     }
+
+
+def _shapiro_p(values: np.ndarray) -> float | None:
+    """Shapiro-Wilk normality p-value, or None when it can't be assessed
+    (fewer than 3 finite points, or a constant group)."""
+    from scipy import stats as scipy_stats
+
+    x = np.asarray(values, dtype=float)
+    x = x[np.isfinite(x)]
+    if x.size < 3 or float(np.ptp(x)) == 0.0:
+        return None
+    try:
+        return float(scipy_stats.shapiro(x).pvalue)
+    except Exception:
+        return None
+
+
+def _auto_select_test(
+    grouped: list[tuple[Any, np.ndarray]], *, alpha: float = 0.05
+) -> tuple[str, dict[str, Any], list[str]]:
+    """Pick an independent omnibus test, assumption- and n-aware.
+
+    Consistent philosophy across group counts: parametric (Welch for two groups,
+    one-way ANOVA for 3+) unless there is positive evidence against normality
+    (a group with n>=3 whose Shapiro-Wilk p < alpha), in which case the matching
+    non-parametric test (Mann-Whitney / Kruskal-Wallis) is used. Returns the test
+    name, a diagnostics dict, and human-readable notes.
+    """
+    n_groups = len(grouped)
+    sizes = {str(name): int(len(v)) for name, v in grouped}
+    shapiro = {str(name): _shapiro_p(v) for name, v in grouped}
+    n_min = min((len(v) for _, v in grouped), default=0)
+    rejected = [name for name, p in shapiro.items() if p is not None and p < alpha]
+    non_normal = len(rejected) > 0
+
+    if n_groups == 2:
+        test = "mannwhitney" if non_normal else "welch"
+    else:
+        test = "kruskal" if non_normal else "anova"
+
+    notes: list[str] = []
+    if non_normal:
+        notes.append(
+            f"Shapiro-Wilk rejects normality (p<{alpha}) in group(s) {rejected}; auto-selected the "
+            f"non-parametric {test}. Pass test= to override."
+        )
+    if n_min < 3:
+        notes.append(
+            f"smallest group has n={n_min} (<3): normality can't be assessed and power is very low — "
+            "interpret the p-value with strong caution (report descriptives / individual points)."
+        )
+    diagnostics = {
+        "auto_selected_test": test,
+        "group_sizes": sizes,
+        "normality_shapiro_p": {
+            k: (round(v, 4) if v is not None else None) for k, v in shapiro.items()
+        },
+        "n_min": int(n_min),
+    }
+    return test, diagnostics, notes
+
+
+def _within_subject_warning(
+    analysis: pd.DataFrame, group_col: str, sample_col: str, data_level: str
+) -> str | None:
+    """Warn when the same sample appears in 2+ groups (a paired / within-subject
+    design), which an independent test handles incorrectly."""
+    if data_level != "sample" or sample_col not in analysis.columns:
+        return None
+    spanning = analysis.groupby(sample_col)[group_col].nunique(dropna=False)
+    n_spanning = int((spanning > 1).sum())
+    if n_spanning < 2:
+        return None
+    return (
+        f"{n_spanning} samples appear in more than one {group_col!r} group — this looks like a "
+        "paired / within-subject design (e.g. inside-vs-outside or before/after on the same "
+        "specimen). An independent test ignores the pairing; prefer test='wilcoxon' (or "
+        "'paired_t') unless the groups really are independent."
+    )
 
 
 @tool(
     description="Compare groups for a numeric measurement with conservative defaults. "
     "Uses sample-level means when sample_name is present; otherwise object-level "
-    "values are used with a warning. Supports Welch t-test, Mann-Whitney U, ANOVA, "
-    "and Kruskal-Wallis (independent), plus paired Wilcoxon signed-rank / paired-t "
-    "(test='wilcoxon' / 'paired_t') for within-sample paired designs such as "
+    "values are used with a warning. test='auto' (default) chooses parametric "
+    "(Welch t-test / one-way ANOVA) vs non-parametric (Mann-Whitney U / Kruskal-Wallis) "
+    "from a Shapiro-Wilk normality check — consistently across 2 and 3+ groups — warns "
+    "when a group has n<3, and flags a likely paired design (the same sample appearing in "
+    "two groups). Also supports paired Wilcoxon signed-rank / paired-t "
+    "(test='wilcoxon' / 'paired_t') for within-sample designs such as "
     "inside-vs-outside a domain measured on the same specimen. When aggregating "
     "objects to a per-sample value, weight_col='auto' (default) weights by the `area` "
     "column when present — i.e. total signal / total area, so small debris objects "
@@ -752,8 +836,13 @@ def compare_groups(
 
     n_groups = len(grouped)
     requested_test = test
+    diagnostics: dict[str, Any] | None = None
     if test == "auto":
-        test = "welch" if n_groups == 2 else "kruskal"
+        test, diagnostics, auto_notes = _auto_select_test(grouped)
+        warnings.extend(auto_notes)
+    paired_warning = _within_subject_warning(analysis, group_col, sample_col, data_level)
+    if paired_warning:
+        warnings.append(paired_warning)
 
     rows: list[dict[str, Any]] = []
     group_counts = {str(name): int(len(values)) for name, values in grouped}
@@ -887,6 +976,7 @@ def compare_groups(
         group_counts=group_counts,
         save_csv=save_csv,
         weighted_by=weighted_by,
+        diagnostics=diagnostics,
     )
 
 

@@ -54,6 +54,15 @@ earlier conversation is compacted.
   the mean one-vote-each; pass `weight_col=None` for a plain per-object mean (per-cell designs), or
   `select_representative_rows(by="area", keep="max")` if you truly want only each sample's main
   region. A CSV combined outside the app comes back via `import_table`.
+- Choosing a statistical test: `compare_groups(test="auto")` already picks parametric vs
+  non-parametric from a Shapiro-Wilk normality check and warns on small n — trust it for the test
+  *family*, but YOU must assert the DESIGN. For a paired / within-subject comparison (the same
+  specimen under both conditions — inside-vs-outside, before/after, matched pairs) pass
+  `test="wilcoxon"` (or `"paired_t"`); auto stays independent and only warns that the design looks
+  paired. For 3+ groups `compare_groups` returns ONE omnibus p (ANOVA/Kruskal) and does NOT do
+  post-hoc pairwise — do not fire off many uncorrected pairwise `compare_groups` calls (that inflates
+  false positives). Always relay the result's `warnings` / `test_selection` caveats (small n,
+  non-normal, pseudoreplication) to the user instead of reporting a bare p-value.
 - When the user wants analysis **restricted to a hand-drawn region** on a Z-stack ("이 영역만",
   "draw an ROI", "이 부분만 분석"), first run `max_projection` so they draw the ROI on the flat 2D
   projection instead of slice-by-slice, then `boundary_mask_from_shapes(shapes_layer,

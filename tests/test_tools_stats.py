@@ -260,6 +260,65 @@ def test_normalize_timecourse_and_extract_features() -> None:
     assert label1["time_to_peak"] == pytest.approx(2.0)
 
 
+# --- assumption- and n-aware auto test selection -------------------------------------
+
+def _groups_table(data: dict[str, list[float]], name: str = "g") -> str:
+    rows = []
+    for grp, vals in data.items():
+        for i, v in enumerate(vals):
+            rows.append({"sample_name": f"{grp}{i}", "group": grp, "val": float(v)})
+    return state.put_table(name, pd.DataFrame(rows), spec={"tool": "test"})
+
+
+def test_auto_welch_for_normal_two_groups() -> None:
+    _groups_table({"a": [8, 9, 10, 11, 12, 10], "b": [18, 19, 20, 21, 22, 20]})
+    res = stats.compare_groups("g", "val", save_csv=False)
+    assert res["test"] == "welch_ttest"
+    sel = res["test_selection"]
+    assert sel["auto_selected_test"] == "welch"
+    assert sel["normality_shapiro_p"]["a"] > 0.05
+
+
+def test_auto_mannwhitney_for_nonnormal_two_groups() -> None:
+    _groups_table({"a": [1, 1, 1, 1, 1, 50], "b": [2, 2, 2, 2, 2, 60]})
+    res = stats.compare_groups("g", "val", save_csv=False)
+    assert res["test"] == "mann_whitney_u"
+    assert any("normality" in w.lower() for w in res["warnings"])
+
+
+def test_auto_anova_for_normal_three_groups() -> None:
+    # consistency fix: 3 normal groups get parametric ANOVA (old auto always used Kruskal)
+    _groups_table({"a": [8, 9, 10, 11, 12], "b": [18, 19, 20, 21, 22], "c": [28, 29, 30, 31, 32]})
+    res = stats.compare_groups("g", "val", save_csv=False)
+    assert res["test"] == "one_way_anova"
+
+
+def test_auto_kruskal_for_nonnormal_three_groups() -> None:
+    _groups_table({"a": [1, 1, 1, 1, 50], "b": [2, 3, 4, 5, 6], "c": [3, 4, 5, 6, 7]})
+    res = stats.compare_groups("g", "val", save_csv=False)
+    assert res["test"] == "kruskal_wallis"
+
+
+def test_auto_small_n_warns_and_stays_parametric() -> None:
+    _groups_table({"a": [10, 11], "b": [20, 21]})  # n=2 per group -> normality unverifiable
+    res = stats.compare_groups("g", "val", save_csv=False)
+    assert res["test"] == "welch_ttest"  # parametric default when normality can't be assessed
+    assert res["test_selection"]["n_min"] == 2
+    assert any("n=2" in w or "power" in w.lower() for w in res["warnings"])
+
+
+def test_within_subject_design_warns_on_independent_test() -> None:
+    rows = []
+    for i in range(4):  # s0..s3 measured in BOTH groups -> paired structure
+        rows += [
+            {"sample_name": f"s{i}", "group": "inside", "val": 5.0 + i},
+            {"sample_name": f"s{i}", "group": "outside", "val": 3.0 + i},
+        ]
+    state.put_table("ws", pd.DataFrame(rows), spec={"tool": "test"})
+    res = stats.compare_groups("ws", "val", group_col="group", save_csv=False)
+    assert any("paired" in w.lower() and "within-subject" in w.lower() for w in res["warnings"])
+
+
 # --- paired mode (inside/outside within-sample) --------------------------------------
 
 def _paired_inside_outside_table(n: int = 6, seed: int = 0) -> str:
@@ -343,10 +402,14 @@ def test_paired_drops_incomplete_pair_with_warning() -> None:
     assert any("incomplete" in w for w in res["warnings"])
 
 
-def test_paired_auto_stays_independent() -> None:
+def test_paired_auto_stays_independent_but_warns() -> None:
     _paired_inside_outside_table()
     res = stats.compare_groups("io", "val", group_col="region", n_bootstrap=100)  # test=auto
-    assert res["test"] == "welch_ttest"
+    # auto never silently switches to a paired test (that is the user's design assertion)...
+    assert res["test"] in {"welch_ttest", "mann_whitney_u"}
+    assert "wilcoxon" not in res["test"] and "paired" not in res["test"]
+    # ...but it now flags the within-subject design so the user can pick a paired test
+    assert any("paired" in w.lower() for w in res["warnings"])
 
 
 def test_paired_object_level_rejects_duplicates() -> None:

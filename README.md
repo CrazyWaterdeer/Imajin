@@ -86,7 +86,11 @@ happen.
 - **Statistics (paired)**: `compare_groups` supports independent Welch / Mann-Whitney /
   ANOVA / Kruskal and **paired** Wilcoxon signed-rank / paired-t (`test="wilcoxon"` /
   `"paired_t"`) with signed rank-biserial / Cohen's dz effect sizes, for within-sample
-  designs like inside-vs-outside a domain. When aggregating objects to a per-sample value it
+  designs like inside-vs-outside a domain. `test="auto"` is assumption-aware — it chooses
+  parametric vs non-parametric from a **Shapiro-Wilk normality check** (consistently across 2 and
+  3+ groups: Welch/ANOVA when normal, Mann-Whitney/Kruskal when not), warns when a group has n<3,
+  flags a likely **paired design** (same sample in two groups) so you don't run an independent test
+  on within-subject data, and reports the rationale in `test_selection`. When aggregating objects to a per-sample value it
   **area-weights by default** (`weight_col="auto"` → total signal / total area, using the
   regionprops `area` column when present), so many small debris objects don't skew the sample
   mean one-vote-each; `plot_group_distribution` matches, and both report `weighted_by`. Pass
