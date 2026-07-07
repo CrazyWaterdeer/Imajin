@@ -92,6 +92,48 @@ def _apply_font(family: str) -> None:
     matplotlib.rcParams["font.family"] = "serif" if family == "serif" else "sans-serif"
 
 
+# --- scientific label formatting -----------------------------------------------------
+# A raw column name ("mean_intensity", "area_um2", "dff") must never appear in a figure.
+# _pretty_label drops underscores, Title-Cases plain words, keeps intentional caps
+# (GFP, Ch2, mCherry, ROI), maps common science tokens (ΔF/F₀, µm, SEM), and renders a
+# trailing unit in parentheses. Explicit user-supplied labels/titles bypass this.
+_LABEL_TOKENS = {
+    "dff": "ΔF/F₀", "dff0": "ΔF/F₀", "df": "ΔF", "f0": "F₀",
+    "sem": "SEM", "sd": "SD", "ci": "CI", "cv": "CV", "roi": "ROI", "fov": "FOV", "vs": "vs.",
+}
+_LABEL_UNITS = {
+    "s": "s", "ms": "ms", "min": "min", "h": "h", "hr": "h", "hz": "Hz",
+    "um": "µm", "um2": "µm²", "um3": "µm³", "nm": "nm", "mm": "mm", "px": "px",
+    "au": "a.u.", "deg": "°",
+}
+
+
+def _pretty_label(text: Any) -> str:
+    if text is None:
+        return ""
+    s = str(text).strip()
+    if not s:
+        return s
+    words = s.replace("_", " ").split()
+    unit = None
+    if len(words) > 1 and words[-1].lower().strip(".") in _LABEL_UNITS:
+        unit = _LABEL_UNITS[words[-1].lower().strip(".")]
+        words = words[:-1]
+    out: list[str] = []
+    for w in words:
+        key = w.lower().strip(".")
+        if key in _LABEL_TOKENS:
+            out.append(_LABEL_TOKENS[key])
+        elif key in _LABEL_UNITS:
+            out.append(_LABEL_UNITS[key])
+        elif any(c.isupper() for c in w):  # GFP, Ch2, mCherry, ROI, T2 — keep intentional caps
+            out.append(w)
+        else:
+            out.append(w[:1].upper() + w[1:])
+    label = " ".join(out)
+    return f"{label} ({unit})" if unit else label
+
+
 def _figure_path(stem: str, output_path: str | None, fmt: str) -> Path:
     suffix = fmt.lower().lstrip(".")
     if output_path:
@@ -492,11 +534,12 @@ def plot_group_distribution(
     ax.set_xticks(positions)
     if show_n:
         ax.set_xticklabels(
-            [f"{g}\nn={len(v)}" for g, v in zip(groups, values, strict=False)], rotation=0, ha="center",
+            [f"{_pretty_label(g)}\nn={len(v)}" for g, v in zip(groups, values, strict=False)],
+            rotation=0, ha="center",
         )
     else:
-        ax.set_xticklabels([str(g) for g in groups], rotation=25, ha="right")
-    ax.set_ylabel(ylabel or value_col)
+        ax.set_xticklabels([_pretty_label(g) for g in groups], rotation=25, ha="right")
+    ax.set_ylabel(ylabel or _pretty_label(value_col))
     if title:
         ax.set_title(title)
 
@@ -653,14 +696,14 @@ def plot_timecourse(
         x = pd.to_numeric(part[tcol], errors="coerce").to_numpy(dtype=float)
         y = pd.to_numeric(part["mean"], errors="coerce").to_numpy(dtype=float)
         color = _PALETTE[i % len(_PALETTE)]
-        label = f"{group} (n={group_ns.get(group, 0)})"
+        label = f"{_pretty_label(group)} (n={group_ns.get(group, 0)})"
         ax.plot(x, y, color=color, linewidth=1.6, label=label, zorder=3)
         if interval != "none":
             err = pd.to_numeric(part[interval], errors="coerce").fillna(0).to_numpy(dtype=float)
             ax.fill_between(x, y - err, y + err, color=color, alpha=0.18, linewidth=0, zorder=2)
 
-    ax.set_xlabel(tcol)
-    ax.set_ylabel(ylabel or value_col)
+    ax.set_xlabel(_pretty_label(tcol))
+    ax.set_ylabel(ylabel or _pretty_label(value_col))
     if title:
         ax.set_title(title)
     if len(groups) > 1:
@@ -764,7 +807,7 @@ def plot_scatter(
                 alpha=0.65,
                 color=_PALETTE[i % len(_PALETTE)],
                 edgecolor="none",
-                label=str(group),
+                label=_pretty_label(group),
             )
         if len(groups) > 1:
             ax.legend(frameon=False)
@@ -808,8 +851,8 @@ def plot_scatter(
                 )
     else:
         r = np.nan
-    ax.set_xlabel(xlabel or (f"log10 {x_col}" if log10 else x_col))
-    ax.set_ylabel(ylabel or (f"log10 {y_col}" if log10 else y_col))
+    ax.set_xlabel(xlabel or (f"log₁₀ {_pretty_label(x_col)}" if log10 else _pretty_label(x_col)))
+    ax.set_ylabel(ylabel or (f"log₁₀ {_pretty_label(y_col)}" if log10 else _pretty_label(y_col)))
     if title:
         ax.set_title(title)
     _style_axes(ax)
@@ -881,13 +924,13 @@ def plot_dff_heatmap(
     fig, ax = plt.subplots(figsize=(6.0, max(1.5, 0.3 * piv.shape[0])))
     im = ax.imshow(piv.to_numpy(dtype=float), aspect="auto", interpolation="nearest",
                    cmap="magma")
-    ax.set_xlabel(str(tcol))
-    ax.set_ylabel("ROI (label)")
+    ax.set_xlabel(_pretty_label(tcol))
+    ax.set_ylabel("ROI")
     ax.set_yticks(range(piv.shape[0]))
     ax.set_yticklabels([str(i) for i in piv.index])
     if title:
         ax.set_title(title)
-    fig.colorbar(im, ax=ax, label=value_col)
+    fig.colorbar(im, ax=ax, label=_pretty_label(value_col))
     fig.tight_layout()
 
     out = _figure_path(f"{table_name}__{value_col}__dff_heatmap", output_path, format)
