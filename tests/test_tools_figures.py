@@ -231,3 +231,30 @@ def test_figure_labels_have_no_raw_underscores(tmp_path) -> None:
     svg = out.read_text(encoding="utf-8")
     assert "Mean Intensity" in svg and "Outside Green" in svg
     assert "mean_intensity" not in svg and "outside_green" not in svg
+
+
+def test_plot_grouped_bars(tmp_path) -> None:
+    import numpy as np
+
+    rng = np.random.default_rng(3)
+    rows = []
+    for cond, (mc, mt) in {"WT": (10.0, 10.0), "Mut": (10.0, 15.0)}.items():
+        for grp, mu in [("control", mc), ("treated", mt)]:
+            for s in range(6):
+                rows.append({"condition": cond, "group": grp,
+                             "sample_name": f"{cond}_{grp}_{s}",
+                             "mean_intensity": float(mu + rng.normal(0, 1.0))})
+    table = state.put_table("bar", pd.DataFrame(rows), spec={"tool": "test"})
+    out = tmp_path / "bars.svg"
+
+    res = figures.plot_grouped_bars(
+        table, "mean_intensity", condition_col="condition", group_col="group", output_path=str(out)
+    )
+
+    assert res["conditions"] == ["WT", "Mut"]
+    assert res["groups"] == ["control", "treated"]
+    sig = {r["condition"]: r["p_value"] for r in res["significance"]}
+    assert sig["WT"] > 0.05 and sig["Mut"] < 0.05  # within-condition control-vs-treated
+    svg = out.read_text(encoding="utf-8")
+    assert "Mean Intensity" in svg and "Control" in svg and "Treated" in svg
+    assert "mean_intensity" not in svg

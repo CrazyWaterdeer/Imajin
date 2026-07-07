@@ -48,6 +48,10 @@ imajin이 **무엇을**(분석 종류) · **어디에**(대상) · **어떻게**
 | `format` / `title` / `ylabel` / `width` / `height` / `dpi` | | svg(기본)/pdf/png, 크기 |
 
 ### 그 외 플롯
+- **`plot_grouped_bars`** — 두 요인(condition × treatment) grouped/"paired" 막대. `condition_col`이
+  x축 클러스터, `group_col`(control/treated)이 그 안에 나란히 붙는 막대(색 구분). 샘플단위
+  mean±SEM + 점, 하단 **원(circle) 범례**, 2그룹이면 **조건별 control-vs-treated 유의성**을 자동
+  표기. "처리 효과가 조건에 따라 달라지는가"를 볼 때 사용.
 - **`plot_timecourse`** — 평균선 + 구간(`interval`: `sem`/`ci95`/`none`), 개별 트레이스(`show_individual`, `max_individual_traces`).
 - **`plot_scatter`** — 두 수치 컬럼 산점도, 그룹 색(`group_col`), 로그(`log10`), 회귀선(`fit_line`).
 - **`plot_dff_heatmap`** — 칼슘 ΔF/F0 래스터 히트맵.
