@@ -69,7 +69,22 @@ def _rolling_ball_subtract(data: np.ndarray, radius: float = 50.0) -> np.ndarray
         return data - rolling_ball(data, radius=radius)
     if data.ndim == 3:
         out = np.empty_like(data)
-        for z in range(data.shape[0]):
+
+        def _plane(z: int) -> None:
             out[z] = data[z] - rolling_ball(data[z], radius=radius)
+
+        # Independent Z-planes with disjoint output slices; rolling_ball releases
+        # the GIL, so threading gives a real speedup with byte-identical output
+        # (mirrors tools/preprocess._run_over_planes).
+        n = data.shape[0]
+        if n <= 1:
+            for z in range(n):
+                _plane(z)
+        else:
+            import os
+            from concurrent.futures import ThreadPoolExecutor
+
+            with ThreadPoolExecutor(max_workers=min(n, os.cpu_count() or 4)) as ex:
+                list(ex.map(_plane, range(n)))
         return out
     raise ValueError(f"Expected 2D or 3D layer, got shape {data.shape}")
