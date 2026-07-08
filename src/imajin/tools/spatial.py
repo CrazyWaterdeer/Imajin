@@ -72,6 +72,16 @@ def _store(name: str, df: pd.DataFrame, spec: dict[str, Any]) -> str:
     return call_on_main(put_table, name, df, spec=spec)
 
 
+def _load_grid(layer_name: str, *, as_bool: bool) -> tuple[np.ndarray, tuple[float, ...]]:
+    """Load a 2D/3D Labels/mask layer as an int (or bool) array + its µm spacing."""
+    snap = call_on_main(snapshot_layer, layer_name)
+    data = materialize_array(snap.data)
+    if data.ndim not in (2, 3):
+        raise ValueError(f"{layer_name!r} must be a 2D/3D Labels/mask layer")
+    arr = data > 0 if as_bool else data.astype(np.int32)
+    return arr, coords.layer_scale(snap, arr.ndim)
+
+
 @tool(
     description="Assign each object (a Points layer from detect_spots, or a Labels "
     "layer) to the parent Labels object that contains it — 'spots per cell'. Points "
@@ -87,11 +97,7 @@ def assign_objects_to_parents(
     parents_layer: str,
     table_name: str | None = None,
 ) -> dict[str, Any]:
-    parents_snap = call_on_main(snapshot_layer, parents_layer)
-    parents = materialize_array(parents_snap.data).astype(np.int32)
-    if parents.ndim not in (2, 3):
-        raise ValueError("parents_layer must be a 2D/3D Labels layer")
-    spacing = coords.layer_scale(parents_snap, parents.ndim)
+    parents, spacing = _load_grid(parents_layer, as_bool=False)
     obj = _extract_objects(objects_layer)
 
     object_ids: list[int] = []
@@ -193,13 +199,9 @@ def measure_distance_to_reference(
 ) -> dict[str, Any]:
     from scipy import ndimage as ndi
 
-    ref_snap = call_on_main(snapshot_layer, reference_layer)
-    ref = materialize_array(ref_snap.data) > 0
-    if ref.ndim not in (2, 3):
-        raise ValueError("reference_layer must be a 2D/3D Labels/mask layer")
+    ref, spacing = _load_grid(reference_layer, as_bool=True)
     if not ref.any():
         raise ValueError(f"reference layer {reference_layer!r} is empty")
-    spacing = coords.layer_scale(ref_snap, ref.ndim)
 
     outside = ndi.distance_transform_edt(~ref, sampling=spacing)
     if signed:
@@ -220,12 +222,11 @@ def measure_distance_to_reference(
     else:
         if obj.shape != tuple(ref.shape):
             raise ValueError("objects and reference must share a grid")
-        for oid in obj.ids:
-            vals = field[obj.labels == oid]
-            if vals.size:
-                ids.append(int(oid))
-                # Closest approach: min unsigned distance (or most-inside if signed).
-                dists.append(float(vals.min()))
+        # Closest approach per object in one pass: min of the field over each label
+        # region (min unsigned distance, or most-inside value when signed).
+        mins = np.atleast_1d(ndi.minimum(field, obj.labels, index=list(obj.ids)))
+        ids = [int(o) for o in obj.ids]
+        dists = [float(v) for v in mins]
 
     df = pd.DataFrame({"object_id": ids, "distance_um": dists})
     tname = table_name or f"{objects_layer}_dist_{reference_layer}"
@@ -275,14 +276,12 @@ def nearest_neighbor_distances(
     nn: list[float] = []
     if len(src_world) and len(tgt_world):
         tree = cKDTree(tgt_world)
-        kq = int(k) + (1 if self_query else 0)
-        kq = min(kq, len(tgt_world))
+        kq = min(int(k) + (1 if self_query else 0), len(tgt_world))
         d, _idx = tree.query(src_world, k=kq)
-        d = np.atleast_2d(d.T).T if d.ndim == 1 else d
-        for i, oid in enumerate(obj.ids):
-            row = np.atleast_1d(d[i])
-            # Drop the zero self-match for within-set queries.
-            row = row[1:] if self_query and len(row) > 1 else (row if not self_query else row[:0])
+        d = np.asarray(d).reshape(len(src_world), -1)
+        # For a within-set query the first column is the zero self-match — drop it.
+        neighbors = d[:, 1:] if self_query else d
+        for oid, row in zip(obj.ids, neighbors):
             if row.size:
                 ids.append(int(oid))
                 nn.append(float(row[: int(k)].mean()))
