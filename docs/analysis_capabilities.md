@@ -14,7 +14,7 @@ dock or click a button in the manual dock.
 |---|---|---|---|---|
 | File load · metadata | `.lsm` / `.czi` / OME-TIFF | `load_file`, `reload_file`, `advance_to_file` (sequential unload) | — | — |
 | Channel annotation · interpretation | image layer | `annotate_channel`, `resolve_target_channel`, `detect_counterstain_channel` | — | — |
-| Preprocessing | target channel | `rolling_ball_background`, `auto_contrast`, `gaussian_denoise` | — | — |
+| Preprocessing | target channel | `rolling_ball_background`, `auto_contrast`, `gaussian_denoise`, `deconvolve` (Richardson-Lucy, theoretical/Gaussian PSF) | — | — |
 | Cell / object segmentation | target channel | `segment_target_objects`, `auto_segment_target`, `segment_3d_cells_auto`, `cellpose_sam`, `analyze_target_cells` (one-shot segment + measure) | — | QC overlay (`compute_segmentation_qc`) |
 | Expression-domain segmentation | channel intensity | `segment_intensity_regions`, `segment_expression_domain` | — | — |
 | ROI-restricted segmentation | Shapes + reference layer | `boundary_mask_from_shapes` → pass as `boundary_mask=` | — | — |
