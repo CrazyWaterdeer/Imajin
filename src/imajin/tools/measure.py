@@ -135,17 +135,27 @@ def _resolve_time_axis(layer: Any, image_ndim: int, time_axis: int | str | None)
     return axes.index(code)
 
 
-def _run_regionprops(
+# Intensity properties whose multichannel regionprops output is one column per
+# channel ({prop}-{i}); the fast path renames these to {prop}_{channel}.
+_INTENSITY_SCALAR_PROPS = frozenset({
+    "mean_intensity", "max_intensity", "min_intensity",
+    "intensity_mean", "intensity_max", "intensity_min", "intensity_std",
+})
+# Geometry properties the per-channel path keeps once (unsuffixed). Together with
+# the scalar-intensity set they define when the single-pass fast path is exact.
+_GEOMETRY_KEPT_PROPS = frozenset({"area", "centroid"})
+
+
+def _run_regionprops_per_channel(
     label_arr: np.ndarray,
     image_arrs: list[np.ndarray],
     channel_names: list[str],
-    properties: list[str],
+    base_props: list[str],
 ) -> pd.DataFrame:
+    """One regionprops pass per channel: geometry (label/area/centroid) kept once,
+    every other prop suffixed ``_{channel}``. The exact fallback for uncommon
+    property sets the single-pass fast path can't name unambiguously."""
     from skimage.measure import regionprops_table
-
-    base_props = [p for p in properties if p != "label"]
-    if not base_props:
-        base_props = ["area"]
 
     frames: list[pd.DataFrame] = []
     for i, (img, cname) in enumerate(zip(image_arrs, channel_names)):
@@ -173,8 +183,53 @@ def _run_regionprops(
             df_other = df_other.add_suffix(f"_{cname}")
             frames.append(df_other)
 
-    out = pd.concat(frames, axis=1)
-    return out
+    return pd.concat(frames, axis=1)
+
+
+def _run_regionprops(
+    label_arr: np.ndarray,
+    image_arrs: list[np.ndarray],
+    channel_names: list[str],
+    properties: list[str],
+) -> pd.DataFrame:
+    from skimage.measure import regionprops_table
+
+    base_props = [p for p in properties if p != "label"]
+    if not base_props:
+        base_props = ["area"]
+
+    # Fast path: one region pass over a single multichannel intensity image
+    # (channels stacked on the trailing axis) instead of N passes. Used only when
+    # every property is a known kept-geometry or scalar-intensity prop, so the
+    # resulting column set and order are byte-identical to the per-channel path;
+    # anything else (extra geometry props, weighted/multi-index intensity) falls
+    # back to the loop.
+    fast_ok = all(
+        p in _GEOMETRY_KEPT_PROPS or p in _INTENSITY_SCALAR_PROPS for p in base_props
+    )
+    if not fast_ok:
+        return _run_regionprops_per_channel(label_arr, image_arrs, channel_names, base_props)
+
+    intensity = np.stack(image_arrs, axis=-1)
+    table = regionprops_table(
+        label_arr, intensity_image=intensity, properties=["label", *base_props]
+    )
+    df = pd.DataFrame(table)
+
+    geometry_props = [p for p in base_props if p in _GEOMETRY_KEPT_PROPS]
+    intensity_props = [p for p in base_props if p in _INTENSITY_SCALAR_PROPS]
+
+    # Preserve the per-channel path's column order: label, geometry (once), then
+    # intensity grouped by channel.
+    result: dict[str, Any] = {"label": df["label"]}
+    for prop in geometry_props:
+        for col in df.columns:
+            if col == prop or col.startswith(f"{prop}-"):
+                result[col] = df[col]
+    for i, cname in enumerate(channel_names):
+        for prop in intensity_props:
+            result[f"{prop}_{cname}"] = df[f"{prop}-{i}"]
+    return pd.DataFrame(result)
 
 
 def _resolve_time_interval(image_layer: Any) -> float | None:
