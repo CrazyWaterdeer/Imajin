@@ -331,11 +331,15 @@ def _bootstrap_mean_difference(
     if n_bootstrap <= 0 or len(a) == 0 or len(b) == 0:
         return np.nan, np.nan
     rng = np.random.default_rng(seed)
-    diffs = np.empty(int(n_bootstrap), dtype=float)
-    for i in range(int(n_bootstrap)):
-        aa = rng.choice(a, size=len(a), replace=True)
-        bb = rng.choice(b, size=len(b), replace=True)
-        diffs[i] = float(np.mean(bb) - np.mean(aa))
+    a = np.asarray(a, dtype=float)
+    b = np.asarray(b, dtype=float)
+    n = int(n_bootstrap)
+    # Vectorised percentile bootstrap: draw every resample's indices at once and
+    # average along the resample axis (equivalent to the per-iteration loop, but
+    # without the Python-level overhead).
+    a_means = a[rng.integers(0, len(a), size=(n, len(a)))].mean(axis=1)
+    b_means = b[rng.integers(0, len(b), size=(n, len(b)))].mean(axis=1)
+    diffs = b_means - a_means
     lo, hi = np.percentile(diffs, (2.5, 97.5))
     return float(lo), float(hi)
 
@@ -492,9 +496,9 @@ def _bootstrap_mean_paired(d: np.ndarray, *, n_bootstrap: int, seed: int) -> tup
     if n_bootstrap <= 0 or d.size == 0:
         return np.nan, np.nan
     rng = np.random.default_rng(seed)
-    means = np.empty(int(n_bootstrap), dtype=float)
-    for i in range(int(n_bootstrap)):
-        means[i] = float(np.mean(rng.choice(d, size=d.size, replace=True)))
+    n = int(n_bootstrap)
+    # Vectorised: resample d (preserving pairing) across all bootstrap draws at once.
+    means = d[rng.integers(0, d.size, size=(n, d.size))].mean(axis=1)
     lo, hi = np.percentile(means, (2.5, 97.5))
     return float(lo), float(hi)
 
