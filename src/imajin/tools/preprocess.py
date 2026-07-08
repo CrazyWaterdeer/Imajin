@@ -149,3 +149,81 @@ def gaussian_denoise(layer: str, sigma: float = 1.0) -> dict[str, Any]:
     data = _materialize(L.data)
     out = gaussian(data, sigma=sigma, preserve_range=True).astype(data.dtype)
     return _add_image(L, out, "gauss", op="gaussian_denoise", sigma=sigma)
+
+
+@tool(
+    description="Deconvolve a channel (Richardson-Lucy) to reverse microscope blur — "
+    "sharpens puncta, recovers axial resolution and contrast before analysis. The PSF "
+    "is a Gaussian approximation from diffraction theory (numerical_aperture, emission "
+    "wavelength, refractive_index) with psf='theoretical', or supply lateral_sigma_um "
+    "(and axial_sigma_um for 3D) directly with psf='gaussian'. Emission wavelength is "
+    "read from channel metadata when present. Cap iterations — too many amplify noise.",
+    phase="2",
+    worker=True,
+)
+def deconvolve(
+    layer: str,
+    iterations: int = 15,
+    psf: str = "theoretical",
+    numerical_aperture: float = 1.4,
+    emission_wavelength_nm: float | None = None,
+    refractive_index: float = 1.515,
+    lateral_sigma_um: float | None = None,
+    axial_sigma_um: float | None = None,
+) -> dict[str, Any]:
+    from imajin.analysis import coords
+    from imajin.analysis import deconvolution as dc
+
+    L = call_on_main(snapshot_layer, layer)
+    data = _materialize(L.data)
+    if data.ndim not in (2, 3):
+        raise ValueError(f"deconvolve expects a 2D or 3D layer, got shape {data.shape}")
+    spacing = coords.layer_scale(L, data.ndim)
+    warnings: list[str] = []
+
+    wavelength: float | None = None
+    if psf == "theoretical":
+        wavelength, _src = dc.resolve_wavelength_nm(L.metadata, emission_wavelength_nm)
+        if wavelength is None:
+            wavelength = 520.0
+            warnings.append(
+                "emission wavelength not found; assumed 520 nm (pass emission_wavelength_nm)"
+            )
+        lat_um, ax_um = dc.diffraction_sigmas_um(
+            numerical_aperture, wavelength / 1000.0, refractive_index
+        )
+        if lateral_sigma_um:
+            lat_um = float(lateral_sigma_um)
+        if axial_sigma_um:
+            ax_um = float(axial_sigma_um)
+    elif psf == "gaussian":
+        if not lateral_sigma_um:
+            raise ValueError("psf='gaussian' requires lateral_sigma_um")
+        lat_um = float(lateral_sigma_um)
+        ax_um = float(axial_sigma_um) if axial_sigma_um else lat_um
+    else:
+        raise ValueError("psf must be 'theoretical' or 'gaussian'")
+
+    if int(iterations) < 1:
+        raise ValueError("iterations must be >= 1")
+    if int(iterations) > 30:
+        warnings.append("high iteration count may amplify noise into artefacts")
+
+    kernel, sigma_vox = dc.build_psf(
+        spacing, data.ndim, lat_um, ax_um if data.ndim == 3 else None
+    )
+    out = dc.richardson_lucy_deconvolve(data, kernel, int(iterations))
+    result = _add_image(
+        L, out, "deconv",
+        op="deconvolve", psf=psf, iterations=int(iterations),
+        numerical_aperture=numerical_aperture, refractive_index=refractive_index,
+        emission_wavelength_nm=wavelength,
+        lateral_sigma_um=lat_um,
+        axial_sigma_um=(ax_um if data.ndim == 3 else None),
+    )
+    result["warnings"] = warnings
+    result["psf_shape"] = tuple(int(s) for s in kernel.shape)
+    result["lateral_sigma_um"] = float(lat_um)
+    result["axial_sigma_um"] = float(ax_um) if data.ndim == 3 else None
+    result["sigma_voxels"] = tuple(round(float(s), 3) for s in sigma_vox)
+    return result
