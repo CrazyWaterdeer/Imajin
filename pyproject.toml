@@ -30,6 +30,7 @@ dependencies = [
     "cellpose>=4.0",
     "scikit-learn>=1.5",
     "skan>=0.12",
+    "numba>=0.60",
     "btrack>=0.6",
     # LLM
     "anthropic>=0.45",
