@@ -116,6 +116,80 @@ def dense_stabilize(movie, labels, result, *, min_landmarks=MIN_LANDMARKS,
     return {"movie": out, "valid": valid, "reason": reason}
 
 
+_ROLLING_PCT_KERNEL = None
+
+
+def _rolling_percentile_numpy(inten: np.ndarray, window: int, pct: float) -> np.ndarray:
+    """Reference centered rolling-percentile F0 baseline: for each t, the ``pct``
+    percentile of the finite values in [t-window//2, t+window//2] (truncated at
+    the edges, NaN ignored). The exact numpy fallback and equivalence reference
+    for the numba kernel."""
+    T = inten.shape[0]
+    half = window // 2
+    out = np.full(T, np.nan)
+    for t in range(T):
+        seg = inten[max(0, t - half): t + half + 1]
+        seg = seg[np.isfinite(seg)]
+        if seg.size:
+            out[t] = np.percentile(seg, pct)
+    return out
+
+
+def _rolling_percentile_kernel():
+    """Lazily compile + cache the numba rolling-percentile kernel (falling back to
+    numpy if numba is unavailable). Compiled on first use so importing this module
+    stays fast."""
+    global _ROLLING_PCT_KERNEL
+    if _ROLLING_PCT_KERNEL is not None:
+        return _ROLLING_PCT_KERNEL
+    try:
+        from numba import njit
+    except Exception:  # pragma: no cover - numba is a declared dependency
+        _ROLLING_PCT_KERNEL = _rolling_percentile_numpy
+        return _ROLLING_PCT_KERNEL
+
+    @njit(cache=True)
+    def _kernel(inten, window, pct):
+        T = inten.shape[0]
+        half = window // 2
+        out = np.full(T, np.nan)
+        buf = np.empty(2 * half + 1, dtype=np.float64)
+        for t in range(T):
+            lo = t - half if t - half > 0 else 0
+            hi = t + half + 1 if t + half + 1 < T else T
+            k = 0
+            for j in range(lo, hi):
+                v = inten[j]
+                if not np.isnan(v):
+                    buf[k] = v
+                    k += 1
+            if k == 0:
+                continue
+            s = np.sort(buf[:k])
+            if k == 1:
+                out[t] = s[0]
+            else:
+                # numpy's default 'linear' percentile, replicated exactly.
+                rank = (pct / 100.0) * (k - 1)
+                lo_i = int(np.floor(rank))
+                frac = rank - lo_i
+                if lo_i + 1 < k:
+                    out[t] = s[lo_i] + frac * (s[lo_i + 1] - s[lo_i])
+                else:
+                    out[t] = s[lo_i]
+        return out
+
+    _ROLLING_PCT_KERNEL = _kernel
+    return _ROLLING_PCT_KERNEL
+
+
+def _rolling_percentile(inten: np.ndarray, window: int, pct: float) -> np.ndarray:
+    """Centered rolling-percentile F0 baseline (NaN-ignoring, edge-truncated).
+    numba-accelerated; matches ``_rolling_percentile_numpy`` to fp rounding."""
+    kernel = _rolling_percentile_kernel()
+    return kernel(np.ascontiguousarray(inten, dtype=np.float64), int(window), float(pct))
+
+
 def dense_corrected_dff(stab_movie, labels, valid, *, window=41, pct=10.0) -> dict:
     movie = np.asarray(stab_movie, float)
     labels = np.asarray(labels)
@@ -136,12 +210,6 @@ def dense_corrected_dff(stab_movie, labels, valid, *, window=41, pct=10.0) -> di
                 patch = movie[t][m]
                 if np.isfinite(patch).all():        # require the FULL core inside this frame's mesh
                     inten[t] = float(np.mean(patch))
-        f0 = np.full(T, np.nan)
-        half = window // 2
-        for t in range(T):
-            seg = inten[max(0, t - half): t + half + 1]
-            seg = seg[np.isfinite(seg)]
-            if seg.size:
-                f0[t] = np.percentile(seg, pct)
+        f0 = _rolling_percentile(inten, window, pct)
         out[lbl] = (inten - f0) / np.where(f0 != 0, f0, np.nan)
     return out

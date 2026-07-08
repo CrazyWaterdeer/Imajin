@@ -61,3 +61,22 @@ def test_dense_corrected_dff_recovers_interior_trace():
     v = stab["valid"]
     r = np.corrcoef(np.nan_to_num(out[lbl][v]), rec.true_dff[lbl][v])[0, 1]
     assert r > 0.95
+
+
+def test_rolling_percentile_numba_matches_numpy_reference():
+    # The numba F0 kernel must match the numpy reference (the previous inline
+    # loop) to floating-point rounding, including NaN gating and edge truncation.
+    from imajin.analysis.calcium_warp import (
+        _rolling_percentile,
+        _rolling_percentile_numpy,
+    )
+
+    rng = np.random.default_rng(0)
+    inten = rng.normal(100.0, 10.0, size=600)
+    inten[rng.random(600) < 0.2] = np.nan   # scattered gated frames
+    inten[:15] = np.nan                     # leading gap (edge truncation)
+    inten[-8:] = np.nan                     # trailing gap
+    for window, pct in ((41, 10.0), (21, 5.0), (7, 50.0), (1, 90.0)):
+        fast = _rolling_percentile(inten, window, pct)
+        ref = _rolling_percentile_numpy(inten, window, pct)
+        np.testing.assert_allclose(fast, ref, rtol=1e-9, atol=1e-9, equal_nan=True)
