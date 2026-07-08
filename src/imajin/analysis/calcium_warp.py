@@ -190,6 +190,73 @@ def _rolling_percentile(inten: np.ndarray, window: int, pct: float) -> np.ndarra
     return kernel(np.ascontiguousarray(inten, dtype=np.float64), int(window), float(pct))
 
 
+_MASKED_MEAN_KERNEL = None
+
+
+def _masked_mean_over_time_numpy(movie, rows, cols, valid):
+    """Reference per-frame ROI mean over time: for each valid frame, the mean of
+    the fixed ROI pixels (rows, cols), or NaN if any ROI pixel is non-finite (the
+    ROI is not fully inside the warped frame). Matches the original inline loop."""
+    T = movie.shape[0]
+    out = np.full(T, np.nan)
+    for t in range(T):
+        if valid[t]:
+            patch = movie[t, rows, cols]
+            if np.isfinite(patch).all():
+                out[t] = float(patch.mean())
+    return out
+
+
+def _masked_mean_kernel():
+    """Lazily compile + cache the numba masked-mean kernel; numpy fallback if numba
+    is unavailable."""
+    global _MASKED_MEAN_KERNEL
+    if _MASKED_MEAN_KERNEL is not None:
+        return _MASKED_MEAN_KERNEL
+    try:
+        from numba import njit
+    except Exception:  # pragma: no cover - numba is a declared dependency
+        _MASKED_MEAN_KERNEL = _masked_mean_over_time_numpy
+        return _MASKED_MEAN_KERNEL
+
+    @njit(cache=True)
+    def _kernel(movie, rows, cols, valid):
+        T = movie.shape[0]
+        n = rows.shape[0]
+        out = np.full(T, np.nan)
+        if n == 0:
+            return out
+        for t in range(T):
+            if not valid[t]:
+                continue
+            s = 0.0
+            finite = True
+            for k in range(n):
+                v = movie[t, rows[k], cols[k]]
+                if not np.isfinite(v):   # ROI not fully inside -> leave NaN
+                    finite = False
+                    break
+                s += v
+            if finite:
+                out[t] = s / n
+        return out
+
+    _MASKED_MEAN_KERNEL = _kernel
+    return _MASKED_MEAN_KERNEL
+
+
+def _masked_mean_over_time(movie, rows, cols, valid):
+    """Per-frame ROI mean over time (numba-accelerated; matches the numpy
+    reference to floating-point rounding)."""
+    kernel = _masked_mean_kernel()
+    return kernel(
+        np.ascontiguousarray(movie, dtype=np.float64),
+        np.ascontiguousarray(rows, dtype=np.int64),
+        np.ascontiguousarray(cols, dtype=np.int64),
+        np.ascontiguousarray(valid),
+    )
+
+
 def dense_corrected_dff(stab_movie, labels, valid, *, window=41, pct=10.0) -> dict:
     movie = np.asarray(stab_movie, float)
     labels = np.asarray(labels)
@@ -204,12 +271,8 @@ def dense_corrected_dff(stab_movie, labels, valid, *, window=41, pct=10.0) -> di
         cx, cy = p
         core = max(2.0, radii[lbl] - 1.5)
         m = (yy - cy) ** 2 + (xx - cx) ** 2 <= core ** 2      # fixed ROI at reference centroid
-        inten = np.full(T, np.nan)
-        for t in range(T):
-            if valid[t]:
-                patch = movie[t][m]
-                if np.isfinite(patch).all():        # require the FULL core inside this frame's mesh
-                    inten[t] = float(np.mean(patch))
+        rows, cols = np.nonzero(m)                            # require the FULL core inside each frame
+        inten = _masked_mean_over_time(movie, rows, cols, valid)
         f0 = _rolling_percentile(inten, window, pct)
         out[lbl] = (inten - f0) / np.where(f0 != 0, f0, np.nan)
     return out
