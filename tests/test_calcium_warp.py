@@ -80,3 +80,24 @@ def test_rolling_percentile_numba_matches_numpy_reference():
         fast = _rolling_percentile(inten, window, pct)
         ref = _rolling_percentile_numpy(inten, window, pct)
         np.testing.assert_allclose(fast, ref, rtol=1e-9, atol=1e-9, equal_nan=True)
+
+
+def test_masked_mean_numba_matches_numpy_reference():
+    # The numba per-frame ROI-mean kernel must match the numpy reference (the
+    # previous inline movie[t][m] loop), including NaN gating and invalid frames.
+    from imajin.analysis.calcium_warp import (
+        _masked_mean_over_time,
+        _masked_mean_over_time_numpy,
+    )
+
+    rng = np.random.default_rng(1)
+    movie = rng.normal(50.0, 5.0, size=(120, 40, 40))
+    movie[rng.random(movie.shape) < 0.02] = np.nan   # scattered out-of-bounds pixels
+    valid = rng.random(120) > 0.15
+    yy, xx = np.mgrid[0:40, 0:40]
+    m = (yy - 20) ** 2 + (xx - 18) ** 2 <= 5.0 ** 2
+    rows, cols = np.nonzero(m)
+
+    fast = _masked_mean_over_time(movie, rows, cols, valid)
+    ref = _masked_mean_over_time_numpy(movie, rows, cols, valid)
+    np.testing.assert_allclose(fast, ref, rtol=1e-9, atol=1e-9, equal_nan=True)
