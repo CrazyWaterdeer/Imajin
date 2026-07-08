@@ -12,6 +12,8 @@ Headless (numpy/scipy/scikit-image).
 
 from __future__ import annotations
 
+import os
+
 import numpy as np
 
 MIN_LANDMARKS = 6
@@ -85,11 +87,63 @@ def interior_labels(labels, *, margin) -> dict[int, np.ndarray]:
     return out
 
 
-def dense_stabilize(movie, labels, result, *, min_landmarks=MIN_LANDMARKS,
-                    min_density=MIN_DENSITY, max_strain=MAX_STRAIN,
-                    min_angle_deg=MIN_ANGLE_DEG) -> dict:
+# Below this many warp tasks the process-pool startup isn't worth it (auto mode).
+_PARALLEL_WARP_MIN_TASKS = 200
+
+
+def _warp_frame_task(args):
+    """Warp one frame from its landmark set. The transform is (re)built here from
+    src/dst, so only arrays cross the process boundary (no Delaunay/tform pickling).
+    Returns ``(warped_or_None, valid, reason)``. Module-level so it is picklable."""
+    frame, src, dst, min_landmarks, min_density, max_strain, min_angle_deg = args
     from skimage.transform import warp
 
+    q = warp_quality(src, dst, min_landmarks=min_landmarks, min_density=min_density,
+                     max_strain=max_strain, min_angle_deg=min_angle_deg)
+    if not q["ok"]:
+        return None, False, q["reason"]
+    return warp(frame, q["tform"], order=1, mode="constant", cval=np.nan), True, "stabilized"
+
+
+def _run_warp_frames(tasks, n_workers):
+    """Run per-frame warp tasks ``[(t, args), ...]`` → ``[(t, warped, valid, reason), ...]``.
+
+    Per-frame warp is CPU-bound and ``skimage.warp`` does not release the GIL, so
+    threads make it slower; a fork process pool gives a real speedup instead.
+    Runs sequentially for small jobs (auto) or when ``n_workers <= 1``, and always
+    falls back to sequential on any pool failure — including non-fork platforms
+    (Windows/macOS), where ``get_context('fork')`` raises. So this never hangs or
+    breaks stabilization; it only accelerates the Linux/large-movie case.
+    """
+    if not tasks:
+        return []
+    if n_workers is None:
+        n_workers = (min(8, os.cpu_count() or 1)
+                     if len(tasks) >= _PARALLEL_WARP_MIN_TASKS else 1)
+    n_workers = int(n_workers)
+
+    def _sequential():
+        return [(t, *_warp_frame_task(a)) for t, a in tasks]
+
+    if n_workers <= 1:
+        return _sequential()
+    try:
+        import multiprocessing as mp
+        from concurrent.futures import ProcessPoolExecutor
+
+        ctx = mp.get_context("fork")  # raises on non-fork platforms -> fallback
+        args_list = [a for _, a in tasks]
+        chunk = max(1, len(tasks) // (n_workers * 4))
+        with ProcessPoolExecutor(max_workers=n_workers, mp_context=ctx) as ex:
+            results = list(ex.map(_warp_frame_task, args_list, chunksize=chunk))
+        return [(tasks[i][0], *results[i]) for i in range(len(tasks))]
+    except Exception:
+        return _sequential()
+
+
+def dense_stabilize(movie, labels, result, *, min_landmarks=MIN_LANDMARKS,
+                    min_density=MIN_DENSITY, max_strain=MAX_STRAIN,
+                    min_angle_deg=MIN_ANGLE_DEG, n_workers=None) -> dict:
     movie = np.asarray(movie, float)
     labels = np.asarray(labels)
     T = movie.shape[0]
@@ -98,6 +152,10 @@ def dense_stabilize(movie, labels, result, *, min_landmarks=MIN_LANDMARKS,
     out = movie.copy()
     valid = np.zeros(T, bool)
     reason = np.array(["gated"] * T, dtype=object)
+
+    # Build per-frame warp tasks; pre-gate frames with too few located landmarks
+    # (cheap, and keeps them out of the worker pool).
+    tasks = []
     for t in range(T):
         use = [l for l in lbls if str(result.reason[l][t]) == "located"]  # direct tracks only
         if len(use) < min_landmarks:
@@ -105,14 +163,15 @@ def dense_stabilize(movie, labels, result, *, min_landmarks=MIN_LANDMARKS,
             continue
         src = np.array([base_xy[l] for l in use])                       # (x, y)
         dst = np.array([result.positions[l][t][::-1] for l in use])     # (y,x) -> (x,y)
-        q = warp_quality(src, dst, min_landmarks=min_landmarks, min_density=min_density,
-                         max_strain=max_strain, min_angle_deg=min_angle_deg)
-        if not q["ok"]:
-            reason[t] = q["reason"]
-            continue
-        out[t] = warp(movie[t], q["tform"], order=1, mode="constant", cval=np.nan)
-        valid[t] = True
-        reason[t] = "stabilized"
+        tasks.append(
+            (t, (movie[t], src, dst, min_landmarks, min_density, max_strain, min_angle_deg))
+        )
+
+    for t, warped, ok, rsn in _run_warp_frames(tasks, n_workers):
+        reason[t] = rsn
+        if ok:
+            out[t] = warped
+            valid[t] = True
     return {"movie": out, "valid": valid, "reason": reason}
 
 

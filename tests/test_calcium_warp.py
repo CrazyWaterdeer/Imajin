@@ -101,3 +101,30 @@ def test_masked_mean_numba_matches_numpy_reference():
     fast = _masked_mean_over_time(movie, rows, cols, valid)
     ref = _masked_mean_over_time_numpy(movie, rows, cols, valid)
     np.testing.assert_allclose(fast, ref, rtol=1e-9, atol=1e-9, equal_nan=True)
+
+
+def test_warp_frame_task_matches_inline_warp():
+    # The per-frame worker must reproduce the original inline warp_quality + warp
+    # exactly (same tform from the same landmarks), and gate on too-few landmarks.
+    from skimage.transform import warp
+
+    from imajin.analysis.calcium_warp import _warp_frame_task, warp_quality
+
+    rng = np.random.default_rng(3)
+    frame = rng.random((80, 80))
+    gx, gy = np.meshgrid(np.linspace(8, 72, 6), np.linspace(8, 72, 6))
+    src = np.column_stack([gx.ravel(), gy.ravel()])
+    dst = src + rng.normal(0, 2.0, src.shape)
+    params = (6, 1.0 / 2500.0, 1.5, 20.0)
+
+    q = warp_quality(src, dst, min_landmarks=params[0], min_density=params[1],
+                     max_strain=params[2], min_angle_deg=params[3])
+    warped, ok, reason = _warp_frame_task((frame, src, dst, *params))
+    assert ok == q["ok"] and (reason == "stabilized") == q["ok"]
+    if q["ok"]:
+        ref = warp(frame, q["tform"], order=1, mode="constant", cval=np.nan)
+        np.testing.assert_array_equal(np.nan_to_num(warped), np.nan_to_num(ref))
+
+    # too few landmarks -> gated, no warp
+    w2, ok2, r2 = _warp_frame_task((frame, src[:3], dst[:3], *params))
+    assert not ok2 and w2 is None
