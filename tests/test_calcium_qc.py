@@ -67,3 +67,26 @@ def test_gate_drops_laterally_moved_cell():
                          motion={"lateral_px": 12.0})
     res = gate_traces(rec.movie, rec.labels)
     assert np.mean([res.usable[lbl][-1] for lbl in rec.true_dff]) < 0.5
+
+
+def test_locate_cell_numba_matches_reference():
+    # The numba NCC locate kernel must make the SAME (dy, dx) decision as the numpy
+    # reference across many frames/templates/centroids; peak matches to fp rounding.
+    from imajin.analysis.calcium_qc import locate_cell, _locate_cell_reference
+
+    rng = np.random.default_rng(0)
+    H, W, th = 120, 120, 11
+    max_peak_diff = 0.0
+    for _ in range(300):
+        frame = rng.normal(5.0, 1.0, (H, W))
+        cy, cx = int(rng.integers(20, H - 20)), int(rng.integers(20, W - 20))
+        yy, xx = np.mgrid[0:H, 0:W]
+        sy, sx = int(rng.integers(-4, 5)), int(rng.integers(-4, 5))
+        frame += 40.0 * np.exp(-(((yy - cy - sy) ** 2 + (xx - cx - sx) ** 2) / (2 * 3.0 ** 2)))
+        tmpl = frame[cy - th // 2:cy + th // 2 + 1, cx - th // 2:cx + th // 2 + 1].copy()
+        c = (float(cy), float(cx))
+        a = locate_cell(frame, tmpl, c, search_radius=6)
+        b = _locate_cell_reference(frame, tmpl, c, search_radius=6)
+        assert (a["dy"], a["dx"]) == (b["dy"], b["dx"])
+        max_peak_diff = max(max_peak_diff, abs(a["peak"] - b["peak"]))
+    assert max_peak_diff < 1e-9
