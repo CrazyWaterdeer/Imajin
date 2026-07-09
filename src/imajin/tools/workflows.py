@@ -6,8 +6,8 @@ from typing import Any
 from imajin.analysis.workflow import (
     check_analysis_memory_budget as _check_analysis_memory_budget,
     decide_3d as _decide_3d,
-    derive_size_params as _derive_size_params,
-    normalize_domain_spec as _normalize_domain_spec,
+    derive_size_params as _derive_size_params,  # noqa: F401 - re-exported (used by tests/_workflow_steps)
+    normalize_domain_spec as _normalize_domain_spec,  # noqa: F401 - re-exported (used by experiment.py)
     normalize_segmentation_method as _normalize_segmentation_method,
 )
 from imajin.agent.execution import raise_if_cancelled, report_progress

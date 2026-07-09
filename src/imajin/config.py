@@ -50,7 +50,7 @@ class Settings:
             return {}
 
     @classmethod
-    def from_env(cls) -> "Settings":
+    def from_env(cls) -> Settings:
         file_data = cls._read_secrets_file()
 
         def pick(env_key: str, file_key: str, default: str | None = None) -> str | None:

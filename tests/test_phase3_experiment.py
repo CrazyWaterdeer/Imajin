@@ -485,7 +485,6 @@ def test_run_recipe_on_samples_multi_sample_one_fails(
 
         return _FM()
 
-    from imajin.tools import segment
 
     monkeypatch.setattr("imajin.tools._segmentation_io._get_cellpose_model", _fake_model_factory)
 

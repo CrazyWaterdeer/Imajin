@@ -4,7 +4,7 @@ import json
 import tempfile
 import uuid
 from dataclasses import asdict, dataclass
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 from pathlib import Path
 from typing import Any
 
@@ -66,7 +66,7 @@ def record_call(
     if _LOG_PATH is None:
         start_session(driver=_CURRENT_DRIVER)
     record = CallRecord(
-        timestamp=datetime.now(timezone.utc).isoformat(),
+        timestamp=datetime.now(UTC).isoformat(),
         tool=tool,
         inputs=_summarize(inputs),
         output_summary=_summarize(output),

@@ -8,10 +8,8 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any
 
 import numpy as np
-import pandas as pd
 import pytest
 
 from imajin import session as state
@@ -37,7 +35,6 @@ def _two_label_image() -> tuple[np.ndarray, np.ndarray]:
 
 def _stub_cellpose(monkeypatch: pytest.MonkeyPatch, mask: np.ndarray) -> None:
     """Make cellpose_sam return a precomputed mask without touching torch/cellpose."""
-    from imajin.tools import segment
 
     def _fake_eval(self, data, **kwargs):  # noqa: ANN001
         return mask, None, None

@@ -34,7 +34,6 @@ def _add_target(viewer) -> str:
 
 
 def _stub_cellpose(monkeypatch: pytest.MonkeyPatch, mask: np.ndarray) -> None:
-    from imajin.tools import segment
 
     class _FakeModel:
         def eval(self, data, **kwargs):  # noqa: ANN001

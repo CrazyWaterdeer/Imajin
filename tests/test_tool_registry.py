@@ -89,7 +89,7 @@ def test_call_tool_provenance_records(tmp_path, monkeypatch) -> None:
     from imajin.config import Settings
 
     settings = Settings(data_dir=tmp_path)
-    sid = provenance.start_session(driver="test", settings=settings)
+    provenance.start_session(driver="test", settings=settings)
 
     @tool()
     def add(a: int, b: int) -> int:

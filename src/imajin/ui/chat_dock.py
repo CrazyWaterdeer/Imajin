@@ -314,6 +314,11 @@ class ChatDock(QWidget):
         self.model_picker.refresh_statuses(compute_statuses(self.settings))
 
     def closeEvent(self, event) -> None:
+        # Both teardowns must run on close: stop receiving job callbacks, then
+        # release the runner/worker. (These lived in two separate closeEvent
+        # overrides before — the second silently shadowed the first, so the
+        # runner was never released on close.)
+        self.execution_service.remove_listener(self._job_listener)
         self._release_runner()
         super().closeEvent(event)
 
@@ -434,8 +439,7 @@ class ChatDock(QWidget):
 
         @thread_worker
         def _do_turn():
-            for event in runner.turn(text):
-                yield event
+            yield from runner.turn(text)
 
         worker = _do_turn()
         worker.yielded.connect(self._on_event)
@@ -576,10 +580,6 @@ class ChatDock(QWidget):
 
     def _append_system(self, msg: str) -> None:
         self.transcript.append_system(msg)
-
-    def closeEvent(self, event) -> None:
-        self.execution_service.remove_listener(self._job_listener)
-        super().closeEvent(event)
 
 
 def _as_int(value: Any) -> int | None:

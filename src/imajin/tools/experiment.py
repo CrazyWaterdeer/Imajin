@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    import pandas as pd
 
 from imajin.session import (
     get_file,
@@ -611,7 +614,7 @@ def create_analysis_recipe(
     }
 
 
-def _scan_measurement_tables(measurement: str) -> "pd.DataFrame":
+def _scan_measurement_tables(measurement: str) -> pd.DataFrame:
     """Concatenate every Phase-3 measurement table that has the requested column
     plus the sample/group identifier columns."""
     import pandas as pd
@@ -647,7 +650,6 @@ def summarize_experiment(
     group_by: str = "group",
     sample_col: str = "sample_name",
 ) -> dict[str, Any]:
-    import pandas as pd
 
 
     df = _scan_measurement_tables(measurement)

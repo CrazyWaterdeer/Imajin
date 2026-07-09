@@ -296,7 +296,6 @@ def _masked_mean_over_time(movie, rows, cols, valid):
 def dense_corrected_dff(stab_movie, labels, valid, *, window=41, pct=10.0) -> dict:
     movie = np.asarray(stab_movie, float)
     labels = np.asarray(labels)
-    T = movie.shape[0]
     valid = np.asarray(valid, bool)
     yy, xx = np.mgrid[0:movie.shape[1], 0:movie.shape[2]]
     radii = {int(v): float(np.sqrt(np.count_nonzero(labels == v) / np.pi))

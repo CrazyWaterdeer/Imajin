@@ -41,7 +41,7 @@ def _binary_from_layer_data(
         return data > float(threshold)
     finite = data[np.isfinite(data)]
     unique = np.unique(finite)
-    if unique.size <= 2 and set(unique.tolist()).issubset({0, 1, False, True}):
+    if unique.size <= 2 and set(unique.tolist()).issubset({0, 1}):
         return data.astype(bool)
     raise ValueError(
         "skeletonize expects a binary/Labels layer. For continuous image data, "

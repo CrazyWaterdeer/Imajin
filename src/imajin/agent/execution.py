@@ -64,7 +64,7 @@ _CURRENT_JOB_ID: ContextVar[str | None] = ContextVar(
     "imajin_current_job_id",
     default=None,
 )
-_CURRENT_SERVICE: ContextVar["ToolExecutionService | None"] = ContextVar(
+_CURRENT_SERVICE: ContextVar[ToolExecutionService | None] = ContextVar(
     "imajin_current_execution_service",
     default=None,
 )

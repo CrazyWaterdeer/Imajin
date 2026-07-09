@@ -26,10 +26,10 @@ class SettingsDialog(QDialog):
         layout.setSpacing(12)
 
         intro = QLabel(
-            "Stored at <code>{}</code>.<br>"
+            f"Stored at <code>{Settings.secrets_path()}</code>.<br>"
             "Environment variables (ANTHROPIC_API_KEY, OPENAI_API_KEY, "
             "OLLAMA_BASE_URL) take precedence at startup."
-            .format(Settings.secrets_path())
+            
         )
         intro.setStyleSheet(f"color: {Theme.TEXT_SECONDARY}; font-weight: normal;")
         intro.setWordWrap(True)

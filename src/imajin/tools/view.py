@@ -493,7 +493,7 @@ def orthogonal_views(layer: str) -> dict[str, Any]:
         raise ValueError(
             f"orthogonal_views expects a 3D layer (Z, Y, X); got shape {data.shape}"
         )
-    z_idx = _resolve_axis(L, "z")
+    _resolve_axis(L, "z")  # validate the Z axis is present (XZ/YZ collapse Y/X)
     y_idx = _resolve_axis(L, "y")
     x_idx = _resolve_axis(L, "x")
 

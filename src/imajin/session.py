@@ -19,15 +19,15 @@ class AnalysisSession:
     """
 
     viewer: Any | None = None
-    tables: dict[str, "TableEntry"] = field(default_factory=dict)
+    tables: dict[str, TableEntry] = field(default_factory=dict)
     arrays: dict[str, Any] = field(default_factory=dict)
-    qc_records: dict[str, "QCRecord"] = field(default_factory=dict)
-    files: dict[str, "FileRecord"] = field(default_factory=dict)
-    recipes: dict[str, "AnalysisRecipe"] = field(default_factory=dict)
-    runs: dict[str, "AnalysisRun"] = field(default_factory=dict)
+    qc_records: dict[str, QCRecord] = field(default_factory=dict)
+    files: dict[str, FileRecord] = field(default_factory=dict)
+    recipes: dict[str, AnalysisRecipe] = field(default_factory=dict)
+    runs: dict[str, AnalysisRun] = field(default_factory=dict)
     run_counter: list[int] = field(default_factory=lambda: [0])
-    samples: dict[str, "SampleAnnotation"] = field(default_factory=dict)
-    channels: dict[str, "ChannelEntry"] = field(default_factory=dict)
+    samples: dict[str, SampleAnnotation] = field(default_factory=dict)
+    channels: dict[str, ChannelEntry] = field(default_factory=dict)
     table_listeners: list[Any] = field(default_factory=list)
     state_change_depth: int = 0
     pending_state_reasons: list[str] = field(default_factory=list)
@@ -302,7 +302,7 @@ _resume_scope: dict[str, Any] | None = None
 
 
 def set_resume_scope(
-    anchor: str, done_keys: "set[str] | list[str]", bundle: str | None = None
+    anchor: str, done_keys: set[str] | list[str], bundle: str | None = None
 ) -> None:
     global _resume_scope
     _resume_scope = {"anchor": str(anchor), "done_keys": set(done_keys), "bundle": bundle}

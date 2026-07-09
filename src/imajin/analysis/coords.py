@@ -27,7 +27,8 @@ same frame as the skeleton nodes.
 
 from __future__ import annotations
 
-from typing import Any, Sequence
+from typing import Any
+from collections.abc import Sequence
 
 import numpy as np
 
