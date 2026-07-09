@@ -16,6 +16,8 @@ import os
 
 import numpy as np
 
+from imajin.analysis._numba import lazy_kernel
+
 MIN_LANDMARKS = 6
 MIN_DENSITY = 1.0 / 2500.0     # >= 1 landmark per (50 px)^2 (spec)
 MAX_STRAIN = 1.5
@@ -175,9 +177,6 @@ def dense_stabilize(movie, labels, result, *, min_landmarks=MIN_LANDMARKS,
     return {"movie": out, "valid": valid, "reason": reason}
 
 
-_ROLLING_PCT_KERNEL = None
-
-
 def _rolling_percentile_numpy(inten: np.ndarray, window: int, pct: float) -> np.ndarray:
     """Reference centered rolling-percentile F0 baseline: for each t, the ``pct``
     percentile of the finite values in [t-window//2, t+window//2] (truncated at
@@ -194,19 +193,7 @@ def _rolling_percentile_numpy(inten: np.ndarray, window: int, pct: float) -> np.
     return out
 
 
-def _rolling_percentile_kernel():
-    """Lazily compile + cache the numba rolling-percentile kernel (falling back to
-    numpy if numba is unavailable). Compiled on first use so importing this module
-    stays fast."""
-    global _ROLLING_PCT_KERNEL
-    if _ROLLING_PCT_KERNEL is not None:
-        return _ROLLING_PCT_KERNEL
-    try:
-        from numba import njit
-    except Exception:  # pragma: no cover - numba is a declared dependency
-        _ROLLING_PCT_KERNEL = _rolling_percentile_numpy
-        return _ROLLING_PCT_KERNEL
-
+def _build_rolling_percentile(njit):
     @njit(cache=True)
     def _kernel(inten, window, pct):
         T = inten.shape[0]
@@ -238,18 +225,17 @@ def _rolling_percentile_kernel():
                     out[t] = s[lo_i]
         return out
 
-    _ROLLING_PCT_KERNEL = _kernel
-    return _ROLLING_PCT_KERNEL
+    return _kernel
+
+
+_rolling_percentile_get = lazy_kernel(_build_rolling_percentile)
 
 
 def _rolling_percentile(inten: np.ndarray, window: int, pct: float) -> np.ndarray:
     """Centered rolling-percentile F0 baseline (NaN-ignoring, edge-truncated).
     numba-accelerated; matches ``_rolling_percentile_numpy`` to fp rounding."""
-    kernel = _rolling_percentile_kernel()
-    return kernel(np.ascontiguousarray(inten, dtype=np.float64), int(window), float(pct))
-
-
-_MASKED_MEAN_KERNEL = None
+    fn = _rolling_percentile_get() or _rolling_percentile_numpy
+    return fn(np.ascontiguousarray(inten, dtype=np.float64), int(window), float(pct))
 
 
 def _masked_mean_over_time_numpy(movie, rows, cols, valid):
@@ -266,18 +252,7 @@ def _masked_mean_over_time_numpy(movie, rows, cols, valid):
     return out
 
 
-def _masked_mean_kernel():
-    """Lazily compile + cache the numba masked-mean kernel; numpy fallback if numba
-    is unavailable."""
-    global _MASKED_MEAN_KERNEL
-    if _MASKED_MEAN_KERNEL is not None:
-        return _MASKED_MEAN_KERNEL
-    try:
-        from numba import njit
-    except Exception:  # pragma: no cover - numba is a declared dependency
-        _MASKED_MEAN_KERNEL = _masked_mean_over_time_numpy
-        return _MASKED_MEAN_KERNEL
-
+def _build_masked_mean(njit):
     @njit(cache=True)
     def _kernel(movie, rows, cols, valid):
         T = movie.shape[0]
@@ -300,15 +275,17 @@ def _masked_mean_kernel():
                 out[t] = s / n
         return out
 
-    _MASKED_MEAN_KERNEL = _kernel
-    return _MASKED_MEAN_KERNEL
+    return _kernel
+
+
+_masked_mean_get = lazy_kernel(_build_masked_mean)
 
 
 def _masked_mean_over_time(movie, rows, cols, valid):
     """Per-frame ROI mean over time (numba-accelerated; matches the numpy
     reference to floating-point rounding)."""
-    kernel = _masked_mean_kernel()
-    return kernel(
+    fn = _masked_mean_get() or _masked_mean_over_time_numpy
+    return fn(
         np.ascontiguousarray(movie, dtype=np.float64),
         np.ascontiguousarray(rows, dtype=np.int64),
         np.ascontiguousarray(cols, dtype=np.int64),

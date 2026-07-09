@@ -15,8 +15,7 @@ from imajin.tools.napari_ops import add_image_from_worker, snapshot_layer
 from imajin.tools.registry import tool
 
 
-def _materialize(arr) -> np.ndarray:
-    return materialize_array(arr)
+_materialize = materialize_array  # shared: analysis.arrays.materialize_array
 
 
 def _projection_scale(layer, axis_idx: int) -> tuple[float, ...]:

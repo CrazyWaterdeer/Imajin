@@ -13,6 +13,8 @@ from dataclasses import dataclass
 import numpy as np
 from scipy.ndimage import laplace, median_filter, shift as nd_shift, sobel
 
+from imajin.analysis._numba import lazy_kernel
+
 
 def focus_metrics(patch) -> dict[str, float]:
     """Intensity-normalized sharpness metrics (activity-robust)."""
@@ -67,70 +69,59 @@ def _locate_cell_reference(frame, template, roi_centroid, search_radius=6) -> di
             "centroid": (roi_centroid[0] + dy, roi_centroid[1] + dx)}
 
 
-_LOCATE_KERNEL = None  # None: not tried yet; False: numba unavailable; else: kernel
+def _build_locate(njit):
+    @njit(cache=True)
+    def _kernel(frame, tmpl_c, tmpl_norm, cy, cx, R, th, tw):
+        npos = (2 * R + 1) * (2 * R + 1)
+        scores = np.full(npos, -1.0e18)
+        dys = np.empty(npos, np.int64)
+        dxs = np.empty(npos, np.int64)
+        H, W = frame.shape
+        area = th * tw
+        k = 0
+        for dy in range(-R, R + 1):
+            for dx in range(-R, R + 1):
+                dys[k] = dy
+                dxs[k] = dx
+                y0 = cy + dy - th // 2
+                x0 = cx + dx - tw // 2
+                if y0 < 0 or x0 < 0 or y0 + th > H or x0 + tw > W:
+                    k += 1
+                    continue
+                s = 0.0
+                for i in range(th):
+                    for j in range(tw):
+                        s += frame[y0 + i, x0 + j]
+                wm = s / area
+                dot = 0.0
+                wn = 0.0
+                for i in range(th):
+                    for j in range(tw):
+                        wv = frame[y0 + i, x0 + j] - wm
+                        dot += wv * tmpl_c[i, j]
+                        wn += wv * wv
+                denom = (wn ** 0.5) * tmpl_norm
+                scores[k] = dot / denom if denom > 0 else 0.0
+                k += 1
+        peak = scores.max()
+        if peak <= -1.0e17:
+            return 0, 0, -np.inf
+        best_d = 1 << 60
+        bdy = 0
+        bdx = 0
+        for kk in range(npos):
+            if scores[kk] >= peak - 0.05:
+                d = dys[kk] * dys[kk] + dxs[kk] * dxs[kk]
+                if d < best_d:
+                    best_d = d
+                    bdy = dys[kk]
+                    bdx = dxs[kk]
+        return bdy, bdx, peak
+
+    return _kernel
 
 
-def _locate_kernel():
-    """Lazily compile + cache the numba normalized-cross-correlation locate kernel
-    (compiled on first use so importing this module stays fast). Returns None when
-    numba is unavailable, so the caller uses the numpy reference."""
-    global _LOCATE_KERNEL
-    if _LOCATE_KERNEL is None:
-        try:
-            from numba import njit
-
-            @njit(cache=True)
-            def _kernel(frame, tmpl_c, tmpl_norm, cy, cx, R, th, tw):
-                npos = (2 * R + 1) * (2 * R + 1)
-                scores = np.full(npos, -1.0e18)
-                dys = np.empty(npos, np.int64)
-                dxs = np.empty(npos, np.int64)
-                H, W = frame.shape
-                area = th * tw
-                k = 0
-                for dy in range(-R, R + 1):
-                    for dx in range(-R, R + 1):
-                        dys[k] = dy
-                        dxs[k] = dx
-                        y0 = cy + dy - th // 2
-                        x0 = cx + dx - tw // 2
-                        if y0 < 0 or x0 < 0 or y0 + th > H or x0 + tw > W:
-                            k += 1
-                            continue
-                        s = 0.0
-                        for i in range(th):
-                            for j in range(tw):
-                                s += frame[y0 + i, x0 + j]
-                        wm = s / area
-                        dot = 0.0
-                        wn = 0.0
-                        for i in range(th):
-                            for j in range(tw):
-                                wv = frame[y0 + i, x0 + j] - wm
-                                dot += wv * tmpl_c[i, j]
-                                wn += wv * wv
-                        denom = (wn ** 0.5) * tmpl_norm
-                        scores[k] = dot / denom if denom > 0 else 0.0
-                        k += 1
-                peak = scores.max()
-                if peak <= -1.0e17:
-                    return 0, 0, -np.inf
-                best_d = 1 << 60
-                bdy = 0
-                bdx = 0
-                for kk in range(npos):
-                    if scores[kk] >= peak - 0.05:
-                        d = dys[kk] * dys[kk] + dxs[kk] * dxs[kk]
-                        if d < best_d:
-                            best_d = d
-                            bdy = dys[kk]
-                            bdx = dxs[kk]
-                return bdy, bdx, peak
-
-            _LOCATE_KERNEL = _kernel
-        except Exception:  # pragma: no cover - numba is a declared dependency
-            _LOCATE_KERNEL = False
-    return _LOCATE_KERNEL or None
+_locate_get = lazy_kernel(_build_locate)
 
 
 def locate_cell(frame, template, roi_centroid, search_radius=6) -> dict:
@@ -138,7 +129,7 @@ def locate_cell(frame, template, roi_centroid, search_radius=6) -> dict:
     activity-minimized template. Returns the best (dy, dx), peak score, and the
     shifted centroid. numba-accelerated over the search window (falls back to the
     numpy reference), matching it to floating-point rounding."""
-    kernel = _locate_kernel()
+    kernel = _locate_get()
     if kernel is None:
         return _locate_cell_reference(frame, template, roi_centroid, search_radius)
     frame = np.ascontiguousarray(frame, dtype=np.float64)
