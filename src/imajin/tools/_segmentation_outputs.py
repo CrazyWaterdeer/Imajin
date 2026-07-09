@@ -45,7 +45,19 @@ def _source_metadata_from_layer(layer: Any) -> dict[str, str]:
 
 
 def _default_qc_png_path(labels_layer: str, source_layer: Any | None = None) -> Path:
-    return bundle_output_path("qc", f"{_slug(labels_layer)}.png")
+    # Name the QC PNG after the SOURCE FILE + the labels layer, not the labels
+    # layer alone: layer names come from channel metadata (e.g. "Ch2-T1_domain")
+    # and repeat across files, so a layer-only name collides — every file in a
+    # batch would overwrite the same qc/ch2-t1_domain.png. The source-file stem
+    # makes it unique per file.
+    name = _slug(labels_layer)
+    src = _source_path_from_layer(source_layer) if source_layer is not None else None
+    if src:
+        name = f"{_slug(Path(src).stem)}__{name}"
+    # Default-path QC carries no caller-supplied unique name, so never overwrite
+    # an existing one (re-running on the same file appends _2, _3, ...).
+    base = bundle_output_path("qc", f"{name}.png")
+    return _unique_file(base.parent, base.name)
 
 
 def _saturation_warnings(data: Any, *, layer_name: str) -> list[str]:

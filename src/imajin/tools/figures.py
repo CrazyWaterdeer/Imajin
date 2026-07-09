@@ -141,15 +141,32 @@ _DIMENSIONLESS = {
 }
 
 
+# Intensity properties are emitted per channel as "<prop>_<channel>". On a value
+# axis the channel is context, not the quantity, so strip it: the y-axis should
+# read "Mean Intensity", not "Mean Intensity Ch2-T1". (Only the axis label is
+# trimmed — the underlying column name is unchanged.)
+_INTENSITY_BASES = ("mean_intensity", "max_intensity", "min_intensity")
+
+
+def _base_measurement(col: Any) -> str:
+    s = str(col)
+    for base in _INTENSITY_BASES:
+        if s == base or s.startswith(base + "_"):
+            return base
+    return s
+
+
 def _value_label(col: Any, explicit: str | None = None) -> str:
     """Label for a measured-value axis. Explicit user text wins. Otherwise pretty-print the
-    column and, when no unit is present and the quantity isn't dimensionless, append (A.U.)."""
+    column (dropping an intensity channel suffix) and, when no unit is present and the
+    quantity isn't dimensionless, append (A.U.)."""
     if explicit:
         return explicit
-    label = _pretty_label(col)
+    base = _base_measurement(col)
+    label = _pretty_label(base)
     if "(" in label:  # already carries a unit, e.g. Area (µm²)
         return label
-    last = str(col).lower().replace("-", "_").split("_")[-1].strip(".")
+    last = str(base).lower().replace("-", "_").split("_")[-1].strip(".")
     if last in _DIMENSIONLESS or last in _LABEL_UNITS:
         return label
     return f"{label} (A.U.)"

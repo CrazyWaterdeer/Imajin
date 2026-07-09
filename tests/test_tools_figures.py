@@ -286,3 +286,14 @@ def test_condition_matrix_renders_factor_rows(tmp_path) -> None:
     assert "Treatment" in svg and "Genotype" in svg          # factor row labels drawn
     assert "Mean Intensity (A.U.)" in svg                    # unitless value axis -> A.U.
     assert res["path"] == str(out)
+
+
+def test_value_label_drops_intensity_channel_suffix() -> None:
+    # The channel is context, not the quantity: the y-axis should read
+    # "Mean Intensity", not "Mean Intensity Ch2-T1".
+    V = figures._value_label
+    assert V("mean_intensity_Ch2-T1") == "Mean Intensity (A.U.)"
+    assert V("max_intensity_GFP") == "Max Intensity (A.U.)"
+    assert V("mean_intensity") == "Mean Intensity (A.U.)"        # no channel -> unchanged
+    assert V("area_um2") == "Area (µm²)"                          # non-intensity untouched
+    assert V("mean_intensity_Ch2-T1", "Custom label") == "Custom label"  # explicit wins

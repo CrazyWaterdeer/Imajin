@@ -47,15 +47,34 @@ def promote_to_process_bundle(bundle: Path) -> None:
         _process_bundle = bundle
 
 
+def _adhoc_bundle_root() -> Path:
+    """Where to put an auto-created ad-hoc bundle.
+
+    Prefer co-locating it with the session's source files (the same anchor an
+    explicit ``save_result_bundle`` uses), so it lands next to the data instead of
+    an orphan folder under the generic results root. Falls back to the results root
+    when no session files are known.
+    """
+    from imajin.results import user_results_root
+
+    try:
+        from imajin.anchor import resolve_session_anchor
+
+        anchor = resolve_session_anchor()
+    except Exception:
+        anchor = None
+    return anchor or user_results_root()
+
+
 def ensure_active_bundle() -> Path:
     """Return the active bundle, creating a process-wide ad-hoc one if needed."""
     global _process_bundle
     ctx_bundle = _active_bundle.get()
     if ctx_bundle is not None:
         return ctx_bundle
-    from imajin.results import create_result_bundle, user_results_root
+    from imajin.results import create_result_bundle
 
-    root = user_results_root()
+    root = _adhoc_bundle_root()
     with _process_bundle_lock:
         if _process_bundle is None:
             bundle = create_result_bundle(
