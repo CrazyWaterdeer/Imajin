@@ -27,8 +27,7 @@ _DEFAULT_PROPS = [
 _TIME_PROPS = ["label", "area", "mean_intensity", "max_intensity", "min_intensity"]
 
 
-def _materialize(arr) -> np.ndarray:
-    return materialize_array(arr)
+_materialize = materialize_array  # shared: analysis.arrays.materialize_array
 
 
 def _voxel_scale(scale: tuple[float, ...] | None, ndim: int) -> tuple[float, ...] | None:

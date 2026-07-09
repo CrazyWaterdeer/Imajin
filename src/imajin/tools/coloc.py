@@ -4,15 +4,9 @@ from typing import Any
 
 import numpy as np
 
-from imajin.analysis.arrays import materialize_array
 from imajin.analysis import coords
-from imajin.agent.qt_dispatch import call_on_main
-from imajin.tools.napari_ops import snapshot_layer
+from imajin.tools._layers import snapshot_array
 from imajin.tools.registry import tool
-
-
-def _materialize(arr) -> np.ndarray:
-    return materialize_array(arr)
 
 
 def _resolve_threshold(arr: np.ndarray, threshold: float | str) -> float:
@@ -43,17 +37,7 @@ def manders_coefficients(
     threshold_a: float | str = "otsu",
     threshold_b: float | str = "otsu",
 ) -> dict[str, Any]:
-    a = _materialize(call_on_main(snapshot_layer, image_a).data).astype(np.float64)
-    b = _materialize(call_on_main(snapshot_layer, image_b).data).astype(np.float64)
-    if a.shape != b.shape:
-        raise ValueError(f"shape mismatch: {image_a} {a.shape} vs {image_b} {b.shape}")
-
-    if mask:
-        m = _materialize(call_on_main(snapshot_layer, mask).data) > 0
-        if m.shape != a.shape:
-            raise ValueError(f"mask shape mismatch: {mask} {m.shape} vs {a.shape}")
-    else:
-        m = np.ones_like(a, dtype=bool)
+    a, b, m = _load_pair(image_a, image_b, mask)
 
     ta = _resolve_threshold(a[m], threshold_a)
     tb = _resolve_threshold(b[m], threshold_b)
@@ -89,20 +73,9 @@ def manders_coefficients(
 def pearson_correlation(
     image_a: str, image_b: str, mask: str | None = None
 ) -> dict[str, Any]:
-    a = _materialize(call_on_main(snapshot_layer, image_a).data).astype(np.float64)
-    b = _materialize(call_on_main(snapshot_layer, image_b).data).astype(np.float64)
-    if a.shape != b.shape:
-        raise ValueError(f"shape mismatch: {image_a} {a.shape} vs {image_b} {b.shape}")
-
-    if mask:
-        m = _materialize(call_on_main(snapshot_layer, mask).data) > 0
-        if m.shape != a.shape:
-            raise ValueError(f"mask shape mismatch: {mask} {m.shape} vs {a.shape}")
-        a = a[m]
-        b = b[m]
-    else:
-        a = a.ravel()
-        b = b.ravel()
+    a, b, m = _load_pair(image_a, image_b, mask)
+    a = a[m]  # m is all-True when no mask, so this flattens to all pixels
+    b = b[m]
 
     if a.size < 2:
         return {"r": 0.0, "n_pixels": int(a.size), "image_a": image_a, "image_b": image_b}
@@ -124,12 +97,12 @@ def pearson_correlation(
 
 
 def _load_pair(image_a: str, image_b: str, mask: str | None):
-    a = _materialize(call_on_main(snapshot_layer, image_a).data).astype(np.float64)
-    b = _materialize(call_on_main(snapshot_layer, image_b).data).astype(np.float64)
+    a = snapshot_array(image_a, dtype=np.float64)[1]
+    b = snapshot_array(image_b, dtype=np.float64)[1]
     if a.shape != b.shape:
         raise ValueError(f"shape mismatch: {image_a} {a.shape} vs {image_b} {b.shape}")
     if mask:
-        m = _materialize(call_on_main(snapshot_layer, mask).data) > 0
+        m = snapshot_array(mask)[1] > 0
         if m.shape != a.shape:
             raise ValueError(f"mask shape mismatch: {mask} {m.shape} vs {a.shape}")
     else:
@@ -312,8 +285,8 @@ def object_colocalization(
     d_obs, _ = tree.query(a_world, k=1)
     observed = float((d_obs <= float(max_distance_um)).mean())
 
-    wsnap = call_on_main(snapshot_layer, within_layer)
-    within = materialize_array(wsnap.data) > 0
+    wsnap, within_data = snapshot_array(within_layer)
+    within = within_data > 0
     wspacing = coords.layer_scale(wsnap, within.ndim)
     mask_vox = np.argwhere(within)
     if not len(mask_vox):

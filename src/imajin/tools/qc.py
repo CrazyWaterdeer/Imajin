@@ -14,8 +14,7 @@ from imajin.tools.registry import tool
 _QC_STATUSES = {"pass", "warning", "fail", "not_checked"}
 
 
-def _materialize(arr) -> np.ndarray:
-    return materialize_array(arr)
+_materialize = materialize_array  # shared: analysis.arrays.materialize_array
 
 
 def _json_value(value: Any) -> Any:

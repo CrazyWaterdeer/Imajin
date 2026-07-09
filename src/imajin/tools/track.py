@@ -10,8 +10,7 @@ from imajin.session import get_layer, get_viewer, put_table
 from imajin.tools.registry import tool
 
 
-def _materialize(arr) -> np.ndarray:
-    return materialize_array(arr)
+_materialize = materialize_array  # shared: analysis.arrays.materialize_array
 
 
 @tool(

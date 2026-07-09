@@ -16,8 +16,7 @@ from imajin.tools.registry import tool
 _RB_DOWNSAMPLE = 4
 
 
-def _materialize(arr) -> np.ndarray:
-    return materialize_array(arr)
+_materialize = materialize_array  # shared: analysis.arrays.materialize_array
 
 
 def _run_over_planes(fn, n: int) -> None:

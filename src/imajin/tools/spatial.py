@@ -24,6 +24,7 @@ from imajin.agent.qt_dispatch import call_on_main
 from imajin.analysis import coords
 from imajin.analysis.arrays import materialize_array
 from imajin.session import put_table
+from imajin.tools._layers import snapshot_array
 from imajin.tools.napari_ops import snapshot_layer
 from imajin.tools.registry import tool
 
@@ -74,8 +75,7 @@ def _store(name: str, df: pd.DataFrame, spec: dict[str, Any]) -> str:
 
 def _load_grid(layer_name: str, *, as_bool: bool) -> tuple[np.ndarray, tuple[float, ...]]:
     """Load a 2D/3D Labels/mask layer as an int (or bool) array + its µm spacing."""
-    snap = call_on_main(snapshot_layer, layer_name)
-    data = materialize_array(snap.data)
+    snap, data = snapshot_array(layer_name)
     if data.ndim not in (2, 3):
         raise ValueError(f"{layer_name!r} must be a 2D/3D Labels/mask layer")
     arr = data > 0 if as_bool else data.astype(np.int32)

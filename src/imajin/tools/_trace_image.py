@@ -7,8 +7,7 @@ from imajin.analysis.arrays import materialize_array
 from imajin.session import get_layer
 
 
-def _materialize(arr) -> np.ndarray:
-    return materialize_array(arr)
+_materialize = materialize_array  # shared: analysis.arrays.materialize_array
 
 
 def _component_labels(mask: np.ndarray) -> tuple[np.ndarray, int]:
