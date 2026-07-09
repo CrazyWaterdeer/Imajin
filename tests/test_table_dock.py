@@ -23,7 +23,7 @@ def test_table_dock_picks_up_new_tables(qtbot, viewer) -> None:
 
 
 def test_dataframe_model_renders_floats(qtbot, viewer) -> None:
-    from imajin.ui.table_dock import TableDock, _DataFrameModel
+    from imajin.ui.table_dock import _DataFrameModel
 
     model = _DataFrameModel(pd.DataFrame({"x": [1.23456789, 2.0]}))
     from qtpy.QtCore import Qt

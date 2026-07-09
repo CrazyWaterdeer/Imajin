@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import threading
 
-import pytest
 
 
 def test_call_on_same_thread_runs_directly(qapp, monkeypatch) -> None:

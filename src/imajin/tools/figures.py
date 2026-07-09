@@ -752,7 +752,7 @@ def plot_timecourse(
     trace_id_cols = [c for c in unit_cols if c != tcol]
     if show_individual and trace_id_cols:
         traces = list(unit_df.groupby(trace_id_cols, dropna=False, sort=False))
-        for i, (_key, trace) in enumerate(traces[: max(0, int(max_individual_traces))]):
+        for _key, trace in traces[: max(0, int(max_individual_traces))]:
             group_value = trace[group_col].iloc[0]
             color = _PALETTE[groups.index(group_value) % len(_PALETTE)] if group_value in groups else "#888888"
             ordered = trace.sort_values(tcol)

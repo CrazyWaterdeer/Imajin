@@ -6,7 +6,6 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from imajin.agent.providers.base import (
-    Event,
     Provider,
     Stop,
     TextDelta,

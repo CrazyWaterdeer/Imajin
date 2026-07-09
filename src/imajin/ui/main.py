@@ -213,7 +213,7 @@ def _show_qc_panel(viewer: Any) -> None:
     )
 
 
-def _show_review_panel(viewer: Any) -> "Any":
+def _show_review_panel(viewer: Any) -> Any:
     from imajin.ui.review_dock import ReviewDock
 
     _show_optional_panel(

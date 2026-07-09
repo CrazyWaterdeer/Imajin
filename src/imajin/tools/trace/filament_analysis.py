@@ -131,7 +131,6 @@ def measure_filament_diameter(
     subagent="neural_tracer",
 )
 def compute_tree_topology(skeleton_id: str) -> dict[str, Any]:
-    import pandas as pd
 
     entry = _entry(skeleton_id)
     tname = entry.record.table_names.get("rooted_tree")

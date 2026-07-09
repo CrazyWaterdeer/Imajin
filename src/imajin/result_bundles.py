@@ -6,7 +6,8 @@ import contextvars
 import shutil
 import threading
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any
+from collections.abc import Iterator
 
 import numpy as np
 

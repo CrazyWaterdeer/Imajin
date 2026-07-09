@@ -228,7 +228,7 @@ def _channel_metadata(lsm_meta: dict[str, Any]) -> list[dict[str, Any]]:
                 continue
 
             data_channels = track.get("DataChannels", [])
-            for i, ch in enumerate(data_channels if isinstance(data_channels, list) else []):
+            for ch in data_channels if isinstance(data_channels, list) else []:
                 if not isinstance(ch, dict):
                     continue
                 name = (

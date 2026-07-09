@@ -5,6 +5,10 @@ import importlib
 import os
 import shutil
 import sys
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from imajin.config import Settings
 
 
 def _is_wsl() -> bool:
@@ -221,7 +225,7 @@ def _doctor() -> int:
     return 0 if ok else 1
 
 
-def _launch_gui(settings: "Settings") -> int:
+def _launch_gui(settings: Settings) -> int:
     from imajin.ui.main import launch
 
     return launch(settings)

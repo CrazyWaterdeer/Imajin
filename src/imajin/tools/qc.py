@@ -359,7 +359,7 @@ def compute_timecourse_qc(table_name: str) -> dict[str, Any]:
     primary = intensity_cols[0]
     flat = 0
     point_counts: list[int] = []
-    for label, group in df.groupby("label"):
+    for _label, group in df.groupby("label"):
         values = pd.to_numeric(group.sort_values(time_col)[primary], errors="coerce")
         values = values[np.isfinite(values)]
         point_counts.append(int(len(values)))

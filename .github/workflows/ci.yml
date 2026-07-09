@@ -1,0 +1,55 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: Ruff
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - name: ruff check
+        run: uvx ruff check .
+
+  test:
+    name: Tests (fast subset)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      # napari/PyQt6 need a headless platform; the offscreen tests already skip
+      # OpenGL screenshot/animation paths.
+      QT_QPA_PLATFORM: offscreen
+      # Keep result bundles off any real Documents dir during the run.
+      IMAJIN_RESULTS_DIR: ${{ runner.temp }}/imajin-results
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Qt/OpenGL system libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libegl1 libgl1 libglib2.0-0 libxkbcommon0 libdbus-1-3 \
+            libfontconfig1 libfreetype6
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Sync dependencies
+        run: uv sync
+
+      - name: Run fast test suite
+        run: |
+          mkdir -p "$IMAJIN_RESULTS_DIR"
+          uv run pytest -m 'not slow and not integration' -p no:cacheprovider

@@ -45,7 +45,7 @@ def test_skeletonize_returns_id_and_layer(viewer) -> None:
     res = trace.skeletonize("ymask")
     assert res["skeleton_id"].startswith("skel_")
     assert res["n_paths"] >= 3  # trunk + 2 branches at minimum
-    assert f"ymask_skeleton" in viewer.layers
+    assert "ymask_skeleton" in viewer.layers
 
 
 def test_extract_branch_metrics_table(viewer) -> None:

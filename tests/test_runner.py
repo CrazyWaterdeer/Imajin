@@ -25,9 +25,7 @@ class _ScriptedProvider:
     def stream(self, messages, tools, system):
         idx = len(self.calls)
         self.calls.append((list(messages), list(tools), system))
-        events = self._scripts[idx]
-        for e in events:
-            yield e
+        yield from self._scripts[idx]
 
 
 import pytest
@@ -322,8 +320,7 @@ def test_runner_recovers_once_from_context_limit_error() -> None:
                 self.calls.append((list(messages), list(tools), system))
                 raise RuntimeError("maximum context length exceeded")
             self.calls.append((list(messages), list(tools), system))
-            for event in self._scripts[0]:
-                yield event
+            yield from self._scripts[0]
 
     provider = _FlakyContextProvider(
         [[TextDelta(text="recovered"), Stop(reason="end_turn")]]

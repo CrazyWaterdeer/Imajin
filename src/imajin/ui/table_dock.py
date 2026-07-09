@@ -28,10 +28,10 @@ class _DataFrameModel(QAbstractTableModel):
         self._df = df.reset_index(drop=True)
         self.endResetModel()
 
-    def rowCount(self, parent: QModelIndex = QModelIndex()) -> int:
+    def rowCount(self, parent: QModelIndex = QModelIndex()) -> int:  # noqa: B008 - Qt override signature; null QModelIndex default is idiomatic
         return 0 if parent.isValid() else len(self._df)
 
-    def columnCount(self, parent: QModelIndex = QModelIndex()) -> int:
+    def columnCount(self, parent: QModelIndex = QModelIndex()) -> int:  # noqa: B008 - Qt override signature; null QModelIndex default is idiomatic
         return 0 if parent.isValid() else len(self._df.columns)
 
     def data(self, index: QModelIndex, role: int = Qt.ItemDataRole.DisplayRole) -> Any:
