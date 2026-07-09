@@ -38,10 +38,9 @@ def composite_focus(metrics_over_time: dict[str, np.ndarray]) -> np.ndarray:
     return np.mean(np.vstack([_zscore(v) for v in metrics_over_time.values()]), axis=0)
 
 
-def locate_cell(frame, template, roi_centroid, search_radius=6) -> dict:
-    """Locate a cell near its ROI by normalized cross-correlation of an
-    activity-minimized template. Returns the best (dy, dx), peak score, and the
-    shifted centroid."""
+def _locate_cell_reference(frame, template, roi_centroid, search_radius=6) -> dict:
+    """Reference (numpy) implementation of :func:`locate_cell` — the exact fallback
+    when numba is unavailable and the equivalence reference for the numba kernel."""
     frame = np.asarray(frame, dtype=np.float64)
     tmpl = np.asarray(template, dtype=np.float64)
     tmpl = tmpl - tmpl.mean()
@@ -66,6 +65,93 @@ def locate_cell(frame, template, roi_centroid, search_radius=6) -> dict:
                        key=lambda c: c[1] ** 2 + c[2] ** 2)[0]
     return {"dy": dy, "dx": dx, "peak": peak,
             "centroid": (roi_centroid[0] + dy, roi_centroid[1] + dx)}
+
+
+_LOCATE_KERNEL = None  # None: not tried yet; False: numba unavailable; else: kernel
+
+
+def _locate_kernel():
+    """Lazily compile + cache the numba normalized-cross-correlation locate kernel
+    (compiled on first use so importing this module stays fast). Returns None when
+    numba is unavailable, so the caller uses the numpy reference."""
+    global _LOCATE_KERNEL
+    if _LOCATE_KERNEL is None:
+        try:
+            from numba import njit
+
+            @njit(cache=True)
+            def _kernel(frame, tmpl_c, tmpl_norm, cy, cx, R, th, tw):
+                npos = (2 * R + 1) * (2 * R + 1)
+                scores = np.full(npos, -1.0e18)
+                dys = np.empty(npos, np.int64)
+                dxs = np.empty(npos, np.int64)
+                H, W = frame.shape
+                area = th * tw
+                k = 0
+                for dy in range(-R, R + 1):
+                    for dx in range(-R, R + 1):
+                        dys[k] = dy
+                        dxs[k] = dx
+                        y0 = cy + dy - th // 2
+                        x0 = cx + dx - tw // 2
+                        if y0 < 0 or x0 < 0 or y0 + th > H or x0 + tw > W:
+                            k += 1
+                            continue
+                        s = 0.0
+                        for i in range(th):
+                            for j in range(tw):
+                                s += frame[y0 + i, x0 + j]
+                        wm = s / area
+                        dot = 0.0
+                        wn = 0.0
+                        for i in range(th):
+                            for j in range(tw):
+                                wv = frame[y0 + i, x0 + j] - wm
+                                dot += wv * tmpl_c[i, j]
+                                wn += wv * wv
+                        denom = (wn ** 0.5) * tmpl_norm
+                        scores[k] = dot / denom if denom > 0 else 0.0
+                        k += 1
+                peak = scores.max()
+                if peak <= -1.0e17:
+                    return 0, 0, -np.inf
+                best_d = 1 << 60
+                bdy = 0
+                bdx = 0
+                for kk in range(npos):
+                    if scores[kk] >= peak - 0.05:
+                        d = dys[kk] * dys[kk] + dxs[kk] * dxs[kk]
+                        if d < best_d:
+                            best_d = d
+                            bdy = dys[kk]
+                            bdx = dxs[kk]
+                return bdy, bdx, peak
+
+            _LOCATE_KERNEL = _kernel
+        except Exception:  # pragma: no cover - numba is a declared dependency
+            _LOCATE_KERNEL = False
+    return _LOCATE_KERNEL or None
+
+
+def locate_cell(frame, template, roi_centroid, search_radius=6) -> dict:
+    """Locate a cell near its ROI by normalized cross-correlation of an
+    activity-minimized template. Returns the best (dy, dx), peak score, and the
+    shifted centroid. numba-accelerated over the search window (falls back to the
+    numpy reference), matching it to floating-point rounding."""
+    kernel = _locate_kernel()
+    if kernel is None:
+        return _locate_cell_reference(frame, template, roi_centroid, search_radius)
+    frame = np.ascontiguousarray(frame, dtype=np.float64)
+    tmpl = np.asarray(template, dtype=np.float64)
+    tmpl_c = np.ascontiguousarray(tmpl - tmpl.mean())
+    tmpl_norm = float(np.linalg.norm(tmpl_c))
+    th, tw = tmpl_c.shape
+    cy, cx = int(round(roi_centroid[0])), int(round(roi_centroid[1]))
+    dy, dx, peak = kernel(frame, tmpl_c, tmpl_norm, cy, cx, int(search_radius), th, tw)
+    if not np.isfinite(peak):
+        return {"dy": 0, "dx": 0, "peak": -np.inf, "centroid": tuple(roi_centroid)}
+    return {"dy": int(dy), "dx": int(dx), "peak": float(peak),
+            "centroid": (roi_centroid[0] + int(dy), roi_centroid[1] + int(dx))}
 
 
 def lateral_valid(footprint, roi_mask, centroid, roi_centroid, roi_radius,
