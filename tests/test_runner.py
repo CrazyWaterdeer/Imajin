@@ -340,6 +340,49 @@ def test_runner_recovers_once_from_context_limit_error() -> None:
     assert len(provider.calls) == 2
 
 
+def test_context_limit_error_excludes_rate_limits() -> None:
+    from imajin.agent.runner import _context_limit_error
+
+    # Genuine context-window overflow -> True (compaction + retry is correct).
+    assert _context_limit_error(
+        RuntimeError("prompt is too long: 250000 tokens > 200000 maximum")
+    )
+    assert _context_limit_error(
+        RuntimeError("This model's maximum context length is 200000 tokens")
+    )
+    assert _context_limit_error(RuntimeError("input length exceeds the context window"))
+
+    # Transient rate-limit / quota / overload -> False, even though the message
+    # mentions "tokens": compacting here would drop context and mask the real cause.
+    assert not _context_limit_error(
+        RuntimeError("rate limit exceeded: 30000 input tokens per minute")
+    )
+    assert not _context_limit_error(Exception("Error code 429: Too Many Requests"))
+    assert not _context_limit_error(
+        Exception("You have exceeded your monthly quota of tokens")
+    )
+    assert not _context_limit_error(
+        Exception("overloaded_error: the server is temporarily overloaded")
+    )
+
+
+def test_runner_does_not_mask_rate_limit_as_context_limit() -> None:
+    class _RateLimitProvider(_ScriptedProvider):
+        def stream(self, messages, tools, system):
+            self.calls.append((list(messages), list(tools), system))
+            raise RuntimeError("rate limit exceeded: 30000 input tokens per minute")
+            yield  # pragma: no cover - generator marker
+
+    provider = _RateLimitProvider([])
+    runner = AgentRunner(provider, "test")
+
+    # A 429 must surface as an error, not be compacted-and-retried into a
+    # misleading "context limit reached" outcome. The runner does not retry it.
+    with pytest.raises(RuntimeError, match="rate limit"):
+        list(runner.turn("hello"))
+    assert len(provider.calls) == 1
+
+
 # --- Phase A: agent-vision wiring (ambiguous-only) ---
 
 
