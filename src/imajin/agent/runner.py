@@ -327,7 +327,26 @@ def _summarize_messages(messages: list[dict[str, Any]]) -> str:
 
 
 def _context_limit_error(exc: Exception) -> bool:
+    """True only when the exception is the model reporting the prompt exceeded
+    its context window — the one case where force-compaction + retry is right.
+
+    Rate-limit / quota / overload errors also mention "tokens" but are transient
+    and unrelated to prompt size; compacting the conversation would silently drop
+    context and mislabel the failure. They are excluded explicitly, and the
+    markers are specific phrases (no bare "tokens") so a 429 never trips this.
+    """
     text = f"{type(exc).__name__}: {exc}".lower()
+    if any(
+        marker in text
+        for marker in (
+            "rate limit",
+            "rate_limit",
+            "quota",
+            "overloaded",
+            "too many requests",
+        )
+    ):
+        return False
     markers = (
         "context length",
         "context window",
@@ -336,7 +355,6 @@ def _context_limit_error(exc: Exception) -> bool:
         "prompt is too long",
         "input length",
         "token limit",
-        "tokens",
     )
     return any(marker in text for marker in markers)
 
