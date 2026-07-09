@@ -1,8 +1,12 @@
 # Onboarding guide + in-app `get_help` — Design
 
 - **Date:** 2026-07-09
-- **Status:** Approved (brainstorming) → pending spec review
+- **Status:** Approved (brainstorming) → Codex-reviewed + revised → pending user spec review
 - **Author:** Jin (with Claude Code)
+- **External review:** Codex (gpt-5.5) read-only pass folded in — offline claim
+  corrected, prompt block turned into a meta-question allow-list, routing/slug
+  tests added, doc-ownership rule, centralised repo/branch constant, README
+  preservation checklist.
 
 ## Summary
 
@@ -26,16 +30,20 @@ them to it. Two coupled pieces of work:
 - When a user asks the in-app assistant "what can you do / how do I start / how
   do I do X", it can hand them the precise guide section link and give a brief
   answer from its own prompt knowledge.
-- Works when installed and offline: `get_help` performs no runtime file read
-  and no network call — it returns links assembled from a small static map.
+- No runtime dependency: `get_help` performs no file read and no network call —
+  it returns section links **plus a one-line summary per topic**, assembled from
+  a small static map. This is not full offline help: offline, the user still
+  gets an orientation and a link to open later, but not the guide's full prose.
 
 ## Non-goals (YAGNI)
 
-- No embeddings / RAG / semantic search — substring matching over ~8 topics.
+- No embeddings / RAG / semantic search — substring matching over ~10 topics
+  (one per guide section).
 - No separate docs website or GitHub wiki.
 - No in-app rendered help panel/dock (possible later).
-- `get_help` does **not** quote full guide prose offline; it returns links, and
-  the assistant explains briefly from its existing system-prompt knowledge.
+- `get_help` does **not** reproduce full guide prose offline; it returns section
+  links plus a one-line summary per topic. Full prose lives only in
+  `docs/getting_started.md` (rendered on GitHub).
 - No changes to `docs/design_principles.md`, the gallery, or the analysis tools.
 
 ## Decisions (from brainstorming)
@@ -80,7 +88,19 @@ Target skeleton:
 
 The current `## Features` block (colocalization, stats, QC, figures, batch,
 calcium, tracing, LLM backends, provenance) is **removed** from README and
-relocated verbatim-ish to `docs/features.md`.
+relocated to `docs/features.md`.
+
+**Preservation checklist (no operational detail lost).** The move is
+content-preserving; a reviewer diffs old README → (new README + features.md +
+getting_started.md) and confirms each of these survives *somewhere*:
+
+- Configuration caveats: subscription (no API key) vs `ANTHROPIC_API_KEY` /
+  `OPENAI_API_KEY` vs local Ollama base URL.
+- Install/runtime constraints: NVIDIA GPU + CUDA note; Python pinned to 3.12
+  (PyTorch cp314 wheel gap); `uv` requirement.
+- The `connectome` optional extra and its degrade-to-typed-status behaviour.
+- Status section caveats (ephemeral sessions; offscreen Qt test skips).
+- Every feature bullet in the old `## Features` list.
 
 ### Component 2 — `docs/features.md`
 
@@ -89,13 +109,25 @@ The detailed feature prose lifted out of the README, with a one-line header
 `analysis_capabilities.md` and the getting-started guide") and a back-link to
 the README. Content is a move, not a rewrite; no feature descriptions are lost.
 
+**Ownership rule (governance).** To keep this from diverging from
+`analysis_capabilities.md`: `analysis_capabilities.md` is **canonical for the
+capability truth** (which analysis × target × tool × stat × graph combinations
+exist — the matrix). `features.md` is a **narrative overview** that must not
+contradict the matrix and links to it for specifics; it should stay prose-level
+and avoid re-listing exhaustive parameter tables. A new capability updates the
+matrix first; `features.md` gets a sentence only if the narrative changes. This
+rule goes in a comment at the top of `features.md`.
+
 ### Component 3 — `docs/getting_started.md` (new)
 
 English, task-oriented. Each `##` heading is a stable anchor that `get_help`
-deep-links to. Sections:
+deep-links to. **Headings are kept ASCII and punctuation-light** (no `&`, `/`,
+`:`, parentheses, or non-ASCII) so their GitHub slugs are trivial and
+predictable — this is the cheapest defence against slug drift. Sections:
 
 1. **What is Imajin** — one short paragraph.
-2. **Install & run** — `uv sync`; `uv run imajin --doctor`; `uv run imajin`.
+2. **Install and run** — `uv sync`; `uv run imajin --doctor`; `uv run imajin`.
+   (Note: "and", not "&", to keep the slug `install-and-run`.)
 3. **Open your data** — drag-drop / File▸Open; `.lsm` / `.czi` / OME-TIFF.
 4. **Tell Imajin your channels** — target vs counterstain roles; why it matters.
 5. **Two ways to drive it** — chat dock ↔ manual dock; identical results and
@@ -119,77 +151,130 @@ deep-links to. Sections:
 - **Registration:** `@tool(description=..., llm=True, manual=False)` — assistant
   tool, not a manual-dock form; not a worker (instant); no pipeline `phase`.
 - **Static data (no file read at runtime):**
-  - `GUIDE_URL = "https://github.com/CrazyWaterdeer/Imajin/blob/master/docs/getting_started.md"`
-  - `_TOPICS`: ordered list of `(title, anchor, keywords)`, one per
-    `getting_started.md` section. `anchor` matches GitHub's auto-generated
-    heading slug. `keywords` is a small list of synonyms so intent words that
-    aren't in the title still resolve — e.g. the "Your first analysis by chat"
-    section carries `["measure", "segment", "analyze", "intensity", "cells",
-    "first"]`, so `get_help("measure")` lands there.
+  - `_REPO = "https://github.com/CrazyWaterdeer/Imajin"` and `_BRANCH = "master"`
+    are the **single source** for the repo/branch; `GUIDE_URL` is derived
+    (`f"{_REPO}/blob/{_BRANCH}/docs/getting_started.md"`). Centralising these is
+    the one edit needed if the repo moves or the default branch is renamed.
+  - `_TOPICS`: ordered list of `(title, anchor, summary, keywords)`, one per
+    `getting_started.md` section.
+    - `anchor` matches GitHub's auto-generated heading slug (headings are kept
+      slug-simple per Component 3).
+    - `summary` is a single plain sentence — the pointer text the assistant can
+      say even offline (this is tool metadata, deliberately **not** the guide's
+      prose).
+    - `keywords` is a **specific** synonym list so intent words absent from the
+      title still resolve — e.g. "Your first analysis by chat" carries
+      `["measure", "segment", "intensity", "find cells", "first analysis"]`.
+      Broad, cross-cutting words (bare `"analysis"`, `"cells"`, `"compare"`) are
+      **avoided** so they don't hijack an ordered first-match.
 - **Behavior:**
-  - `topic=None` → `{"guide_url": GUIDE_URL, "topics": [title, …],
+  - `topic=None` → `{"guide_url": GUIDE_URL, "topics": [{"title", "summary"} …],
     "note": "Share guide_url, or call get_help('<topic>') for a section link."}`
-  - `topic` matches (case-insensitive substring of `topic` against, or against
-    any of, the `title` and `keywords`) → `{"matched": True, "title": …,
-    "url": f"{GUIDE_URL}#{anchor}", "topics": [title, …]}`. First matching
-    section in order wins.
-  - no match → `{"matched": False, "guide_url": GUIDE_URL, "topics": [title, …],
+  - `topic` matches (case-insensitive substring of `topic` against `title` or any
+    `keyword`) → `{"matched": True, "title", "summary",
+    "url": f"{GUIDE_URL}#{anchor}", "topics": […]}`. Topics are ordered
+    specific → general; first match wins.
+  - no match → `{"matched": False, "guide_url": GUIDE_URL, "topics": […],
     "note": "No exact section; pick one of the topics above."}`
-- **Offline / installed:** returns only links assembled from `_TOPICS`; no file
-  I/O, no network. Result is small (well under the runner's 6000-char
-  tool-result compaction cap).
+- **Return schema:** a JSON-serialisable `dict[str, Any]`; it travels to the
+  model through the runner's `_compact_tool_result` (`json.dumps(..., default=str)`)
+  exactly like every other tool result. Small payload — well under the 6000-char
+  compaction cap.
+- **Offline / installed:** everything above is assembled from `_TOPICS` in
+  memory; no file I/O, no network.
 
 ### Component 5 — system prompt block
 
-Add a short section to `SYSTEM_PROMPT` in `agent/prompts.py` (~5 lines), placed
-after the "bias to action" rules and explicitly subordinate to them:
+Add a short section to `SYSTEM_PROMPT` in `agent/prompts.py` (~6 lines), placed
+after the "bias to action" rules and explicitly subordinate to them. The wording
+must draw the line at **meta questions about the app**, never at imperative task
+requests:
 
-> **Helping a new or stuck user.** Imajin ships a getting-started guide. When
-> the user is clearly new, asks what Imajin or you can do, how to get started,
-> or how to do a task where the right action isn't obvious, call
-> `get_help(topic)` and share the section link it returns, plus a brief answer
-> from your own knowledge. Don't paste a whole guide, and never let this stall
-> action: if the intent is a concrete analysis, just run it.
+> **Helping a new or stuck user.** `get_help(topic)` returns a link to the
+> getting-started guide. Call it ONLY for meta questions *about Imajin itself* —
+> "what can you/Imajin do?", "how do I get started?", "where do I find X?",
+> "is Y possible?" — then share the section link plus a one-line answer. An
+> imperative task ("measure Ch2 intensity", "find the cells", "세포 찾아",
+> "compare the two groups") is NOT a help request: run the analysis, do not call
+> `get_help`. When in doubt between helping and acting, act. Never answer a task
+> with a link.
+
+This inverts the risky framing ("where the action isn't obvious", dropped) into
+an explicit allow-list of meta-question shapes, so a concrete task never routes
+to help.
 
 ## Data flow
 
 ```
-User: "how do I measure intensity?"
-  └─ assistant calls get_help("measure")   # matches the "first analysis" keywords
-       └─ returns { url: ".../getting_started.md#your-first-analysis-by-chat", topics: [...] }
-  └─ assistant replies: brief how-to (from system prompt) + the section link
-User (offline): same, minus the ability to open the link now.
+User (new): "what can you do, and how do I start?"   # meta question → help
+  └─ assistant calls get_help()  → { guide_url, topics: [{title, summary}, …] }
+  └─ assistant: brief orientation from topic summaries + the guide link
+
+User: "measure Ch2 intensity"   # imperative task → NOT help
+  └─ assistant runs the analysis pipeline (list_layers → segment → measure); no get_help
+
+User (offline, meta question): still gets the one-line summaries + a link to open later.
 ```
 
 ## Testing (`tests/test_tools_help.py`)
 
-- `get_help()` returns a non-empty `topics` list and `guide_url`.
-- `get_help("measure")` (or another section keyword) → `matched=True` and a
-  `url` containing `#`.
-- `get_help("nonexistent-xyz")` → `matched=False`, still returns `topics` and
-  `guide_url`, raises nothing.
-- Tool is registered: `get_tool("get_help")` resolves and it appears in
-  `tools_for_anthropic()`.
-- **Anchor-sync test:** parse the `##`/`###` headings of `docs/getting_started.md`,
-  compute GitHub slugs, and assert every `anchor` in `_TOPICS` exists among
-  them. Guards drift between the tool's map and the actual document. (Runs in
-  the repo tree, where `docs/` is present.)
-- **Link-presence guard (light):** assert `README.md` links to
-  `docs/getting_started.md` and `docs/features.md`.
+Deterministic unit tests (no LLM):
+
+- **Shape:** `get_help()` returns non-empty `topics` (each with `title` +
+  `summary`) and `guide_url`. `get_help("nonexistent-xyz")` → `matched=False`,
+  still returns `topics` + `guide_url`, raises nothing.
+- **Registration:** `get_tool("get_help")` resolves and it appears in
+  `tools_for_anthropic()`; the returned dict round-trips through
+  `json.dumps(default=str)`.
+- **Intent routing (not just anchors):** a table of representative phrases →
+  expected section, asserting the *right* section wins under ordered first-match,
+  e.g. `"measure"`/`"how do I measure intensity"` → first-analysis;
+  `"install"` → install-and-run; `"what can you do"` → (None/overview or the
+  what-is section, whichever we choose). Include at least one phrase per section.
+- **Section ↔ topic bijection:** every `##` heading in `docs/getting_started.md`
+  maps to exactly one `_TOPICS` entry and vice-versa — catches a section added
+  to the guide but not the map (and a stale map entry).
+- **Anchor / slug correctness:** a small `_github_slug()` helper with explicit
+  fixtures for the gotchas (`"Install and run"` → `install-and-run`; a name with
+  `&`/punctuation; a would-be duplicate → `-1` suffix). Then assert every
+  `_TOPICS.anchor` equals the slug of its section heading in the actual doc.
+- **Keyword hygiene:** assert no broad cross-cutting keyword (`analysis`,
+  `cells`, `compare`, `data`) sits in more than one topic's `keywords` (guards
+  first-match hijacking).
+- **Link-presence guard:** `README.md` links to `docs/getting_started.md` and
+  `docs/features.md`.
+
+Behavioural evals (LLM-dependent, `@pytest.mark.integration`, not in the default
+CI subset) — the guard for Codex's action-bias risk:
+
+- With data loaded, `"measure Ch2 intensity"` and `"세포 찾아"` → the agent calls
+  the analysis pipeline, **not** `get_help`.
+- `"what can you do?"` / `"how do I get started?"` → the agent calls `get_help`.
+
+These are prompt-behaviour checks; they exercise the real model, so they run
+under the existing `integration` marker (manual/CI-opt-in), alongside current
+action-bias tests. The deterministic tests above are the CI gate.
 
 ## Risks & edge cases
 
-- **Anchor drift.** GitHub slug rules (lowercase; punctuation stripped; spaces →
-  `-`) must be mirrored by the test's slugger and by `_TOPICS`. The anchor-sync
-  test is the guard; if a heading is renamed, the test fails until `_TOPICS` is
-  updated.
-- **Default branch in URL.** `GUIDE_URL` pins `blob/master`. If the default
-  branch is ever renamed, update the constant (one place).
-- **Prompt regression.** The help block must not induce the assistant to ask
-  "would you like help?" instead of acting; the wording subordinates it to
-  bias-to-action, and existing action-bias tests still apply.
-- **README content loss.** `features.md` is a move; a reviewer should confirm no
-  feature bullet is dropped in the relocation.
+- **Anchor drift.** Mitigated three ways: headings kept slug-simple (Component
+  3), a tested `_github_slug()` helper with gotcha fixtures, and the section↔topic
+  bijection + anchor-equality tests. A renamed heading fails CI until `_TOPICS`
+  is updated.
+- **Keyword mis-routing.** Ordered first-match with broad keywords could hijack
+  a query; mitigated by the keyword-hygiene test and the specific-over-broad
+  ordering rule (Component 4).
+- **Default branch / version in URL.** `_REPO`/`_BRANCH` are centralised (one
+  edit). Links pin `master`, so an installed older checkout's `get_help` points
+  at current-`master` docs, not its own version. Acceptable pre-release (the app
+  is installed via `git clone` + `uv sync`, not PyPI); versioned/commit-pinned
+  links are noted as future work.
+- **Prompt regression (highest behavioural risk).** The help block is an
+  allow-list of meta-question shapes and explicitly excludes imperative tasks;
+  the integration evals assert "measure Ch2" → analysis and "what can you do" →
+  help. If those evals or existing action-bias tests regress, the wording is
+  wrong.
+- **README content loss.** Guarded by the preservation checklist (Component 1).
 
 ## Out of scope / future
 
