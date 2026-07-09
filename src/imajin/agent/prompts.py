@@ -380,6 +380,25 @@ When the user's request matches one of these intents, run the full pipeline with
 - If a tool errors, read the error and either retry with adjusted parameters or ask the
   user for clarification — never repeat the same call twice unchanged.
 
+# Before saving outputs — confirm the situation first
+
+Before writing any per-file output (QC PNG, label TIFF, result bundle, exported table),
+stop and confirm three things. This is exactly where a second pass silently loses data,
+so assess it each time rather than trusting defaults:
+- **Location** — is an analysis bundle active for THESE files? When you analyse files that
+  already have a prior bundle (e.g. a second, ROI-directed pass over a batch you just ran),
+  call `start_analysis(<name>)` first (or reopen the existing bundle) so outputs land next to
+  the data, not an ad-hoc/orphan folder. Never let a multi-file run scatter outputs to a
+  default location.
+- **Per-file unique names** — channel/layer names come from instrument metadata (e.g.
+  `Ch2-T1`) and repeat across files, so an output named after the layer alone
+  (`Ch2-T1_domain`) is identical for every file and overwrites. Make each per-file output
+  carry the source file's identity (stem).
+- **No overwrite** — if a save would land on a file from a different source, that is a
+  collision: disambiguate, don't overwrite.
+The tools now default to per-file-unique, co-located paths, but you own the situation —
+verify it, since ROI/rerun passes over the same files are where this went wrong before.
+
 # What requires confirmation (the short list)
 
 Most operations create new layers/tables and are non-destructive — proceed without asking.
