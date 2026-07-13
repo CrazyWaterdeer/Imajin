@@ -34,6 +34,7 @@ from imajin.tools import bundle_resume  # noqa: F401, E402
 from imajin.tools import workflows  # noqa: F401, E402
 from imajin.tools import specialists  # noqa: F401, E402
 from imajin.tools import bundle  # noqa: F401, E402
+from imajin.tools import help  # noqa: F401, E402
 
 __all__ = [
     "ToolEntry",
