@@ -4,16 +4,25 @@
 - **Spec:** [`../specs/2026-07-09-onboarding-guide-and-get-help-design.md`](../specs/2026-07-09-onboarding-guide-and-get-help-design.md)
   (Approved, Codex-reviewed 2×: gpt-5.5 then gpt-5.6-sol)
 - **Branch:** `feat/onboarding-guide-and-help` (already checked out)
-- **Status:** ready for Codex review of this plan
+- **Status:** Codex-reviewed (gpt-5.6-sol) + revised → ready to implement
 - **Author:** Jin (with Claude Code)
+- **Plan review:** one read-only Codex pass (gpt-5.6-sol) folded in — the Commit-4
+  evals were fixed (they contradicted the return contract), the keyword-hygiene
+  rule renamed to "no exact broad keyword" + given a behavioural test, the
+  compound-query first-match behaviour documented, Commit 3 given a real
+  deterministic gate, the `features.md` ownership rule reconciled with the verbatim
+  README move, `from typing import Any` added to the pinned imports, and the commits
+  compacted 4 → 3. Codex confirmed the pinned `_TOPICS` table has **no cross-topic
+  substring collisions** and that the promised routing examples hold.
 
 ## Approach
 
-Four small commits, each leaving the test suite green (`ruff check` + the
+Three small commits, each leaving the test suite green (`ruff check` + the
 non-integration pytest subset). Docs land first as one coherent restructure (so no
-commit contains a dangling cross-link), then the tool + its deterministic tests,
-then the prompt block, then the contributor-guidance line. The behavioural evals
-are added under the `integration` marker and are **not** part of the CI gate.
+commit contains a dangling cross-link) and carry the contributor guidance; then the
+tool + its deterministic tests; then the prompt block with its own deterministic
+gate plus the behavioural evals. The evals run under the `integration` marker and
+are **not** part of the CI gate.
 
 The design decisions (matching semantics, onboarding scope, stable `id`, heading
 contract, total keyword ban, latest-docs URL) are fixed in the spec; this plan
@@ -75,10 +84,24 @@ Notes:
 - Matching also tests `id` and `title` as tokens; both are harmless extra hooks
   (users rarely type `snake_case` ids or full titles) and are covered by the
   no-collision test.
+- **Compound / multi-topic queries resolve to the highest-priority matching topic,
+  by design** (Codex P1-3). E.g. `"install fails"` → `install_and_run` (row 1),
+  not `if_something_goes_wrong`; `"measure intensity error"` → `first_analysis`.
+  `get_help` is a deterministic *link lookup*, not an intent classifier — the LLM
+  (Component 5) does the real act-vs-help arbitration, and a user can always call
+  `get_help()` for the full topic list. We therefore **do not** reorder for
+  error-priority or add scored matching; the unit tests assert isolated-keyword
+  routing only and deliberately do not pin a single "right" answer for ambiguous
+  compound queries.
+- **`what can you do?` has two valid handlings and both are fine:** the assistant
+  usually calls `get_help()` (no arg) → overview (no `id`); passing the literal
+  string `get_help("what can you do")` resolves to `what_is_imajin`. The evals
+  (Commit 3) assert the overview path (a `get_help` call, no analysis), not a
+  specific `id`, for this phrase.
 
-## Commit 1 — docs restructure (`docs: split README into front door + features.md + getting_started.md`)
+## Commit 1 — docs restructure + governance (`docs: split README into front door + features.md + getting_started.md`)
 
-Three file changes in one commit so every cross-link resolves at each step:
+Four file changes in one commit so every cross-link resolves at each step:
 
 1. **`docs/getting_started.md` (new).** The 10 `##` sections in reading order:
    `What is Imajin`, `Install and run`, `Open your data`, `Tell Imajin your
@@ -91,13 +114,25 @@ Three file changes in one commit so every cross-link resolves at each step:
    its `_TOPICS` entry; renamed heading → `anchor`; reworded prose → re-check
    `summary`/`keywords`). Every heading obeys `^[A-Za-z0-9 ]+$`.
 2. **`docs/features.md` (new).** The `## Features` prose from README lines 36–188,
-   moved verbatim (a move, not a rewrite), under a one-line header ("Detailed
-   feature reference — see also the capabilities matrix in
-   `analysis_capabilities.md` and the getting-started guide") + a back-link to the
-   README. Top-of-file HTML comment states the **ownership boundary**
-   (`analysis_capabilities.md` = sole authority for supported combinations;
-   `features.md` = workflows/benefits prose, must not assert coverage).
-3. **`README.md` (slim, ~60–70 lines).** Reduce to: `# Imajin` + tagline; 2–3
+   moved (a move, not a rewrite) under a one-line header ("Detailed feature
+   reference — see also the capabilities matrix in `analysis_capabilities.md` and
+   the getting-started guide") + a back-link to the README. **Reconciling the move
+   with the ownership rule (Codex P1-6):** the moved prose legitimately *describes*
+   what features do (e.g. "`compare_groups` supports Welch / Mann-Whitney / …") —
+   that is narrative and stays. The ownership rule forbids only presenting
+   `features.md` as the **authoritative, exhaustive list of supported
+   combinations**; so where a moved bullet reads as an exhaustive coverage claim,
+   append a pointer to the matrix ("see the capabilities matrix for the full
+   supported set") rather than deleting or rewriting it. This **refines the spec's
+   Component 2 wording** ("must not assert coverage") to the precise, satisfiable
+   rule: *must not claim to be the exhaustive authority*. A top-of-file HTML comment
+   states this boundary.
+3. **`CONTRIBUTING.md` (new, minimal).** A short "Docs ownership" section carrying
+   the same boundary as a PR-review checklist line (spec Component 2, refined
+   above): the capabilities matrix owns the exhaustive supported-combination truth;
+   `features.md` is narrative and links to the matrix for the full set. Pulled into
+   this commit (was Commit 4) so the governance rule ships with the docs it governs.
+4. **`README.md` (slim, ~60–70 lines).** Reduce to: `# Imajin` + tagline; 2–3
    sentence What/Why; a `## Documentation` link list near the top (🚀 Getting
    started, 📖 Features, 📊 Capabilities matrix, 🖼 Gallery, 🧭 Design principles);
    `## Install`; `## Run`; condensed `## Configuration`; short `## Status`;
@@ -117,7 +152,12 @@ Gate: no code changed; existing tests unaffected. Manual checklist review.
 ## Commit 2 — `get_help` tool + deterministic tests (`feat(tools): add onboarding get_help tool`)
 
 **`src/imajin/tools/help.py` (new).**
-- `from __future__ import annotations`; imports `from imajin.tools.registry import tool`.
+- `from __future__ import annotations`; **`from typing import Any`** (required —
+  the `-> dict[str, Any]` return annotation is a *string* under
+  `from __future__ import annotations`, and the registry's `_build_input_model`
+  calls `get_type_hints(func)`, which must resolve `Any` in the module namespace or
+  it raises / silently degrades; ruff would also flag the unused-vs-undefined name)
+  (Codex P2-7); `from imajin.tools.registry import tool`.
 - `_REPO = "https://github.com/CrazyWaterdeer/Imajin"`, `_BRANCH = "master"`,
   `GUIDE_URL = f"{_REPO}/blob/{_BRANCH}/docs/getting_started.md"`.
 - `_TOPICS`: a list of small dataclass/namedtuple records
@@ -146,12 +186,24 @@ Gate: no code changed; existing tests unaffected. Manual checklist review.
   `"how do I measure intensity"`→`first_analysis`, `"install"`→`install_and_run`,
   `"open my data"`→`open_your_data`).
 - every-keyword-resolves (`get_help(k)["id"] == entry.id` for every keyword).
-- no cross-topic collision (no id/title/keyword is a substring of another topic's
-  title or keywords).
-- keyword hygiene: **no keyword casefolded equals any denylist word**
-  (`analysis, analyse, cells, compare, data, image, channel`).
+- no cross-topic collision (Codex P1-2, P2-7): for every **ordered pair of
+  distinct topics** `(X, Y)`, no token of `X` (its `id`, `title`, or any keyword)
+  is a substring of any token of `Y` (its `id`, `title`, or any keyword) — ids
+  included as haystacks since they participate in matching. Same-topic overlaps
+  (`measure` ⊂ `measure intensity`, `open` ⊂ `open file`) are explicitly excluded
+  and expected.
+- keyword hygiene — **"no exact broad keyword"** (renamed from "total ban" per
+  Codex P1-4; exact equality is what the matcher needs, since a keyword is the
+  *needle*): (a) lexical — no keyword casefolded *equals* a denylist word
+  (`analysis, analyse, cells, compare, data, image, channel`); multi-word keywords
+  that merely *contain* one (`find cells`, `channel role`, `first analysis`) are
+  fine. (b) behavioural — for each denylist word, `get_help(denyword)["matched"]`
+  is `False` (proves no broad word routes anywhere, including via ids/titles).
 - section↔topic bijection (parse `##` headings of `docs/getting_started.md`,
-  skipping fenced-code blocks; set-equal to `_TOPICS` by anchor).
+  skipping fenced-code blocks): assert **equal counts**, that `_TOPICS` ids and
+  anchors are each **unique**, and that the heading-derived anchors set-equal the
+  `_TOPICS` anchors (Codex P2-7: counts + uniqueness, so a duplicate can't hide in
+  a set).
 - heading contract + anchor equality (every heading matches `^[A-Za-z0-9 ]+$`;
   slugs unique; each `Topic.anchor == _github_slug(heading)`).
 - link presence (`README.md` links `docs/getting_started.md` + `docs/features.md`;
@@ -160,33 +212,46 @@ Gate: no code changed; existing tests unaffected. Manual checklist review.
 Gate: `ruff check` + `pytest tests/test_tools_help.py` green, plus the full
 non-integration subset unaffected.
 
-## Commit 3 — system-prompt block (`feat(agent): intent-based help-vs-acting block`)
+## Commit 3 — system-prompt block + its gate + evals (`feat(agent): intent-based help-vs-acting block`)
 
-Insert, in `src/imajin/agent/prompts.py` after the Bias-to-action section (line 21,
-before `# Batch progress`), a `# Helping vs acting` block (~8 lines) with the
-spec's intent + data-context precedence (act on data even when phrased as a
-question; help on orientation/"don't run anything"; "is Y possible?" → tool
-list/matrix; compound → run + optional link; ambiguous → act). Mentions
-`get_help(topic)` is onboarding-only.
+**Prompt change.** Insert, in `src/imajin/agent/prompts.py` after the
+Bias-to-action section (line 21, before `# Batch progress`), a `# Helping vs
+acting` block (~8 lines) with the spec's intent + data-context precedence (act on
+data even when phrased as a question; help on orientation/"don't run anything";
+"is Y possible?" → tool list/matrix; compound → run + optional link; ambiguous →
+act). Mentions `get_help(topic)` is onboarding-only.
 
-Gate: existing action-bias / prompt tests
-(`test_claude_agent_runner.py`, `test_chat_dock_phase3.py`, etc.) still pass —
-run them explicitly since this touches the prompt.
+**Deterministic prompt gate (this is the real CI gate for the change — Codex
+P1-5).** The cited runner/chat-dock tests exercise transport/UI, not help-vs-action
+behaviour, so add explicit assertions in `tests/test_tools_help.py` (or a small
+`test_prompt_help_block.py`) that pin the prompt contract *without* an LLM:
+- the block is present in `SYSTEM_PROMPT` (assert on a stable marker, e.g. the
+  `Helping vs acting` heading);
+- it is placed **after** the bias-to-action section and **before** batch progress
+  (assert `index("Bias to action") < index("Helping vs acting") < index("Batch
+  progress")`);
+- it carries the required precedence language (contains `get_help`, an
+  act-when-data-loaded clause, and an onboarding-only qualifier) so a future edit
+  that guts the semantics fails CI.
 
-## Commit 4 — contributor guidance + integration evals (`docs(contributing): ownership rule; test(help): action-bias evals`)
+**Behavioural evals (opt-in, `@pytest.mark.integration`, co-located with this
+commit — Codex P1-5/P0-1).** Trace-based, pinned provider/model; fixtures per the
+spec. Assertions corrected so they match the return contract:
+- act-cases (`"measure Ch2 intensity"`, `"how do I measure Ch2 intensity?"` with
+  data loaded, `"세포 찾아"`) → trace has the analysis calls and **no** `get_help`.
+- help-cases → a `get_help` call occurs and **no** analysis calls fire. Only assert
+  a specific resolved `id` when the phrase deterministically resolves to one under
+  the pinned `_TOPICS` (e.g. `"how do I install"` → `install_and_run`); for
+  `"what can you do?"` assert the **overview** path (a `get_help` call, no required
+  `id`), since the assistant legitimately calls `get_help()` with no argument.
+- Follow the existing integration pattern (`test_anthropic_integration.py`); document
+  a pass-rate/retry allowance for LLM nondeterminism.
 
-- Add a minimal `CONTRIBUTING.md` (or a "Contributing" section) carrying the
-  `features.md` vs `analysis_capabilities.md` ownership boundary as a review
-  checklist line (spec Component 2), so it is not only a file comment.
-- Add the behavioural evals to the test suite under `@pytest.mark.integration`
-  (opt-in, not CI gate): trace-based, pinned model; act-cases assert `get_help`
-  absent + analysis calls present; help-cases assert a `get_help` call with the
-  expected resolved `id`. Follow the existing integration-test pattern
-  (`test_anthropic_integration.py`).
+Gate: `ruff check` + the deterministic prompt tests green; integration deselected
+in the default subset. Run the existing runner/chat-dock tests too, since this
+touches the shared prompt.
 
-Gate: `ruff check`; the default subset unchanged (integration deselected).
-
-## Verification (after commit 3, before commit 4)
+## Verification (after Commit 2, and again after Commit 3)
 
 Beyond unit tests, exercise the real surface with the `verify` skill or a quick
 REPL: import `imajin.tools`, call `get_help()` and `get_help("how do I install")`
@@ -197,8 +262,8 @@ if feasible in this environment; otherwise a module import smoke check).
 ## Requirement → guardrail traceability
 
 - Anchor drift → heading-contract test + anchor-equality test + bijection test.
-- Keyword mis-routing → every-keyword-resolves + no-collision + total-ban tests +
-  specific→general ordering.
+- Keyword mis-routing → every-keyword-resolves + no-collision + no-exact-broad-word
+  tests + priority (first-match) ordering; compound-query behaviour documented.
 - Action-bias regression → intent-based prompt block + trace-based integration
   evals (act vs help).
 - README content loss → preservation checklist diff at commit 1.
