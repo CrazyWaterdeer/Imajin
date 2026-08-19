@@ -173,7 +173,10 @@ def analyze_target_cells(
     method = _normalize_segmentation_method(segmentation_method)
     mode = "two_tier" if domain_strategy is not None else "single"
     orig_snapshot = call_on_main(snapshot_layer, target_layer)
-    analysis_file_key = _layer_source_path(orig_snapshot) or target_layer
+    # None for an in-memory layer with no file behind it; the bundle falls back
+    # to the layer name for identity in that case.
+    analysis_source_file = _layer_source_path(orig_snapshot)
+    analysis_file_key = analysis_source_file or target_layer
     analysis_recipe_key = f"interactive:{method}:{mode}"
 
     if not batch_managed and not rerun:
@@ -354,6 +357,7 @@ def analyze_target_cells(
                 table_names=[measure_result["table_name"]],
                 labels_cells=seg_result["labels_layer"],
                 qc_png=seg_result.get("qc_png_path"),
+                source_file=analysis_source_file,
                 sample_summary={
                     "n_cells": int(
                         seg_result.get("n_objects", seg_result.get("n_cells", 0))
@@ -427,6 +431,7 @@ def analyze_target_cells(
                 labels_cells=seg_result["labels_layer"],
                 labels_domain=domain_layer,
                 qc_png=seg_result.get("qc_png_path"),
+                source_file=analysis_source_file,
                 sample_summary={
                     "n_cells": int(
                         seg_result.get("n_objects", seg_result.get("n_cells", 0))

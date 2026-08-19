@@ -773,3 +773,64 @@ def test_analyze_target_cells_returns_primary_table_name_two_tier(viewer) -> Non
         cell_diameter_um=10.0,
     )
     assert res["primary_table_name"] == res["tier_table_name"]
+
+
+def _blob_image() -> np.ndarray:
+    img = np.zeros((256, 256), dtype=np.float32)
+    img[80:95, 90:105] = 100.0
+    img[150:168, 140:158] = 80.0
+    return img
+
+
+def test_per_file_identity_comes_from_the_source_file_not_the_layer(
+    viewer,
+    tmp_path,
+    monkeypatch,
+) -> None:
+    """Two files sharing a channel name must not share a bundle identity.
+
+    Channel names come from instrument metadata (Ch2-T1) and repeat for every
+    file in a folder. Deriving identity from the layer made all of a session's
+    files collide on one slug, which silently overwrote label TIFFs once they
+    shared a bundle.
+    """
+    raw = tmp_path / "raw"
+    raw.mkdir()
+    monkeypatch.setenv("IMAJIN_RESULTS_DIR", str(tmp_path / "results"))
+    source = raw / "rectum_1.lsm"
+    source.write_bytes(b"stub")
+
+    viewer.add_image(_blob_image(), name="Ch2-T1", scale=(0.5, 0.5))
+    viewer.layers["Ch2-T1"].metadata["source_path"] = str(source)
+
+    res = workflows.analyze_target_cells(target="Ch2-T1")
+
+    assert res["ok"] is True
+    bundle = Path(res["result_bundle_path"])
+    # Folder and per-sample outputs are named for the FILE, not the channel.
+    assert bundle.name.endswith("_rectum_1__single")
+    assert res["result_files"]["labels_cells"] == "labels/cells/rectum_1.tif"
+    assert (bundle / "labels" / "cells" / "rectum_1.tif").exists()
+
+    meta = json.loads((bundle / "metadata.json").read_text())
+    sample = meta["run_context"]["samples"][0]
+    assert sample["sample_name"] == "rectum_1"
+    assert sample["source_file"] == str(source)
+    assert sample["source_layer"] == "Ch2-T1"
+
+
+def test_layer_without_source_file_still_uses_the_layer_name(
+    viewer,
+    tmp_path,
+    monkeypatch,
+) -> None:
+    """In-memory layers have no file behind them; identity falls back cleanly."""
+    monkeypatch.setenv("IMAJIN_RESULTS_DIR", str(tmp_path / "results"))
+    viewer.add_image(_blob_image(), name="synthetic", scale=(0.5, 0.5))
+
+    res = workflows.analyze_target_cells(target="synthetic")
+
+    assert res["ok"] is True
+    assert res["result_files"]["labels_cells"] == "labels/cells/synthetic.tif"
+    meta = json.loads((Path(res["result_bundle_path"]) / "metadata.json").read_text())
+    assert meta["run_context"]["samples"][0]["sample_name"] == "synthetic"
