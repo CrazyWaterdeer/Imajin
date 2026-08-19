@@ -346,7 +346,7 @@ def analyze_target_cells(
     bundle_path: Path | None = None
     bundle_outputs = _empty_bundle_outputs()
     if domain_strategy is None:
-        bundle_path, own_bundle, bundle_outputs, bundle_warnings = (
+        bundle_path, own_bundle, bundle_batch_managed, bundle_outputs, bundle_warnings = (
             _write_analysis_bundle_outputs(
                 target_layer=target_layer,
                 target_source=resolution.source,
@@ -419,7 +419,7 @@ def analyze_target_cells(
             },
         )
 
-        bundle_path, own_bundle, bundle_outputs, bundle_warnings = (
+        bundle_path, own_bundle, bundle_batch_managed, bundle_outputs, bundle_warnings = (
             _write_analysis_bundle_outputs(
                 target_layer=target_layer,
                 target_source=resolution.source,
@@ -481,7 +481,10 @@ def analyze_target_cells(
             "qc_png_path": qc_png_path,
             "qc_png_error": seg_result.get("qc_png_error"),
             "qc_png_skipped_reason": seg_result.get("qc_png_skipped_reason"),
-            "result_bundle_path": str(bundle_path) if own_bundle else None,
+            "result_bundle_path": (
+                None if bundle_batch_managed else str(bundle_path)
+            ),
+            "bundle_created": own_bundle,
             "result_files": dict(bundle_outputs),
             "voxel_scale": voxel,
             "warnings": (
@@ -525,7 +528,10 @@ def analyze_target_cells(
         "table_name": measure_result["table_name"],
         "primary_table_name": measure_result["table_name"],
         "table_columns": measure_result["columns"],
-        "result_bundle_path": str(bundle_path) if own_bundle else None,
+        "result_bundle_path": (
+            None if bundle_batch_managed else str(bundle_path)
+        ),
+        "bundle_created": own_bundle,
         "result_files": dict(bundle_outputs),
         "voxel_scale": voxel,
         "has_physical_units": bool(measure_result.get("has_physical_units")),

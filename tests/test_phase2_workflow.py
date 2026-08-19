@@ -834,3 +834,117 @@ def test_layer_without_source_file_still_uses_the_layer_name(
     assert res["result_files"]["labels_cells"] == "labels/cells/synthetic.tif"
     meta = json.loads((Path(res["result_bundle_path"]) / "metadata.json").read_text())
     assert meta["run_context"]["samples"][0]["sample_name"] == "synthetic"
+
+
+def test_sequential_per_file_analyses_collect_in_one_session_bundle(
+    viewer,
+    tmp_path,
+    monkeypatch,
+) -> None:
+    """The reported bug, end to end.
+
+    A hand-drawn-ROI session steps through files one at a time: start_analysis
+    once, then analyze_target_cells per file. Every file's outputs must land in
+    that ONE folder. Before this, analyze_target_cells minted a folder per file
+    and evicted the session bundle from the process slot, so seven files
+    produced seven folders and orphaned the bundle the agent had opened.
+    """
+    raw = tmp_path / "raw"
+    raw.mkdir()
+    results_root = tmp_path / "results"
+    monkeypatch.setenv("IMAJIN_RESULTS_DIR", str(results_root))
+
+    from imajin.result_bundles import reset_process_bundle
+    from imajin.tools import bundle as bundle_tools
+
+    reset_process_bundle()
+    opened = bundle_tools.start_analysis("hindgut_rectum_roi")
+    session_bundle = Path(opened["bundle_path"])
+
+    stems = ["rectum_1", "rectum_2", "rectum_3"]
+    for stem in stems:
+        source = raw / f"{stem}.lsm"
+        source.write_bytes(b"stub")
+        viewer.layers.clear()
+        # Every file loads under the SAME channel name, as real instruments emit.
+        viewer.add_image(_blob_image(), name="Ch2-T1", scale=(0.5, 0.5))
+        viewer.layers["Ch2-T1"].metadata["source_path"] = str(source)
+
+        res = workflows.analyze_target_cells(target="Ch2-T1", rerun=True)
+        assert res["ok"] is True
+        assert Path(res["result_bundle_path"]) == session_bundle, (
+            f"{stem} opened its own bundle instead of appending"
+        )
+
+    # Exactly one bundle folder exists — no per-file folders, no orphan.
+    bundles = sorted(p.name for p in results_root.iterdir() if p.is_dir())
+    assert bundles == [session_bundle.name]
+
+    # Each file kept its own label TIFF; none overwrote another.
+    written = sorted(p.stem for p in (session_bundle / "labels" / "cells").iterdir())
+    assert written == stems
+
+    meta = json.loads((session_bundle / "metadata.json").read_text())
+    run_context = meta["run_context"]
+    # Still open for more files — never finalized mid-session.
+    assert run_context["status"] == "in_progress"
+    assert [s["sample_name"] for s in run_context["samples"]] == stems
+    assert [Path(s["source_file"]).name for s in run_context["samples"]] == [
+        f"{stem}.lsm" for stem in stems
+    ]
+    reset_process_bundle()
+
+
+def test_analysis_does_not_adopt_a_stray_adhoc_bundle(
+    viewer,
+    tmp_path,
+    monkeypatch,
+) -> None:
+    """An ad-hoc bundle minted by a stray output must not swallow the analysis.
+
+    This is the property commit 53b26a0 was protecting when it switched to the
+    contextvar; the provenance check has to preserve it.
+    """
+    monkeypatch.setenv("IMAJIN_RESULTS_DIR", str(tmp_path / "results"))
+    from imajin.result_bundles import (
+        bundle_output_path,
+        ensure_active_bundle,
+        register_output,
+        reset_process_bundle,
+    )
+
+    reset_process_bundle()
+    adhoc = ensure_active_bundle()  # what a stray QC write would create
+    stray = bundle_output_path("qc", "stray.png")
+    stray.write_bytes(b"\x89PNG\r\n")
+    register_output("qc_png", stray, {})
+
+    viewer.add_image(_blob_image(), name="green_target", scale=(0.5, 0.5))
+    res = workflows.analyze_target_cells(target="green_target")
+
+    assert res["ok"] is True
+    assert Path(res["result_bundle_path"]) != adhoc
+    reset_process_bundle()
+
+
+def test_analysis_does_not_append_to_a_finalized_bundle(
+    viewer,
+    tmp_path,
+    monkeypatch,
+) -> None:
+    """A closed folder must not keep accepting new files' outputs."""
+    monkeypatch.setenv("IMAJIN_RESULTS_DIR", str(tmp_path / "results"))
+    from imajin.result_bundles import reset_process_bundle
+    from imajin.tools import bundle as bundle_tools
+
+    reset_process_bundle()
+    opened = bundle_tools.start_analysis("closed_session")
+    closed = Path(opened["bundle_path"])
+    bundle_tools.finalize_analysis()
+
+    viewer.add_image(_blob_image(), name="green_target", scale=(0.5, 0.5))
+    res = workflows.analyze_target_cells(target="green_target")
+
+    assert res["ok"] is True
+    assert Path(res["result_bundle_path"]) != closed
+    reset_process_bundle()
