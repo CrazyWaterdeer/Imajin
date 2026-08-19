@@ -59,6 +59,34 @@ def _registered_identity(bundle: Path, rel_path: str, key: str) -> str | None:
     return None
 
 
+def _registered_path_for(
+    bundle: Path,
+    kind: str,
+    key: str,
+    value: str,
+) -> Path | None:
+    """Where this bundle already keeps the ``kind`` output for ``key == value``.
+
+    Matching on ``kind`` is load-bearing, not defensive: a segmentation QC PNG
+    records the same ``labels_layer`` as the label TIFF it illustrates, so a
+    key-only lookup finds the PNG and the caller writes a TIFF over it.
+    """
+    try:
+        recorded = _bundle_io.read_bundle_metadata(bundle)
+    except Exception:  # noqa: BLE001 - a bad read just means "not registered"
+        return None
+    for entry in recorded.get("outputs") or []:
+        if not isinstance(entry, dict) or entry.get("kind") != kind:
+            continue
+        metadata = entry.get("metadata")
+        if not isinstance(metadata, dict) or str(metadata.get(key)) != value:
+            continue
+        rel = entry.get("path")
+        if rel:
+            return bundle / str(rel)
+    return None
+
+
 def _non_clobbering_path(
     bundle: Path,
     category: str,
@@ -216,13 +244,19 @@ def save_result_bundle(
             layer = call_on_main(snapshot_layer, labels_layer)
             data = _materialize(layer.data)
             labels = data.astype(_label_output_dtype(data), copy=False)
-            out = _non_clobbering_path(
+            # If the analysis already wrote this layer into the bundle (under
+            # its per-file name), update that file instead of laying down a
+            # second full-resolution copy under the layer-derived name.
+            out = _registered_path_for(
+                bundle, "labels_tiff", "labels_layer", labels_layer
+            ) or _non_clobbering_path(
                 bundle,
                 "labels/cells",
                 f"{slugify_result_name(labels_layer)}.tif",
                 identity_key="labels_layer",
                 identity_value=labels_layer,
             )
+            out.parent.mkdir(parents=True, exist_ok=True)
             _write_label_tiff(out, labels)
             outputs["labels"].append(str(out))
             register_output(

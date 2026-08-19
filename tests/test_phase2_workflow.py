@@ -743,9 +743,13 @@ def test_analyze_target_cells_writes_into_active_parent_bundle(
     assert res["ok"] is True
     assert res["result_bundle_path"] is None
     assert (parent / "labels" / "cells" / "reporter.tif").exists()
+    # Registering the child's outputs normalises the parent's v1 seed to
+    # schema_v3, so status now lives under run_context.
     meta = json.loads((parent / "metadata.json").read_text())
-    assert meta["status"] == "in_progress"
-    assert "samples" not in meta
+    run_context = meta.get("run_context") or meta
+    assert run_context["status"] == "in_progress"
+    # The batch runner owns the parent's sample records; the child writes none.
+    assert not run_context.get("samples")
 
 
 def test_analyze_target_cells_returns_primary_table_name_single_tier(viewer) -> None:
@@ -1044,4 +1048,43 @@ def test_session_bundle_accumulates_tables_and_a_pooled_combined_csv(
     index = read_sample_index(session_bundle)
     assert sorted(e["key"] for e in index["entries"]) == [f"{s}.lsm" for s in stems]
     assert not index.get("legacy_inferred")
+    reset_process_bundle()
+
+
+def test_labels_are_written_once_per_sample(viewer, tmp_path, monkeypatch) -> None:
+    """One writer per artifact.
+
+    populate_sample_outputs wrote labels/cells/<sample>.tif and registered
+    nothing, then save_result_bundle wrote the same volume again under the
+    layer-derived name — every bundle carried two full-resolution copies of the
+    identical array.
+    """
+    raw = tmp_path / "raw"
+    raw.mkdir()
+    monkeypatch.setenv("IMAJIN_RESULTS_DIR", str(tmp_path / "results"))
+    from imajin.result_bundles import reset_process_bundle
+    from imajin.tools import results as results_tools
+
+    reset_process_bundle()
+    source = raw / "rectum_1.lsm"
+    source.write_bytes(b"stub")
+    viewer.add_image(_blob_image(), name="Ch2-T1", scale=(0.5, 0.5))
+    viewer.layers["Ch2-T1"].metadata["source_path"] = str(source)
+
+    res = workflows.analyze_target_cells(target="Ch2-T1")
+    assert res["ok"] is True
+    bundle = Path(res["result_bundle_path"])
+
+    # The agent then saves the same labels layer, as the prompt tells it to.
+    results_tools.save_result_bundle(
+        "rectum_1", labels_layers=[res["labels_layer"]]
+    )
+
+    tifs = sorted(p.name for p in (bundle / "labels" / "cells").iterdir())
+    assert tifs == ["rectum_1.tif"]
+
+    meta = json.loads((bundle / "metadata.json").read_text())
+    label_entries = [o for o in meta["outputs"] if o["kind"] == "labels_tiff"]
+    assert len(label_entries) == 1
+    assert label_entries[0]["path"] == "labels/cells/rectum_1.tif"
     reset_process_bundle()

@@ -146,17 +146,6 @@ def register_output(
             f"output {target} is outside the active bundle {bundle_resolved}"
         ) from exc
 
-    status = str(((read_bundle_metadata(bundle).get("run_context")) or {}).get("status") or "")
-    if status in _TERMINAL_BUNDLE_STATUSES:
-        import warnings as _warnings
-
-        _warnings.warn(
-            f"registering {rel.as_posix()} into bundle {bundle.name} whose status "
-            f"is already {status!r} — an output is landing in a closed bundle",
-            RuntimeWarning,
-            stacklevel=2,
-        )
-
     record = {
         "kind": kind,
         "path": rel.as_posix(),
@@ -193,6 +182,22 @@ def register_output(
                 "outputs": outputs,
             },
         )
+
+
+def drop_output(bundle: Path | str, rel_path: Path | str) -> None:
+    """Remove an outputs-index entry whose file no longer exists at ``rel_path``."""
+    target = Path(rel_path).as_posix()
+    seed = read_bundle_metadata(bundle)
+    outputs = list(seed.get("outputs") or [])
+    remaining = [
+        entry
+        for entry in outputs
+        if not (isinstance(entry, dict) and entry.get("path") == target)
+    ]
+    if len(remaining) == len(outputs):
+        return
+    seed["outputs"] = remaining
+    write_bundle_metadata(bundle, seed)
 
 
 def register_table_spec(table_name: str, spec: dict[str, Any]) -> None:
@@ -432,16 +437,44 @@ def populate_sample_outputs(
         "labels_domain": None,
         "qc_png": None,
     }
-    if labels_cells:
-        out["labels_cells"] = write_label_layer(
-            bundle, "cells", sample_slug, labels_cells
-        )
-    if labels_domain:
-        out["labels_domain"] = write_label_layer(
-            bundle, "domain", sample_slug, labels_domain
-        )
-    if qc_png:
-        out["qc_png"] = copy_qc_png(bundle, qc_png, sample_slug)
+    with with_active_bundle(bundle):
+        if labels_cells:
+            rel = write_label_layer(bundle, "cells", sample_slug, labels_cells)
+            out["labels_cells"] = rel
+            # Register what we write, so the outputs index reflects the files
+            # that actually exist and a second writer can upsert instead of
+            # laying down a duplicate copy under a different name.
+            register_output(
+                "labels_tiff",
+                bundle / rel,
+                {"labels_layer": labels_cells, "sample_slug": sample_slug},
+            )
+        if labels_domain:
+            rel = write_label_layer(bundle, "domain", sample_slug, labels_domain)
+            out["labels_domain"] = rel
+            register_output(
+                "labels_tiff",
+                bundle / rel,
+                {"labels_layer": labels_domain, "sample_slug": sample_slug},
+            )
+        if qc_png:
+            previous = Path(qc_png).resolve()
+            rel = copy_qc_png(bundle, qc_png, sample_slug)
+            out["qc_png"] = rel
+            if rel:
+                # copy_qc_png RENAMES when the source already lives in this
+                # bundle, so an entry registered under the old name now points
+                # at a file that no longer exists. Drop it before registering.
+                if not previous.exists():
+                    try:
+                        drop_output(bundle, previous.relative_to(bundle.resolve()))
+                    except ValueError:
+                        pass
+                register_output(
+                    "qc_png",
+                    bundle / rel,
+                    {"source": str(qc_png), "sample_slug": sample_slug},
+                )
     return out
 
 
