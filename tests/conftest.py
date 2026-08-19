@@ -16,6 +16,20 @@ import tifffile
 
 
 @pytest.fixture(autouse=True)
+def _isolate_results_root(tmp_path, monkeypatch):
+    """Keep every test's result bundles inside tmp_path.
+
+    Without this the suite writes real bundles into the user's Documents folder
+    (hundreds of them per full run), and any test asserting "exactly N bundles
+    exist under this root" is meaningless because the root is shared.
+    """
+    root = tmp_path / "results_root"
+    root.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv("IMAJIN_RESULTS_DIR", str(root))
+    yield root
+
+
+@pytest.fixture(autouse=True)
 def _reset_sample_annotations():
     from imajin import session as state
     from imajin.result_bundles import reset_process_bundle
