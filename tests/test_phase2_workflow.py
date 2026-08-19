@@ -991,3 +991,57 @@ def test_qc_png_never_lands_in_a_previous_files_bundle(
         for name in pngs:
             assert stem in name, f"{name} in {bundle.name} belongs to another file"
     reset_process_bundle()
+
+
+def test_session_bundle_accumulates_tables_and_a_pooled_combined_csv(
+    viewer,
+    tmp_path,
+    monkeypatch,
+) -> None:
+    """A session bundle must be a complete result set on its own.
+
+    The per-file measurements previously reached disk only if the agent
+    separately called save_result_bundle with the table name, so the pooled
+    table a session was actually analysing could be computed, plotted and then
+    lost with the process — the one artifact that cannot be regenerated without
+    redoing every ROI.
+    """
+    import pandas as pd
+
+    raw = tmp_path / "raw"
+    raw.mkdir()
+    results_root = tmp_path / "results"
+    monkeypatch.setenv("IMAJIN_RESULTS_DIR", str(results_root))
+
+    from imajin.result_bundles import reset_process_bundle
+    from imajin.tools import bundle as bundle_tools
+
+    reset_process_bundle()
+    session_bundle = Path(bundle_tools.start_analysis("pooled")["bundle_path"])
+
+    stems = ["rectum_1", "rectum_2"]
+    for stem in stems:
+        source = raw / f"{stem}.lsm"
+        source.write_bytes(b"stub")
+        viewer.layers.clear()
+        viewer.add_image(_blob_image(), name="Ch2-T1", scale=(0.5, 0.5))
+        viewer.layers["Ch2-T1"].metadata["source_path"] = str(source)
+        assert workflows.analyze_target_cells(target="Ch2-T1", rerun=True)["ok"]
+
+    tables = sorted(p.name for p in (session_bundle / "tables").iterdir())
+    assert tables == ["combined.csv", "rectum_1.csv", "rectum_2.csv"]
+
+    combined = pd.read_csv(session_bundle / "tables" / "combined.csv")
+    assert sorted(combined["sample_name"].unique()) == stems
+    per_file = [
+        pd.read_csv(session_bundle / "tables" / f"{stem}.csv") for stem in stems
+    ]
+    assert len(combined) == sum(len(df) for df in per_file)
+
+    # The durable index knows both files, so the session can be resumed.
+    from imajin.result_bundles import read_sample_index
+
+    index = read_sample_index(session_bundle)
+    assert sorted(e["key"] for e in index["entries"]) == [f"{s}.lsm" for s in stems]
+    assert not index.get("legacy_inferred")
+    reset_process_bundle()

@@ -365,6 +365,8 @@ def analyze_target_cells(
                 bundle=analysis_bundle,
                 target_layer=target_layer,
                 table_names=[measure_result["table_name"]],
+                method_label=method,
+                mode_label=mode,
                 labels_cells=seg_result["labels_layer"],
                 qc_png=seg_result.get("qc_png_path"),
                 sample_summary={
@@ -433,6 +435,8 @@ def analyze_target_cells(
                 bundle=analysis_bundle,
                 target_layer=target_layer,
                 table_names=[tier_table_name],
+                method_label=method,
+                mode_label=mode,
                 labels_cells=seg_result["labels_layer"],
                 labels_domain=domain_layer,
                 qc_png=seg_result.get("qc_png_path"),

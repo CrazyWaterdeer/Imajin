@@ -25,6 +25,8 @@ _active_sample_slug: contextvars.ContextVar[str | None] = contextvars.ContextVar
     "imajin_active_sample_slug", default=None
 )
 
+_TERMINAL_BUNDLE_STATUSES = {"complete", "failed", "cancelled"}
+
 _process_bundle_lock = threading.Lock()
 _process_bundle: Path | None = None
 
@@ -143,6 +145,17 @@ def register_output(
         raise ValueError(
             f"output {target} is outside the active bundle {bundle_resolved}"
         ) from exc
+
+    status = str(((read_bundle_metadata(bundle).get("run_context")) or {}).get("status") or "")
+    if status in _TERMINAL_BUNDLE_STATUSES:
+        import warnings as _warnings
+
+        _warnings.warn(
+            f"registering {rel.as_posix()} into bundle {bundle.name} whose status "
+            f"is already {status!r} — an output is landing in a closed bundle",
+            RuntimeWarning,
+            stacklevel=2,
+        )
 
     record = {
         "kind": kind,
@@ -432,24 +445,102 @@ def populate_sample_outputs(
     return out
 
 
-def write_combined_csv(bundle: Path, table_names: list[str]) -> Path:
+def write_sample_tables(
+    bundle: Path,
+    table_names: list[str],
+    *,
+    sample_name: str,
+    sample_slug: str,
+) -> list[Path]:
+    """Write this sample's measurement tables into ``<bundle>/tables/`` and register them.
+
+    A bundle has to be self-describing. Before this, the per-file measurements
+    only reached disk if the agent separately called ``save_result_bundle`` with
+    the table name — so a session's pooled table could be computed, plotted, and
+    then lost with the process, which is exactly what happened to the one
+    artifact that could not be regenerated without redoing every ROI.
+    """
     import pandas as pd
 
-    frames: list[pd.DataFrame] = []
+    from imajin.results import slugify_result_name
+
+    written: list[Path] = []
     for name in table_names:
         try:
             frame = get_table(name)
         except KeyError:
             continue
-        if frame is None or frame.empty:
+        if frame is None:
             continue
-        frames.append(frame)
+        if not isinstance(frame, pd.DataFrame):
+            continue
+        out = bundle / "tables" / f"{slugify_result_name(sample_slug)}.csv"
+        if len(table_names) > 1:
+            out = bundle / "tables" / (
+                f"{slugify_result_name(sample_slug)}__{slugify_result_name(name)}.csv"
+            )
+        out.parent.mkdir(parents=True, exist_ok=True)
+        tagged = frame.copy()
+        if "sample_name" not in tagged.columns:
+            tagged.insert(0, "sample_name", sample_name)
+        tagged.to_csv(out, index=False)
+        written.append(out)
+        with with_active_bundle(bundle):
+            register_output(
+                "table_csv",
+                out,
+                {"table_name": name, "sample_name": sample_name},
+            )
+    return written
+
+
+def write_combined_csv(bundle: Path, table_names: list[str]) -> Path:
+    """Rebuild ``<bundle>/tables/combined.csv`` from every per-sample table on disk.
+
+    Concatenates the registered per-sample CSVs rather than only the current
+    call's in-session tables, so a bundle that accumulates files one at a time
+    ends up with a pooled table covering all of them. Columns are unioned, which
+    matters here: napari disambiguates a repeated layer name, so one file's
+    intensity column can arrive as ``mean_intensity_Ch2-T1 [1]`` while its
+    siblings use ``mean_intensity_Ch2-T1``.
+    """
+    import pandas as pd
+
     out = bundle / "tables" / "combined.csv"
     out.parent.mkdir(parents=True, exist_ok=True)
-    if frames:
-        combined = pd.concat(frames, ignore_index=True, sort=False)
-    else:
-        combined = pd.DataFrame()
+
+    frames: list[pd.DataFrame] = []
+    seen: set[str] = set()
+    seed = read_bundle_metadata(bundle)
+    for entry in seed.get("outputs") or []:
+        if not isinstance(entry, dict) or entry.get("kind") != "table_csv":
+            continue
+        rel = str(entry.get("path") or "")
+        if not rel or rel in seen or rel.endswith("combined.csv"):
+            continue
+        path = bundle / rel
+        if not path.exists():
+            continue
+        seen.add(rel)
+        try:
+            frames.append(pd.read_csv(path))
+        except Exception:  # noqa: BLE001 - a malformed CSV must not block the run
+            continue
+
+    if not frames:
+        # Nothing registered yet (or a legacy bundle): fall back to session tables.
+        for name in table_names:
+            try:
+                frame = get_table(name)
+            except KeyError:
+                continue
+            if frame is None or frame.empty:
+                continue
+            frames.append(frame)
+
+    combined = (
+        pd.concat(frames, ignore_index=True, sort=False) if frames else pd.DataFrame()
+    )
     combined.to_csv(out, index=False)
     return out
 
@@ -718,10 +809,16 @@ def finalize_analysis(
     status: str = "complete",
     samples: list[dict[str, Any]] | None = None,
     extra: dict[str, Any] | None = None,
-) -> Path:
+) -> Path | None:
     """Finalize the currently active bundle. Writes schema_v3 metadata.json with the
-    final status and clears the process slot."""
-    bundle = ensure_active_bundle()
+    final status and clears the process slot.
+
+    Returns ``None`` when nothing is open — closing a session that never wrote
+    anything used to mint a fresh empty bundle and immediately mark it complete.
+    """
+    bundle = current_bundle()
+    if bundle is None:
+        return None
     finalize_bundle_metadata(
         bundle,
         samples=list(samples or []),

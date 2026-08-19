@@ -661,3 +661,41 @@ def test_atexit_close_preserves_outputs_and_samples(tmp_path, monkeypatch):
     assert any(o["path"] == "figures/x.png" for o in meta["outputs"])
     assert "sample_index" in meta
     reset_process_bundle()
+
+
+def test_finalize_analysis_on_empty_slot_creates_nothing(tmp_path, monkeypatch):
+    """Closing a session that never opened a bundle must not mint an orphan."""
+    root = tmp_path / "empty_root"
+    root.mkdir()
+    monkeypatch.setenv("IMAJIN_RESULTS_DIR", str(root))
+    from imajin.result_bundles import finalize_analysis, reset_process_bundle
+
+    reset_process_bundle()
+    assert finalize_analysis() is None
+    assert list(root.iterdir()) == []
+
+
+def test_register_output_warns_when_bundle_is_already_closed(tmp_path, monkeypatch):
+    """A finalized bundle that keeps accepting writes is a bug signal."""
+    monkeypatch.setenv("IMAJIN_RESULTS_DIR", str(tmp_path))
+    import pytest
+
+    from imajin.result_bundles import (
+        bundle_output_path,
+        finalize_bundle_metadata,
+        promote_to_process_bundle,
+        register_output,
+        reset_process_bundle,
+    )
+    from imajin.results import create_result_bundle
+
+    reset_process_bundle()
+    bundle = create_result_bundle("closed", kind="single")
+    promote_to_process_bundle(bundle)
+    finalize_bundle_metadata(bundle, samples=[], status="complete")
+
+    late = bundle_output_path("qc", "late.png")
+    late.write_bytes(b"\x89PNG\r\n")
+    with pytest.warns(RuntimeWarning, match="closed bundle"):
+        register_output("qc_png", late, {})
+    reset_process_bundle()

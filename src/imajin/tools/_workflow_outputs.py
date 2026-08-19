@@ -242,6 +242,8 @@ def _write_analysis_bundle_outputs(
     bundle: AnalysisBundle,
     target_layer: str,
     table_names: list[str],
+    method_label: str | None = None,
+    mode_label: str | None = None,
     labels_cells: str,
     labels_domain: str | None = None,
     qc_png: str | None = None,
@@ -251,6 +253,7 @@ def _write_analysis_bundle_outputs(
         finalize_bundle_metadata,
         populate_sample_outputs,
         write_combined_csv,
+        write_sample_tables,
     )
 
     warnings: list[str] = []
@@ -290,8 +293,40 @@ def _write_analysis_bundle_outputs(
         source_file=str(file_path) if file_path else None,
         **dict(sample_summary or {}),
     )
+    # Durable per-sample done-record, so a session bundle can be resumed and a
+    # finished file is never silently re-analysed. Best-effort: a metadata hiccup
+    # must not fail an analysis that already completed.
+    if not batch_managed and file_path:
+        try:
+            from imajin.result_bundles import record_sample_index_entry
+
+            record_sample_index_entry(
+                bundle_path,
+                source_file=str(file_path),
+                anchor=str(anchor) if anchor is not None else None,
+                method=method_label,
+                mode=mode_label,
+                status="complete",
+                table=table_names[0] if table_names else None,
+                outputs=[v for v in bundle_outputs.values() if v],
+            )
+        except Exception as exc:  # noqa: BLE001
+            warnings.append(
+                f"sample index entry for {sample_name!r} could not be written: "
+                f"{type(exc).__name__}: {exc}"
+            )
+
     try:
-        if own_bundle:
+        if not batch_managed:
+            # Every file's measurements land in the bundle, then combined.csv is
+            # rebuilt across all of them — a session bundle is now a complete,
+            # self-describing result set without a separate save_result_bundle.
+            write_sample_tables(
+                bundle_path,
+                table_names,
+                sample_name=sample_name,
+                sample_slug=sample_slug,
+            )
             write_combined_csv(bundle_path, table_names)
         if not batch_managed:
             finalize_bundle_metadata(
