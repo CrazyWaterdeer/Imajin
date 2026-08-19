@@ -571,3 +571,93 @@ def test_workflow_bundle_is_promoted_to_process_slot(tmp_path, monkeypatch):
     adhoc_dirs = [p for p in tmp_path.iterdir() if p.is_dir() and p.name.endswith("_adhoc")]
     assert adhoc_dirs == []
     reset_process_bundle()
+
+
+def test_finalize_does_not_erase_recorded_samples(tmp_path, monkeypatch):
+    """A second finalize with no samples must not wipe the per-sample record.
+
+    finalize_analysis() and the atexit hook both pass samples=[]; before this
+    guard either one erased the whole run_context.samples list that per-file
+    analyses had accumulated.
+    """
+    monkeypatch.setenv("IMAJIN_RESULTS_DIR", str(tmp_path))
+    from imajin.result_bundles import finalize_bundle_metadata
+    from imajin.results import create_result_bundle, read_bundle_metadata
+
+    bundle = create_result_bundle("session", kind="single")
+    finalize_bundle_metadata(
+        bundle,
+        samples=[{"sample_name": "file_a", "status": "complete", "summary": {"n_cells": 16}}],
+        status="complete",
+    )
+    finalize_bundle_metadata(bundle, samples=[], status="complete")
+
+    run_context = read_bundle_metadata(bundle)["run_context"]
+    assert [s["sample_name"] for s in run_context["samples"]] == ["file_a"]
+    assert run_context["n_samples"] == 1
+    assert run_context["n_complete"] == 1
+
+
+def test_finalize_merges_samples_by_name(tmp_path, monkeypatch):
+    """Sequential per-file finalizes accumulate; a re-run of one file replaces it."""
+    monkeypatch.setenv("IMAJIN_RESULTS_DIR", str(tmp_path))
+    from imajin.result_bundles import finalize_bundle_metadata
+    from imajin.results import create_result_bundle, read_bundle_metadata
+
+    bundle = create_result_bundle("session", kind="single")
+    finalize_bundle_metadata(
+        bundle,
+        samples=[{"sample_name": "file_a", "status": "complete", "summary": {"n_cells": 16}}],
+        status="in_progress",
+    )
+    finalize_bundle_metadata(
+        bundle,
+        samples=[{"sample_name": "file_b", "status": "complete", "summary": {"n_cells": 61}}],
+        status="in_progress",
+    )
+    # Re-analysing file_a replaces its record rather than duplicating it.
+    finalize_bundle_metadata(
+        bundle,
+        samples=[{"sample_name": "file_a", "status": "complete", "summary": {"n_cells": 20}}],
+        status="complete",
+    )
+
+    run_context = read_bundle_metadata(bundle)["run_context"]
+    assert [s["sample_name"] for s in run_context["samples"]] == ["file_a", "file_b"]
+    assert run_context["samples"][0]["summary"]["n_cells"] == 20
+    assert run_context["n_samples"] == 2
+
+
+def test_atexit_close_preserves_outputs_and_samples(tmp_path, monkeypatch):
+    """The atexit hook is status-only: it must not drop outputs/table_specs/samples."""
+    monkeypatch.setenv("IMAJIN_RESULTS_DIR", str(tmp_path))
+    from imajin.result_bundles import (
+        _run_atexit_finalize,
+        bundle_output_path,
+        finalize_bundle_metadata,
+        promote_to_process_bundle,
+        register_output,
+        reset_process_bundle,
+    )
+    from imajin.results import create_result_bundle, read_bundle_metadata
+
+    reset_process_bundle()
+    bundle = create_result_bundle("session", kind="single")
+    promote_to_process_bundle(bundle)
+    finalize_bundle_metadata(
+        bundle,
+        samples=[{"sample_name": "file_a", "status": "complete", "summary": {"n_cells": 16}}],
+        status="in_progress",
+    )
+    fig = bundle_output_path("figures", "x.png")
+    fig.write_bytes(b"\x89PNG\r\n")
+    register_output("figure", fig, {})
+
+    _run_atexit_finalize()  # simulate process exit
+
+    meta = read_bundle_metadata(bundle)
+    assert meta["run_context"]["status"] == "complete"
+    assert [s["sample_name"] for s in meta["run_context"]["samples"]] == ["file_a"]
+    assert any(o["path"] == "figures/x.png" for o in meta["outputs"])
+    assert "sample_index" in meta
+    reset_process_bundle()

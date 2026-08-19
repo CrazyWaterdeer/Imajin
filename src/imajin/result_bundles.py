@@ -516,9 +516,13 @@ def finalize_bundle_metadata(
         **dict(normalized.get("environment") or {}),
         **dict(extra.pop("environment", {}) or {}),
     }
-    samples_list = [_redact_sample(s) for s in samples]
+    existing_run_context = dict(normalized.get("run_context") or {})
+    samples_list = _merge_samples(
+        list(existing_run_context.get("samples") or []),
+        [_redact_sample(s) for s in samples],
+    )
     run_context = {
-        **dict(normalized.get("run_context") or {}),
+        **existing_run_context,
         "status": status,
         "finalized_at": _kst_now_iso(),
         "samples": samples_list,
@@ -545,6 +549,40 @@ def finalize_bundle_metadata(
     if seed.get("input_anchor"):
         finalized["input_anchor"] = seed["input_anchor"]
     write_bundle_metadata(bundle, finalized)
+
+
+def _merge_samples(
+    existing: list[dict[str, Any]],
+    incoming: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Merge per-sample records, keyed by sample_name, incoming wins.
+
+    Finalization used to assign ``samples`` unconditionally, so any later
+    finalize with an empty list — ``finalize_analysis()`` and the atexit hook
+    both pass one — erased every sample record the run had accumulated.
+    Merging keeps the durable per-sample history that ``sample_index`` (two
+    lines below in the caller) has always been careful to preserve.
+    """
+    merged: dict[str, dict[str, Any]] = {}
+    order: list[str] = []
+
+    def _key(sample: dict[str, Any], index: int) -> str:
+        name = sample.get("sample_name")
+        return str(name) if name else f"__unnamed_{index}"
+
+    for i, sample in enumerate(existing):
+        if not isinstance(sample, dict):
+            continue
+        key = _key(sample, i)
+        if key not in merged:
+            order.append(key)
+        merged[key] = sample
+    for i, sample in enumerate(incoming):
+        key = _key(sample, i)
+        if key not in merged:
+            order.append(key)
+        merged[key] = sample
+    return [merged[k] for k in order]
 
 
 def _redact_sample(sample: dict[str, Any]) -> dict[str, Any]:
@@ -695,7 +733,18 @@ def _run_atexit_finalize() -> None:
     if bundle is None:
         return
     try:
-        finalize_bundle_metadata(bundle, samples=[], status="complete")
+        # Status-only close: the interpreter is going away, so this hook knows
+        # nothing new about the run. Update run_context in place and leave every
+        # other key (outputs, table_specs, sample_index, ...) exactly as written.
+        seed = read_bundle_metadata(bundle)
+        if not seed:
+            return
+        document = dict(seed)
+        run_context = dict(document.get("run_context") or {})
+        run_context["status"] = "complete"
+        run_context["finalized_at"] = _kst_now_iso()
+        document["run_context"] = run_context
+        write_bundle_metadata(bundle, document)
     finally:
         with _process_bundle_lock:
             _process_bundle = None
