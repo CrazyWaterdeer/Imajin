@@ -38,6 +38,37 @@ def _bundle_dirs_under(root: str | Path | None) -> list[Path]:
     return [c for c in children if c.is_dir() and (c / "metadata.json").exists()]
 
 
+def _reopen_bundle(bundle: Path) -> None:
+    """Flip a finalized bundle back to in_progress so it can be appended to."""
+    from imajin.result_bundles import read_bundle_metadata_normalized
+    from imajin.results import read_bundle_metadata, write_bundle_metadata
+
+    seed = read_bundle_metadata(bundle)
+    if not seed:
+        return
+    run_context = dict(seed.get("run_context") or {})
+    if not run_context:
+        # Legacy flat metadata: normalise first so the status lives where the
+        # reuse check looks for it.
+        normalized = read_bundle_metadata_normalized(bundle)
+        run_context = dict(normalized.get("run_context") or {})
+        seed = {
+            "schema_version": 3,
+            "recipe_params": dict(normalized.get("recipe_params") or {}),
+            "run_context": run_context,
+            "environment": dict(normalized.get("environment") or {}),
+            "table_specs": dict(seed.get("table_specs") or {}),
+            "outputs": list(seed.get("outputs") or []),
+            "sample_index": list(seed.get("sample_index") or []),
+        }
+    if run_context.get("status") == "in_progress":
+        return
+    run_context["status"] = "in_progress"
+    run_context.pop("finalized_at", None)
+    seed["run_context"] = run_context
+    write_bundle_metadata(bundle, seed)
+
+
 def _bundle_brief(bundle: Path) -> dict[str, Any]:
     from imajin.result_bundles import read_sample_index
     from imajin.results import read_bundle_metadata
@@ -173,6 +204,11 @@ def open_result_bundle(bundle_path: str, directory: str | None = None) -> dict[s
     from imajin.tools.recipe_import import import_recipe_from_bundle
 
     bundle = Path(bundle_path).expanduser()
+    # Re-open it: resuming means this bundle is the append target again, and a
+    # finalized bundle is deliberately NOT reusable (that guard is what stops a
+    # closed folder silently collecting the next file's outputs). Without this
+    # the note below would be false and every resumed file would mint a folder.
+    _reopen_bundle(bundle)
     promote_to_process_bundle(bundle)
     try:
         recipe_info = import_recipe_from_bundle(str(bundle))

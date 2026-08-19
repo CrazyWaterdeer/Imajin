@@ -59,9 +59,13 @@ earlier conversation is compacted.
   one-at-a-time stepping; it is NOT the uniform many-sample batch (`run_recipe_on_samples`).
   Plain `load_file` does not unload anything.
 - For such a sequential one-at-a-time session, call `start_analysis(<name>)` ONCE at the start so
-  every file's outputs collect in that single folder: per-file `save_result_bundle` appends to the
-  active bundle (as do figures/stats/QC). Do NOT call `finalize_analysis` between files — that
-  closes the folder and the next file would open a new one; finalize once at the very end.
+  every file's outputs collect in that single folder: `analyze_target_cells` appends to the open
+  bundle, as do `save_result_bundle`, figures, stats and QC. Each file's measurements are written
+  to `tables/<file>.csv` automatically and `tables/combined.csv` is rebuilt across all of them, so
+  the folder is a complete result set on its own. Do NOT call `finalize_analysis` between files —
+  that closes the folder and the next file would open a new one; finalize once at the very end.
+  Without `start_analysis` each file gets its own folder, which is what you want for genuinely
+  unrelated one-off analyses and not what you want for a batch.
 - To pool per-file measurement tables for a group comparison, do it ENTIRELY with in-app tools —
   never shell out, run pandas, or spawn a subagent to edit a CSV. `combine_tables` concatenates the
   per-file tables (tagging each with `sample_name`); `map_column(from_col="sample_name",
@@ -71,7 +75,10 @@ earlier conversation is compacted.
   intensities (`weight_col="auto"` → total signal / total area), so small debris objects don't skew
   the mean one-vote-each; pass `weight_col=None` for a plain per-object mean (per-cell designs), or
   `select_representative_rows(by="area", keep="max")` if you truly want only each sample's main
-  region. A CSV combined outside the app comes back via `import_table`.
+  region. A CSV combined outside the app comes back via `import_table`. PERSIST the pooled table
+  before you finish — `save_result_bundle(name=..., table_names=[<pooled table>])` — otherwise the
+  one artifact that cannot be regenerated without redoing every ROI dies with the session; the
+  stats CSV and the figure alone do not reconstruct it.
 - Choosing a statistical test: `compare_groups(test="auto")` already picks parametric vs
   non-parametric from a Shapiro-Wilk normality check and warns on small n — trust it for the test
   *family*, but YOU must assert the DESIGN. For a paired / within-subject comparison (the same
@@ -408,10 +415,10 @@ so assess it each time rather than trusting defaults:
   call `start_analysis(<name>)` first (or reopen the existing bundle) so outputs land next to
   the data, not an ad-hoc/orphan folder. Never let a multi-file run scatter outputs to a
   default location.
-- **Per-file unique names** — channel/layer names come from instrument metadata (e.g.
-  `Ch2-T1`) and repeat across files, so an output named after the layer alone
-  (`Ch2-T1_domain`) is identical for every file and overwrites. Make each per-file output
-  carry the source file's identity (stem).
+- **Per-file unique names** — the tools now derive per-file identity from the SOURCE FILE
+  (channel names like `Ch2-T1` repeat across files), and refuse to overwrite another
+  file's output rather than clobbering it. You do not need to hand-craft unique names;
+  do check the reported paths look right.
 - **No overwrite** — if a save would land on a file from a different source, that is a
   collision: disambiguate, don't overwrite.
 The tools now default to per-file-unique, co-located paths, but you own the situation —

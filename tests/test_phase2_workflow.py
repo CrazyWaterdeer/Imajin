@@ -1088,3 +1088,47 @@ def test_labels_are_written_once_per_sample(viewer, tmp_path, monkeypatch) -> No
     assert len(label_entries) == 1
     assert label_entries[0]["path"] == "labels/cells/rectum_1.tif"
     reset_process_bundle()
+
+
+def test_reopened_bundle_is_really_the_append_target(
+    viewer,
+    tmp_path,
+    monkeypatch,
+) -> None:
+    """open_result_bundle promises the bundle is the append target — hold it to it.
+
+    A finalized bundle is deliberately not reusable, so promoting one without
+    re-opening it left every resumed file minting its own folder while the tool
+    reported that outputs would land in the bundle.
+    """
+    raw = tmp_path / "raw"
+    raw.mkdir()
+    monkeypatch.setenv("IMAJIN_RESULTS_DIR", str(tmp_path / "results"))
+    from imajin.result_bundles import reset_process_bundle
+    from imajin.tools import bundle_resume
+
+    reset_process_bundle()
+    first = raw / "rectum_1.lsm"
+    first.write_bytes(b"stub")
+    viewer.add_image(_blob_image(), name="Ch2-T1", scale=(0.5, 0.5))
+    viewer.layers["Ch2-T1"].metadata["source_path"] = str(first)
+    res = workflows.analyze_target_cells(target="Ch2-T1")
+    bundle = Path(res["result_bundle_path"])
+    assert res["bundle_created"] is True
+
+    # New session: reopen that bundle and analyse the next file.
+    reset_process_bundle()
+    bundle_resume.open_result_bundle(str(bundle))
+
+    second = raw / "rectum_2.lsm"
+    second.write_bytes(b"stub")
+    viewer.layers.clear()
+    viewer.add_image(_blob_image(), name="Ch2-T1", scale=(0.5, 0.5))
+    viewer.layers["Ch2-T1"].metadata["source_path"] = str(second)
+    res2 = workflows.analyze_target_cells(target="Ch2-T1", rerun=True)
+
+    assert Path(res2["result_bundle_path"]) == bundle
+    assert res2["bundle_created"] is False
+    tifs = sorted(p.stem for p in (bundle / "labels" / "cells").iterdir())
+    assert tifs == ["rectum_1", "rectum_2"]
+    reset_process_bundle()
