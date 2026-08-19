@@ -711,9 +711,15 @@ def start_analysis(
 ) -> Path:
     """Create a named bundle, write seed metadata.json (schema_v3, status='in_progress'),
     and set it as the active bundle for the calling context."""
-    from imajin.results import create_result_bundle, user_results_root
+    from imajin.results import create_result_bundle, results_root
 
-    root = user_results_root()
+    # Anchor-first, like every other bundle creator (the workflow path uses
+    # resolve_session_anchor, the batch runner resolve_anchor_folder, and the
+    # ad-hoc path _adhoc_bundle_root). Hard-coding the user results root put the
+    # session bundle on C:\Users\...\Documents while the per-file work landed on
+    # D:\ next to the data, and made the prompt's stated reason for calling this
+    # tool ("so outputs land next to the data") false.
+    root = results_root()
     bundle = create_result_bundle(
         name=name,
         kind=kind,

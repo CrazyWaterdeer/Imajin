@@ -16,15 +16,18 @@ import tifffile
 
 
 @pytest.fixture(autouse=True)
-def _isolate_results_root(tmp_path, monkeypatch):
-    """Keep every test's result bundles inside tmp_path.
+def _isolate_results_root(tmp_path_factory, monkeypatch):
+    """Give every test its own throwaway results root.
 
     Without this the suite writes real bundles into the user's Documents folder
     (hundreds of them per full run), and any test asserting "exactly N bundles
     exist under this root" is meaningless because the root is shared.
+
+    Deliberately NOT under the test's own ``tmp_path``: tests that scan a
+    directory tree (register_files recursive) would otherwise count this folder
+    as data.
     """
-    root = tmp_path / "results_root"
-    root.mkdir(parents=True, exist_ok=True)
+    root = tmp_path_factory.mktemp("imajin_results")
     monkeypatch.setenv("IMAJIN_RESULTS_DIR", str(root))
     yield root
 

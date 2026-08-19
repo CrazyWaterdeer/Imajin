@@ -376,3 +376,40 @@ def test_save_result_bundle_keeps_distinct_qc_images(viewer, tmp_path, monkeypat
     assert (bundle / "qc" / "qc.png").read_bytes().endswith(b"AAAA")
     assert (bundle / "qc" / "qc_2.png").read_bytes().endswith(b"BBBB")
     reset_process_bundle()
+
+
+def test_save_result_bundle_reports_that_an_appended_name_is_not_applied(
+    viewer, tmp_path, monkeypatch
+):
+    """Appending keeps the folder's name; the caller must be told, not misled."""
+    monkeypatch.setenv("IMAJIN_RESULTS_DIR", str(tmp_path))
+    from imajin.result_bundles import reset_process_bundle
+    from imajin.tools import bundle as bundle_tools
+    from imajin.tools import results as results_tools
+
+    reset_process_bundle()
+    bundle_tools.start_analysis("session_name")
+
+    res = results_tools.save_result_bundle("mF_rectum_1")
+    assert res["reused"] is True
+    assert res["name_applied"] is False
+    assert res["bundle_name"] == "session_name"
+    reset_process_bundle()
+
+
+def test_save_result_bundle_keeps_caller_metadata_when_appending(
+    viewer, tmp_path, monkeypatch
+):
+    monkeypatch.setenv("IMAJIN_RESULTS_DIR", str(tmp_path))
+    from imajin.result_bundles import reset_process_bundle
+    from imajin.results import read_bundle_metadata
+    from imajin.tools import bundle as bundle_tools
+    from imajin.tools import results as results_tools
+
+    reset_process_bundle()
+    bundle_tools.start_analysis("session_name")
+    res = results_tools.save_result_bundle("s", metadata={"roi": "hindgut"})
+
+    seed = read_bundle_metadata(Path(res["bundle_path"]))
+    assert seed["recipe_params"]["roi"] == "hindgut"
+    reset_process_bundle()

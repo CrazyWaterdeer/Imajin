@@ -189,6 +189,13 @@ def save_result_bundle(
     # the process slot so subsequent tool calls in the same task share it too.
     bundle = None if new_bundle else current_bundle()
     reused = bundle is not None
+    if reused and metadata:
+        # Don't drop caller metadata just because we're appending.
+        seed = _bundle_io.read_bundle_metadata(bundle)
+        recipe_params = dict(seed.get("recipe_params") or {})
+        recipe_params.update(metadata)
+        seed["recipe_params"] = recipe_params
+        _bundle_io.write_bundle_metadata(bundle, seed)
     if bundle is None:
         bundle = create_result_bundle(
             name,
@@ -290,4 +297,12 @@ def save_result_bundle(
         "metadata_path": str(bundle / "metadata.json"),
         "outputs": outputs,
         "reused": reused,
+        # When appending, `name` labels the outputs but does NOT rename the
+        # folder — say so, instead of letting the caller believe its per-sample
+        # name was applied. In the reported session the agent passed good names
+        # (mF_rectum_1 ... vF_rectum_2) that never reached any folder.
+        "name_applied": not reused,
+        "bundle_name": (
+            _bundle_io.read_bundle_metadata(bundle).get("run_context") or {}
+        ).get("name"),
     }

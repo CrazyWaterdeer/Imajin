@@ -699,3 +699,38 @@ def test_register_output_warns_when_bundle_is_already_closed(tmp_path, monkeypat
     with pytest.warns(RuntimeWarning, match="closed bundle"):
         register_output("qc_png", late, {})
     reset_process_bundle()
+
+
+def test_start_analysis_roots_at_the_session_anchor(tmp_path, monkeypatch):
+    """The session bundle lands next to the data, like every other bundle creator."""
+    raw = tmp_path / "raw"
+    raw.mkdir()
+    # Point the fallback at a DECOY: if start_analysis still hard-coded
+    # user_results_root() it would short-circuit on this env var and pass.
+    monkeypatch.setenv("IMAJIN_RESULTS_DIR", str(tmp_path / "fallback"))
+
+    from imajin import session as state
+    from imajin.result_bundles import reset_process_bundle, start_analysis
+
+    reset_process_bundle()
+    source = raw / "a.lsm"
+    source.write_bytes(b"stub")
+    state.put_file(str(source), "a.lsm")
+
+    bundle = start_analysis("session")
+    assert bundle.parent == raw.resolve()
+    assert not (tmp_path / "fallback").exists()
+    reset_process_bundle()
+
+
+def test_start_analysis_falls_back_to_results_root_without_session_files(
+    tmp_path, monkeypatch
+):
+    root = tmp_path / "results"
+    monkeypatch.setenv("IMAJIN_RESULTS_DIR", str(root))
+    from imajin.result_bundles import reset_process_bundle, start_analysis
+
+    reset_process_bundle()
+    bundle = start_analysis("session")
+    assert bundle.parent == root
+    reset_process_bundle()
