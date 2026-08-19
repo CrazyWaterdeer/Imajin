@@ -180,8 +180,12 @@ def _write_analysis_bundle_outputs(
             qc_png=qc_png,
         )
     except Exception as exc:  # noqa: BLE001
+        # Loud, not decorative: the sample's labels/QC are NOT in the bundle, so
+        # the summary below will record nulls for them. Silently degrading here
+        # is how a bundle ends up claiming a sample it has no outputs for.
         warnings.append(
-            f"bundle outputs could not be written: {type(exc).__name__}: {exc}"
+            f"sample {sample_name!r} outputs were NOT written into the bundle "
+            f"({type(exc).__name__}: {exc}) — its labels/QC are missing"
         )
     if own_bundle:
         summary = build_sample_summary(

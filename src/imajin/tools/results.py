@@ -44,6 +44,52 @@ def _resolve_output_path(
     return bundle_output_path(category, filename)
 
 
+def _registered_identity(bundle: Path, rel_path: str, key: str) -> str | None:
+    """The identity value recorded for an existing output at ``rel_path``."""
+    try:
+        recorded = _bundle_io.read_bundle_metadata(bundle)
+    except Exception:  # noqa: BLE001 - a bad read must not block writing
+        return None
+    for entry in recorded.get("outputs") or []:
+        if not isinstance(entry, dict) or entry.get("path") != rel_path:
+            continue
+        metadata = entry.get("metadata")
+        if isinstance(metadata, dict) and metadata.get(key) is not None:
+            return str(metadata[key])
+    return None
+
+
+def _non_clobbering_path(
+    bundle: Path,
+    category: str,
+    filename: str,
+    *,
+    identity_key: str,
+    identity_value: str,
+) -> Path:
+    """Resolve <bundle>/<category>/<filename>, never overwriting another file's output.
+
+    Re-saving the SAME source (same labels layer, same QC image) overwrites in
+    place so a repeated save stays idempotent. A different source landing on a
+    taken name gets `_2`, `_3`, ... instead of silently replacing it — which is
+    what happened when several files shared a bundle under one layer-derived
+    name and six of seven label TIFFs were lost.
+    """
+    stem = Path(filename).stem
+    suffix = Path(filename).suffix
+    candidate = bundle / category / filename
+    index = 1
+    while candidate.exists():
+        rel = candidate.relative_to(bundle).as_posix()
+        prior = _registered_identity(bundle, rel, identity_key)
+        if prior is None or prior == identity_value:
+            break  # same source (or unattributed) — overwrite in place
+        index += 1
+        candidate = bundle / category / f"{stem}_{index}{suffix}"
+    candidate.parent.mkdir(parents=True, exist_ok=True)
+    return candidate
+
+
 def _source_paths_for_layers(layer_names: list[str] | None) -> list[str]:
     paths: list[str] = []
     for layer_name in layer_names or []:
@@ -163,7 +209,13 @@ def save_result_bundle(
             layer = call_on_main(snapshot_layer, labels_layer)
             data = _materialize(layer.data)
             labels = data.astype(_label_output_dtype(data), copy=False)
-            out = bundle / "labels" / "cells" / f"{slugify_result_name(labels_layer)}.tif"
+            out = _non_clobbering_path(
+                bundle,
+                "labels/cells",
+                f"{slugify_result_name(labels_layer)}.tif",
+                identity_key="labels_layer",
+                identity_value=labels_layer,
+            )
             _write_label_tiff(out, labels)
             outputs["labels"].append(str(out))
             register_output(
@@ -191,8 +243,13 @@ def save_result_bundle(
             src = normalize_user_path(raw).resolve()
             if not src.exists():
                 continue
-            dst = bundle / "qc" / src.name
-            dst.parent.mkdir(parents=True, exist_ok=True)
+            dst = _non_clobbering_path(
+                bundle,
+                "qc",
+                src.name,
+                identity_key="source",
+                identity_value=str(src),
+            )
             if src.resolve() != dst.resolve():
                 shutil.copy2(src, dst)
             outputs["qc"].append(str(dst))
@@ -204,8 +261,13 @@ def save_result_bundle(
             src = normalize_user_path(raw).resolve()
             if not src.exists():
                 continue
-            dst = bundle / "figures" / src.name
-            dst.parent.mkdir(parents=True, exist_ok=True)
+            dst = _non_clobbering_path(
+                bundle,
+                "figures",
+                src.name,
+                identity_key="source",
+                identity_value=str(src),
+            )
             if src.resolve() != dst.resolve():
                 shutil.copy2(src, dst)
             outputs["figures"].append(str(dst))

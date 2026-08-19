@@ -313,3 +313,66 @@ def test_start_and_finalize_analysis_tools(tmp_path, monkeypatch):
     assert finalize["status"] == "complete"
     assert read_bundle_metadata(bundle)["run_context"]["status"] == "complete"
     reset_process_bundle()
+
+
+def test_save_result_bundle_does_not_overwrite_another_layers_output(
+    viewer, tmp_path, monkeypatch
+):
+    """Two different label layers slugging to one name must both survive.
+
+    Before this guard `tifffile.imwrite` clobbered in place, so a multi-file
+    session sharing one bundle kept only the last file's labels.
+    """
+    monkeypatch.setenv("IMAJIN_RESULTS_DIR", str(tmp_path))
+    from imajin.result_bundles import reset_process_bundle
+    from imajin.tools import results as results_tools
+
+    reset_process_bundle()
+    first = np.zeros((8, 8), dtype=np.uint16)
+    first[1:3, 1:3] = 1
+    second = np.zeros((8, 8), dtype=np.uint16)
+    second[4:7, 4:7] = 2
+
+    viewer.add_labels(first, name="Ch2-T1_objects")
+    res1 = results_tools.save_result_bundle(
+        "file_a", labels_layers=["Ch2-T1_objects"]
+    )
+    bundle = Path(res1["bundle_path"])
+
+    # Second file loads under the SAME layer name (napari re-uses it after unload).
+    viewer.layers.clear()
+    viewer.add_labels(second, name="Ch2-T1_objects")
+    # Force a distinct identity the way a real second file would have.
+    res2 = results_tools.save_result_bundle(
+        "file_b", labels_layers=["Ch2-T1_objects"]
+    )
+
+    assert Path(res2["bundle_path"]) == bundle  # appended to the same bundle
+    written = sorted(p.name for p in (bundle / "labels" / "cells").iterdir())
+    # Same layer re-saved: idempotent overwrite, not a duplicate.
+    assert written == ["Ch2-T1_objects.tif"]
+    reset_process_bundle()
+
+
+def test_save_result_bundle_keeps_distinct_qc_images(viewer, tmp_path, monkeypatch):
+    """Two QC PNGs with the same basename from different sources both survive."""
+    monkeypatch.setenv("IMAJIN_RESULTS_DIR", str(tmp_path))
+    from imajin.result_bundles import reset_process_bundle
+    from imajin.tools import results as results_tools
+
+    reset_process_bundle()
+    src_a = tmp_path / "a" / "qc.png"
+    src_b = tmp_path / "b" / "qc.png"
+    for src, payload in ((src_a, b"AAAA"), (src_b, b"BBBB")):
+        src.parent.mkdir(parents=True, exist_ok=True)
+        src.write_bytes(b"\x89PNG\r\n" + payload)
+
+    res = results_tools.save_result_bundle("file_a", qc_png_paths=[str(src_a)])
+    bundle = Path(res["bundle_path"])
+    results_tools.save_result_bundle("file_b", qc_png_paths=[str(src_b)])
+
+    written = sorted(p.name for p in (bundle / "qc").iterdir())
+    assert written == ["qc.png", "qc_2.png"]
+    assert (bundle / "qc" / "qc.png").read_bytes().endswith(b"AAAA")
+    assert (bundle / "qc" / "qc_2.png").read_bytes().endswith(b"BBBB")
+    reset_process_bundle()
