@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -127,7 +128,20 @@ def _sample_identity(
     return stem, slug
 
 
-def _write_analysis_bundle_outputs(
+@dataclass(frozen=True)
+class AnalysisBundle:
+    """Where one file's analysis outputs belong, decided before any are written."""
+
+    path: Path
+    created: bool  # this call minted the folder
+    batch_managed: bool  # the batch runner owns it
+    anchor: Path | None
+    sample_name: str
+    sample_slug: str
+    source_file: str | None
+
+
+def pin_analysis_bundle(
     *,
     target_layer: str,
     target_source: str,
@@ -135,24 +149,26 @@ def _write_analysis_bundle_outputs(
     analysis_dim: str,
     tier: str,
     bundle_suffix: str,
-    table_names: list[str],
-    labels_cells: str,
-    labels_domain: str | None = None,
-    qc_png: str | None = None,
-    sample_summary: dict[str, Any] | None = None,
     source_file: str | None = None,
-) -> tuple[Path, bool, bool, dict[str, str | None], list[str]]:
-    from imajin.results import create_result_bundle, slugify_result_name
+) -> AnalysisBundle:
+    """Decide this file's destination bundle BEFORE any of its outputs are written.
+
+    A single unit of work must not be able to write into two folders. The QC PNG
+    used to resolve through ``ensure_active_bundle()`` during segmentation, minutes
+    before the analysis picked its bundle, so it landed in whatever the process slot
+    still held — the PREVIOUS file's, already-finalized, bundle. Every file's only
+    informatively-named QC image ended up filed under the wrong sample.
+
+    Resolving here and promoting to the process slot means segmentation, the domain
+    pre-compute, measurement and the final bundle write all agree on one destination.
+    """
+    from imajin.anchor import resolve_session_anchor
     from imajin.result_bundles import (
         active_context_bundle,
         current_sample_slug,
-        finalize_bundle_metadata,
-        populate_sample_outputs,
-        write_combined_csv,
+        promote_to_process_bundle,
     )
-
-    warnings: list[str] = []
-    from imajin.anchor import resolve_session_anchor
+    from imajin.results import create_result_bundle, slugify_result_name
 
     file_path = source_file
     if not file_path:
@@ -164,25 +180,11 @@ def _write_analysis_bundle_outputs(
             file_path = None
     anchor = resolve_session_anchor(extra_paths=[file_path] if file_path else None)
 
-    # Which bundle do this file's outputs belong to?
-    #
-    # The contextvar (set by the batch runner via with_active_bundle) wins. Then
-    # a bundle a human or agent DELIBERATELY opened — start_analysis, or an
-    # earlier per-file analysis in this same session — so a sequential one-file-
-    # at-a-time run collects in one folder instead of minting a folder per file.
-    #
-    # Provenance is read off the bundle, not inferred from which slot it sits in.
-    # Encoding it as "contextvar = deliberate, process slot = ad-hoc" was the
-    # original defect: it correctly refused stray ad-hoc bundles but threw away
-    # every deliberately-opened one too, because nothing an agent can call sets
-    # the contextvar.
     ctx_bundle = active_context_bundle()
     # Only look for a session bundle when the batch runner is NOT driving; the
     # batch runner owns its parent bundle's sample bookkeeping end to end.
     session_bundle = None if ctx_bundle is not None else _reusable_session_bundle()
     parent = ctx_bundle if ctx_bundle is not None else session_bundle
-    own_bundle = parent is None
-    batch_managed = ctx_bundle is not None
     sample_name, sample_slug = _sample_identity(
         bundle=parent,
         source_file=file_path,
@@ -193,29 +195,72 @@ def _write_analysis_bundle_outputs(
     if batch_slug:
         # The batch runner owns per-sample identity; don't second-guess it.
         sample_slug = batch_slug
-    if own_bundle:
-        bundle_name = (
-            f"{slugify_result_name(sample_name)}__{bundle_suffix}"
-            if file_path
-            else f"{target_layer}__{bundle_suffix}"
+
+    if parent is not None:
+        return AnalysisBundle(
+            path=parent,
+            created=False,
+            batch_managed=ctx_bundle is not None,
+            anchor=anchor,
+            sample_name=sample_name,
+            sample_slug=sample_slug,
+            source_file=str(file_path) if file_path else None,
         )
-        bundle_path = create_result_bundle(
-            name=bundle_name,
-            kind="single",
-            tier=tier,
-            metadata={
-                "recipe": None,
-                "target_channel": target_layer,
-                "target_source": target_source,
-                "segmentation_method": segmentation_method,
-                "analysis_dim": analysis_dim,
-            },
-            root=anchor,
-        )
-        from imajin.result_bundles import promote_to_process_bundle
-        promote_to_process_bundle(bundle_path)
-    else:
-        bundle_path = parent
+
+    bundle_name = (
+        f"{slugify_result_name(sample_name)}__{bundle_suffix}"
+        if file_path
+        else f"{target_layer}__{bundle_suffix}"
+    )
+    bundle_path = create_result_bundle(
+        name=bundle_name,
+        kind="single",
+        tier=tier,
+        metadata={
+            "recipe": None,
+            "target_channel": target_layer,
+            "target_source": target_source,
+            "segmentation_method": segmentation_method,
+            "analysis_dim": analysis_dim,
+        },
+        root=anchor,
+    )
+    promote_to_process_bundle(bundle_path)
+    return AnalysisBundle(
+        path=bundle_path,
+        created=True,
+        batch_managed=False,
+        anchor=anchor,
+        sample_name=sample_name,
+        sample_slug=sample_slug,
+        source_file=str(file_path) if file_path else None,
+    )
+
+
+def _write_analysis_bundle_outputs(
+    *,
+    bundle: AnalysisBundle,
+    target_layer: str,
+    table_names: list[str],
+    labels_cells: str,
+    labels_domain: str | None = None,
+    qc_png: str | None = None,
+    sample_summary: dict[str, Any] | None = None,
+) -> tuple[Path, bool, bool, dict[str, str | None], list[str]]:
+    from imajin.result_bundles import (
+        finalize_bundle_metadata,
+        populate_sample_outputs,
+        write_combined_csv,
+    )
+
+    warnings: list[str] = []
+    bundle_path = bundle.path
+    own_bundle = bundle.created
+    batch_managed = bundle.batch_managed
+    anchor = bundle.anchor
+    sample_name = bundle.sample_name
+    sample_slug = bundle.sample_slug
+    file_path = bundle.source_file
 
     bundle_outputs = _empty_bundle_outputs()
     try:

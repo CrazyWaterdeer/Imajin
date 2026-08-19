@@ -102,11 +102,22 @@ def ensure_active_bundle() -> Path:
         return _process_bundle
 
 
-def bundle_output_path(category: str, filename: str) -> Path:
-    """Resolve <bundle>/<category>/<filename>, lazily creating the bundle and parent."""
+def bundle_output_path(
+    category: str,
+    filename: str,
+    *,
+    create_parent: bool = True,
+) -> Path:
+    """Resolve <bundle>/<category>/<filename>, lazily creating the bundle and parent.
+
+    Pass ``create_parent=False`` when the caller may decide not to write after
+    all; the bundle layout is meant to grow only as writers actually emit files,
+    and an eagerly-created empty ``qc/`` misreports what a bundle contains.
+    """
     bundle = ensure_active_bundle()
     out = bundle / category / filename
-    out.parent.mkdir(parents=True, exist_ok=True)
+    if create_parent:
+        out.parent.mkdir(parents=True, exist_ok=True)
     return out
 
 

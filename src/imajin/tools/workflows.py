@@ -28,6 +28,7 @@ from imajin.tools._workflow_outputs import (
     _bundle_qc_png_path,
     _empty_bundle_outputs,
     _write_analysis_bundle_outputs,
+    pin_analysis_bundle,
 )
 from imajin.tools._workflow_steps import (
     _layer_axes,
@@ -207,6 +208,19 @@ def analyze_target_cells(
     axes = _layer_axes(snapshot)
     use_3d = _decide_3d(do_3D, axes, getattr(snapshot.data, "ndim", 2))
 
+    # Pin the destination bundle BEFORE the domain pre-compute and segmentation,
+    # both of which write QC PNGs through ensure_active_bundle(). Deciding it
+    # afterwards let a single file's outputs straddle two folders.
+    analysis_bundle = pin_analysis_bundle(
+        target_layer=target_layer,
+        target_source=resolution.source,
+        segmentation_method=method,
+        analysis_dim="3d" if use_3d else "2d",
+        tier="two_tier" if domain_strategy is not None else "single_tier",
+        bundle_suffix="two_tier" if domain_strategy is not None else "single",
+        source_file=analysis_source_file,
+    )
+
     # A hand-drawn ROI (region_mask) constrains BOTH tiers to inside the region.
     if region_mask is not None:
         if method not in {"target_objects", "auto_3d_cells"}:
@@ -348,16 +362,11 @@ def analyze_target_cells(
     if domain_strategy is None:
         bundle_path, own_bundle, bundle_batch_managed, bundle_outputs, bundle_warnings = (
             _write_analysis_bundle_outputs(
+                bundle=analysis_bundle,
                 target_layer=target_layer,
-                target_source=resolution.source,
-                segmentation_method=method,
-                analysis_dim="3d" if use_3d else "2d",
-                tier="single_tier",
-                bundle_suffix="single",
                 table_names=[measure_result["table_name"]],
                 labels_cells=seg_result["labels_layer"],
                 qc_png=seg_result.get("qc_png_path"),
-                source_file=analysis_source_file,
                 sample_summary={
                     "n_cells": int(
                         seg_result.get("n_objects", seg_result.get("n_cells", 0))
@@ -421,17 +430,12 @@ def analyze_target_cells(
 
         bundle_path, own_bundle, bundle_batch_managed, bundle_outputs, bundle_warnings = (
             _write_analysis_bundle_outputs(
+                bundle=analysis_bundle,
                 target_layer=target_layer,
-                target_source=resolution.source,
-                segmentation_method=method,
-                analysis_dim="3d" if use_3d else "2d",
-                tier="two_tier",
-                bundle_suffix="two_tier",
                 table_names=[tier_table_name],
                 labels_cells=seg_result["labels_layer"],
                 labels_domain=domain_layer,
                 qc_png=seg_result.get("qc_png_path"),
-                source_file=analysis_source_file,
                 sample_summary={
                     "n_cells": int(
                         seg_result.get("n_objects", seg_result.get("n_cells", 0))

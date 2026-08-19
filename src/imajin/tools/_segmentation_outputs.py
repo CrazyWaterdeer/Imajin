@@ -15,7 +15,8 @@ def _slug(value: str) -> str:
 
 
 def _unique_file(root: Path, filename: str) -> Path:
-    root.mkdir(parents=True, exist_ok=True)
+    # No mkdir: the caller may still skip writing, and an empty directory would
+    # misreport what the bundle holds. Writers create their own parent.
     candidate = root / filename
     if not candidate.exists():
         return candidate
@@ -56,7 +57,7 @@ def _default_qc_png_path(labels_layer: str, source_layer: Any | None = None) -> 
         name = f"{_slug(Path(src).stem)}__{name}"
     # Default-path QC carries no caller-supplied unique name, so never overwrite
     # an existing one (re-running on the same file appends _2, _3, ...).
-    base = bundle_output_path("qc", f"{name}.png")
+    base = bundle_output_path("qc", f"{name}.png", create_parent=False)
     return _unique_file(base.parent, base.name)
 
 

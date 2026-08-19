@@ -948,3 +948,46 @@ def test_analysis_does_not_append_to_a_finalized_bundle(
     assert res["ok"] is True
     assert Path(res["result_bundle_path"]) != closed
     reset_process_bundle()
+
+
+def test_qc_png_never_lands_in_a_previous_files_bundle(
+    viewer,
+    tmp_path,
+    monkeypatch,
+) -> None:
+    """One file's outputs must not straddle two bundles.
+
+    The QC PNG used to resolve through ensure_active_bundle() during
+    segmentation — minutes before the analysis chose its bundle — so it landed
+    in the PREVIOUS file's already-finalized folder. In the reported session
+    every file's only informatively-named QC image was filed under the wrong
+    sample.
+    """
+    raw = tmp_path / "raw"
+    raw.mkdir()
+    results_root = tmp_path / "results"
+    monkeypatch.setenv("IMAJIN_RESULTS_DIR", str(results_root))
+
+    from imajin.result_bundles import reset_process_bundle
+
+    reset_process_bundle()
+    seen: list[Path] = []
+    for stem in ["rectum_1", "rectum_2"]:
+        source = raw / f"{stem}.lsm"
+        source.write_bytes(b"stub")
+        viewer.layers.clear()
+        viewer.add_image(_blob_image(), name="Ch2-T1", scale=(0.5, 0.5))
+        viewer.layers["Ch2-T1"].metadata["source_path"] = str(source)
+
+        res = workflows.analyze_target_cells(target="Ch2-T1", rerun=True)
+        assert res["ok"] is True
+        seen.append(Path(res["result_bundle_path"]))
+
+    assert seen[0] != seen[1]  # standalone runs still get their own folders
+    for bundle, stem in zip(seen, ["rectum_1", "rectum_2"], strict=True):
+        pngs = sorted(p.name for p in (bundle / "qc").iterdir())
+        # Every QC image in this folder belongs to THIS file.
+        assert pngs, f"{stem} bundle has no QC image"
+        for name in pngs:
+            assert stem in name, f"{name} in {bundle.name} belongs to another file"
+    reset_process_bundle()
