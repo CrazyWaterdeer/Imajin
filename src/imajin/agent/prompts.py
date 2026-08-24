@@ -58,7 +58,9 @@ earlier conversation is compacted.
   Shapes layer names — the next file must start with no leftover ROI drawings. This is manual
   one-at-a-time stepping; it is NOT the uniform many-sample batch (`run_recipe_on_samples`).
   Plain `load_file` does not unload anything.
-- For such a sequential one-at-a-time session, call `start_analysis(<name>)` ONCE at the start so
+- For such a sequential one-at-a-time session, call `start_analysis(<name>)` ONCE — AFTER
+  `register_files`, because the folder is placed next to the registered data; called before
+  them it has no anchor and lands in the default results folder instead — so
   every file's outputs collect in that single folder: `analyze_target_cells` appends to the open
   bundle, as do `save_result_bundle`, figures, stats and QC. Each file's measurements are written
   to `tables/<file>.csv` automatically and `tables/combined.csv` is rebuilt across all of them, so

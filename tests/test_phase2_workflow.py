@@ -1347,3 +1347,44 @@ def test_reopening_an_adhoc_bundle_makes_it_a_real_append_target(
     assert Path(res["result_bundle_path"]) == adhoc
     assert res["bundle_created"] is False
     reset_process_bundle()
+
+
+def test_session_bundle_lands_next_to_the_data_in_documented_order(
+    viewer,
+    tmp_path,
+    monkeypatch,
+) -> None:
+    """register_files -> start_analysis puts the folder beside the .lsm files.
+
+    start_analysis derives its location from the registered files, so calling it
+    before them lands the session bundle in the default results folder while the
+    data sits elsewhere — which is how the reported session ended up with its
+    bundle on C: and its images on D:.
+    """
+    data = tmp_path / "260818"
+    data.mkdir()
+    monkeypatch.setenv("IMAJIN_RESULTS_DIR", str(tmp_path / "fallback"))
+    from imajin import session as state
+    from imajin.result_bundles import reset_process_bundle
+    from imajin.tools import bundle as bundle_tools
+
+    reset_process_bundle()
+    stems = ["rectum_1", "rectum_2"]
+    for stem in stems:
+        source = data / f"{stem}.lsm"
+        source.write_bytes(b"stub")
+        state.put_file(str(source), f"{stem}.lsm")
+
+    session_bundle = Path(bundle_tools.start_analysis("260818_roi")["bundle_path"])
+    assert session_bundle.parent == data.resolve()
+
+    for stem in stems:
+        viewer.layers.clear()
+        viewer.add_image(_blob_image(), name="Ch2-T1", scale=(0.5, 0.5))
+        viewer.layers["Ch2-T1"].metadata["source_path"] = str(data / f"{stem}.lsm")
+        assert workflows.analyze_target_cells(target="Ch2-T1", rerun=True)["ok"]
+
+    folders = sorted(p.name for p in data.iterdir() if p.is_dir())
+    assert folders == [session_bundle.name]
+    assert not (tmp_path / "fallback").exists()
+    reset_process_bundle()
