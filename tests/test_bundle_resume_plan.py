@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from imajin.result_bundles import record_sample_index_entry
 from imajin.results import create_result_bundle, read_bundle_metadata, write_bundle_metadata
 from imajin.tools.bundle_resume import open_result_bundle, plan_resume, read_result_bundle
@@ -117,3 +119,50 @@ def test_analyze_target_cells_skips_file_in_resume_scope(viewer):
         assert res.get("already_analysed") is True
     finally:
         state.clear_resume_scope()
+
+
+def test_open_result_bundle_preserves_legacy_top_level_keys(tmp_path, monkeypatch):
+    """Reopening a pre-v3 folder must not strip what it recorded.
+
+    input_anchor in particular is read straight afterwards to set the resume
+    scope, so dropping it silently changes which files count as analysed.
+    """
+    import json
+
+    monkeypatch.setenv("IMAJIN_RESULTS_DIR", str(tmp_path))
+    from imajin.tools import bundle_resume
+
+    raw = tmp_path / "raw"
+    raw.mkdir()
+    bundle = tmp_path / "20250101_120000_legacy"
+    bundle.mkdir()
+    (bundle / "metadata.json").write_text(
+        json.dumps(
+            {
+                "kind": "single",
+                "name": "legacy",
+                "status": "complete",
+                "target_channel": "Ch2-T1",
+                "segmentation_method": "target_objects",
+                "analysis_dim": "3d",
+                "voxel_scale": [1.0, 0.15, 0.15],
+                "operator_notes": "drew ROI around the rectum",
+                "input_anchor": str(raw),
+            }
+        )
+    )
+
+    res = bundle_resume.open_result_bundle(str(bundle))
+
+    final = json.loads((bundle / "metadata.json").read_text())
+    assert final["run_context"]["status"] == "in_progress"
+    for key in (
+        "target_channel",
+        "segmentation_method",
+        "analysis_dim",
+        "voxel_scale",
+        "operator_notes",
+        "input_anchor",
+    ):
+        assert key in final, f"{key} was discarded by reopening the bundle"
+    assert Path(res["anchor"]) == raw

@@ -775,3 +775,37 @@ def test_atexit_close_preserves_unknown_top_level_keys(tmp_path, monkeypatch):
     assert final["operator_notes"] == "drew ROI around the rectum"
     assert final["voxel_scale"] == [1.0, 0.15, 0.15]
     reset_process_bundle()
+
+
+def test_combined_rebuild_does_not_lose_a_sample_whose_csv_went_missing(
+    tmp_path, monkeypatch
+):
+    """A registered per-sample table that vanished is the same loss as a corrupt one."""
+    import pandas as pd
+
+    monkeypatch.setenv("IMAJIN_RESULTS_DIR", str(tmp_path))
+    from imajin import session as state
+    from imajin.result_bundles import (
+        reset_process_bundle,
+        write_combined_csv,
+        write_sample_tables,
+    )
+    from imajin.results import create_result_bundle
+
+    reset_process_bundle()
+    bundle = create_result_bundle("session", kind="single")
+    for stem in ("rectum_1", "rectum_2"):
+        state.put_table(stem, pd.DataFrame({"label": [1, 2], "area": [10, 20]}))
+        write_sample_tables(bundle, [stem], sample_name=stem, sample_slug=stem)
+    write_combined_csv(bundle, [])
+
+    (bundle / "tables" / "rectum_1.csv").unlink()
+
+    warnings: list[str] = []
+    write_combined_csv(bundle, [], warnings=warnings)
+
+    combined = pd.read_csv(bundle / "tables" / "combined.csv")
+    assert sorted(combined["sample_name"].unique()) == ["rectum_1", "rectum_2"]
+    assert len(combined) == 4, "the pooled table shrank"
+    assert any("rectum_1" in w for w in warnings), "the loss was silent"
+    reset_process_bundle()

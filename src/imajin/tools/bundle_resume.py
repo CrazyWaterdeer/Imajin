@@ -48,11 +48,16 @@ def _reopen_bundle(bundle: Path) -> None:
         return
     run_context = dict(seed.get("run_context") or {})
     if not run_context:
-        # Legacy flat metadata: normalise first so the status lives where the
-        # reuse check looks for it.
+        # Legacy flat metadata: lift the status into run_context where the reuse
+        # check looks for it, but KEEP every other top-level key. Reopening a
+        # folder to browse or resume it must not be destructive, and the keys the
+        # v3 shape does not know about include input_anchor — which
+        # open_result_bundle reads two calls later to set the resume scope, so
+        # dropping it silently re-anchors which files count as already analysed.
         normalized = read_bundle_metadata_normalized(bundle)
         run_context = dict(normalized.get("run_context") or {})
         seed = {
+            **dict(seed),
             "schema_version": 3,
             "recipe_params": dict(normalized.get("recipe_params") or {}),
             "run_context": run_context,

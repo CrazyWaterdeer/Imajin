@@ -572,6 +572,30 @@ def write_sample_tables(
     return written
 
 
+def _note_missing_sample_table(
+    rel: str,
+    reason: str,
+    entry: dict[str, Any],
+    unreadable: list[str],
+    warnings: list[str] | None,
+) -> None:
+    """Record that a registered per-sample table could not contribute rows.
+
+    A pooled table quietly missing a sample is worse than a loud one, because
+    the statistics still run on what is left.
+    """
+    message = f"{rel} {reason} and is MISSING from combined.csv"
+    if warnings is not None:
+        warnings.append(message)
+    else:
+        import warnings as _warnings
+
+        _warnings.warn(message, RuntimeWarning, stacklevel=3)
+    sample = (entry.get("metadata") or {}).get("sample_name")
+    if sample:
+        unreadable.append(str(sample))
+
+
 def write_combined_csv(
     bundle: Path,
     table_names: list[str],
@@ -613,26 +637,24 @@ def write_combined_csv(
             continue
         path = bundle / rel
         if not path.exists():
+            # A registered table that has gone missing is the same loss as an
+            # unreadable one — warn and rescue its rows below, rather than
+            # quietly rebuilding a smaller pooled table.
+            _note_missing_sample_table(
+                rel, "no longer exists", entry, unreadable, warnings
+            )
             continue
         seen.add(rel)
         try:
             frames.append(pd.read_csv(path))
         except Exception as exc:  # noqa: BLE001 - one bad CSV must not block the run
-            # But it must not vanish either: a pooled table quietly missing a
-            # sample is worse than a loud one, because the statistics still run.
-            message = (
-                f"{rel} could not be read and is MISSING from combined.csv "
-                f"({type(exc).__name__}: {exc})"
+            _note_missing_sample_table(
+                rel,
+                f"could not be read ({type(exc).__name__}: {exc})",
+                entry,
+                unreadable,
+                warnings,
             )
-            if warnings is not None:
-                warnings.append(message)
-            else:
-                import warnings as _warnings
-
-                _warnings.warn(message, RuntimeWarning, stacklevel=2)
-            sample = (entry.get("metadata") or {}).get("sample_name")
-            if sample:
-                unreadable.append(str(sample))
             continue
 
     if not frames:
