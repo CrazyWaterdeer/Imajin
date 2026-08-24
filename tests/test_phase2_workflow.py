@@ -1132,3 +1132,100 @@ def test_reopened_bundle_is_really_the_append_target(
     tifs = sorted(p.stem for p in (bundle / "labels" / "cells").iterdir())
     assert tifs == ["rectum_1", "rectum_2"]
     reset_process_bundle()
+
+
+def test_saving_after_each_file_never_clobbers_an_earlier_files_labels(
+    viewer,
+    tmp_path,
+    monkeypatch,
+) -> None:
+    """analyze + save_result_bundle per file, the flow the prompt describes.
+
+    save_result_bundle looked up "where is this labels layer already stored?" by
+    LAYER NAME — the identity this whole series declares unreliable, because
+    every file segments to `Ch2-T1_objects`. The lookup returned the FIRST
+    file's TIFF, so each subsequent save overwrote it while metadata.json still
+    attributed the file to the earlier sample.
+    """
+    import tifffile
+
+    raw = tmp_path / "raw"
+    raw.mkdir()
+    monkeypatch.setenv("IMAJIN_RESULTS_DIR", str(tmp_path / "results"))
+    from imajin.result_bundles import reset_process_bundle
+    from imajin.tools import bundle as bundle_tools
+    from imajin.tools import results as results_tools
+
+    reset_process_bundle()
+    bundle = Path(bundle_tools.start_analysis("session")["bundle_path"])
+
+    def image_with(n_blobs: int) -> np.ndarray:
+        img = np.zeros((256, 256), dtype=np.float32)
+        for y, x in [(80, 90), (150, 140), (40, 200), (200, 40)][:n_blobs]:
+            img[y : y + 15, x : x + 15] = 100.0
+        return img
+
+    expected: dict[str, int] = {}
+    for stem, n_blobs in (("rectum_1", 2), ("rectum_2", 4)):
+        source = raw / f"{stem}.lsm"
+        source.write_bytes(b"stub")
+        viewer.layers.clear()
+        viewer.add_image(image_with(n_blobs), name="Ch2-T1", scale=(0.5, 0.5))
+        viewer.layers["Ch2-T1"].metadata["source_path"] = str(source)
+
+        res = workflows.analyze_target_cells(target="Ch2-T1", rerun=True)
+        assert res["ok"] is True
+        expected[stem] = int(res["n_objects"])
+        saved = results_tools.save_result_bundle(
+            stem, labels_layers=[res["labels_layer"]]
+        )
+        assert [Path(p).name for p in saved["outputs"]["labels"]] == [f"{stem}.tif"]
+
+    assert expected["rectum_1"] != expected["rectum_2"], "test needs distinct data"
+    for stem, n in expected.items():
+        tif = bundle / "labels" / "cells" / f"{stem}.tif"
+        assert int(tifffile.imread(tif).max()) == n, (
+            f"{stem}.tif holds another file's labels"
+        )
+
+
+def test_combined_csv_does_not_double_count_a_saved_table(
+    viewer,
+    tmp_path,
+    monkeypatch,
+) -> None:
+    """save_result_bundle(table_names=...) must not inflate the pooled table.
+
+    combined.csv is rebuilt from the registered table_csv outputs. Counting the
+    agent's own saved copies folded the same measurements in twice — and those
+    rows carry no sample_name, so a group-by silently mis-buckets them.
+    """
+    import pandas as pd
+
+    raw = tmp_path / "raw"
+    raw.mkdir()
+    monkeypatch.setenv("IMAJIN_RESULTS_DIR", str(tmp_path / "results"))
+    from imajin.result_bundles import reset_process_bundle
+    from imajin.tools import bundle as bundle_tools
+    from imajin.tools import results as results_tools
+
+    reset_process_bundle()
+    bundle = Path(bundle_tools.start_analysis("session")["bundle_path"])
+
+    stems = ["rectum_1", "rectum_2"]
+    for stem in stems:
+        source = raw / f"{stem}.lsm"
+        source.write_bytes(b"stub")
+        viewer.layers.clear()
+        viewer.add_image(_blob_image(), name="Ch2-T1", scale=(0.5, 0.5))
+        viewer.layers["Ch2-T1"].metadata["source_path"] = str(source)
+        res = workflows.analyze_target_cells(target="Ch2-T1", rerun=True)
+        # The agent also persists the table, exactly as the prompt instructs.
+        results_tools.save_result_bundle(stem, table_names=[res["table_name"]])
+
+    combined = pd.read_csv(bundle / "tables" / "combined.csv")
+    per_file = [pd.read_csv(bundle / "tables" / f"{s}.csv") for s in stems]
+    assert len(combined) == sum(len(df) for df in per_file)
+    assert combined["sample_name"].notna().all()
+    assert sorted(combined["sample_name"].unique()) == stems
+    reset_process_bundle()

@@ -315,42 +315,72 @@ def test_start_and_finalize_analysis_tools(tmp_path, monkeypatch):
     reset_process_bundle()
 
 
-def test_save_result_bundle_does_not_overwrite_another_layers_output(
+def test_save_result_bundle_reuse_of_one_layer_is_idempotent(
     viewer, tmp_path, monkeypatch
 ):
-    """Two different label layers slugging to one name must both survive.
-
-    Before this guard `tifffile.imwrite` clobbered in place, so a multi-file
-    session sharing one bundle kept only the last file's labels.
-    """
+    """Re-saving the same in-memory layer updates one file, it does not pile up."""
     monkeypatch.setenv("IMAJIN_RESULTS_DIR", str(tmp_path))
     from imajin.result_bundles import reset_process_bundle
     from imajin.tools import results as results_tools
 
     reset_process_bundle()
-    first = np.zeros((8, 8), dtype=np.uint16)
-    first[1:3, 1:3] = 1
-    second = np.zeros((8, 8), dtype=np.uint16)
-    second[4:7, 4:7] = 2
+    labels = np.zeros((8, 8), dtype=np.uint16)
+    labels[1:3, 1:3] = 1
+    viewer.add_labels(labels, name="Ch2-T1_objects")
 
-    viewer.add_labels(first, name="Ch2-T1_objects")
-    res1 = results_tools.save_result_bundle(
-        "file_a", labels_layers=["Ch2-T1_objects"]
-    )
+    res1 = results_tools.save_result_bundle("a", labels_layers=["Ch2-T1_objects"])
     bundle = Path(res1["bundle_path"])
+    results_tools.save_result_bundle("a", labels_layers=["Ch2-T1_objects"])
 
-    # Second file loads under the SAME layer name (napari re-uses it after unload).
-    viewer.layers.clear()
-    viewer.add_labels(second, name="Ch2-T1_objects")
-    # Force a distinct identity the way a real second file would have.
-    res2 = results_tools.save_result_bundle(
-        "file_b", labels_layers=["Ch2-T1_objects"]
-    )
-
-    assert Path(res2["bundle_path"]) == bundle  # appended to the same bundle
     written = sorted(p.name for p in (bundle / "labels" / "cells").iterdir())
-    # Same layer re-saved: idempotent overwrite, not a duplicate.
     assert written == ["Ch2-T1_objects.tif"]
+    reset_process_bundle()
+
+
+def test_save_result_bundle_keeps_each_source_files_labels(
+    viewer, tmp_path, monkeypatch
+):
+    """Two FILES segmenting to the same layer name must both keep their labels.
+
+    Every file in a folder loads as `Ch2-T1` and segments to `Ch2-T1_objects`,
+    so keying the destination on the layer name sends the second file's save
+    straight onto the first file's TIFF. Identity has to come from the file.
+    """
+    import tifffile
+
+    raw = tmp_path / "raw"
+    raw.mkdir()
+    monkeypatch.setenv("IMAJIN_RESULTS_DIR", str(tmp_path / "results"))
+    from imajin.result_bundles import reset_process_bundle
+    from imajin.tools import bundle as bundle_tools
+    from imajin.tools import results as results_tools
+
+    reset_process_bundle()
+    bundle = Path(bundle_tools.start_analysis("session")["bundle_path"])
+
+    written_max = {}
+    for stem, n_objects in (("rectum_1", 1), ("rectum_2", 2)):
+        source = raw / f"{stem}.lsm"
+        source.write_bytes(b"stub")
+        labels = np.zeros((8, 8), dtype=np.uint16)
+        for i in range(n_objects):
+            labels[i * 3 : i * 3 + 2, 1:3] = i + 1
+
+        viewer.layers.clear()
+        # Both files load under the SAME names, as a real instrument emits.
+        viewer.add_image(np.zeros((8, 8), dtype=np.uint16), name="Ch2-T1")
+        viewer.layers["Ch2-T1"].metadata["source_path"] = str(source)
+        viewer.add_labels(labels, name="Ch2-T1_objects")
+        viewer.layers["Ch2-T1_objects"].metadata["source_layer"] = "Ch2-T1"
+
+        results_tools.save_result_bundle(stem, labels_layers=["Ch2-T1_objects"])
+        written_max[stem] = n_objects
+
+    files = sorted(p.name for p in (bundle / "labels" / "cells").iterdir())
+    assert files == ["rectum_1.tif", "rectum_2.tif"]
+    for stem, expected in written_max.items():
+        actual = int(tifffile.imread(bundle / "labels" / "cells" / f"{stem}.tif").max())
+        assert actual == expected, f"{stem}.tif holds another file's labels"
     reset_process_bundle()
 
 

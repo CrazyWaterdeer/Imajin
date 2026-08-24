@@ -146,6 +146,27 @@ def _source_paths_for_layers(layer_names: list[str] | None) -> list[str]:
     return list(dict.fromkeys(paths))
 
 
+def _sample_slug_for_layer(layer_name: str) -> str | None:
+    """Per-file identity for a layer, derived from the file behind it.
+
+    Mirrors the rule the analysis path uses (see
+    ``imajin.tools._workflow_outputs._sample_identity``) so both writers agree
+    on one name per source file. Returns ``None`` for an in-memory layer with no
+    file behind it, and the caller falls back to the layer name.
+    """
+    from imajin.analysis.resume import rel_key
+    from imajin.anchor import resolve_session_anchor
+
+    sources = _source_paths_for_layers([layer_name])
+    if not sources:
+        return None
+    source = sources[0]
+    anchor = resolve_session_anchor(extra_paths=[source])
+    key = rel_key(source, anchor) if anchor is not None else str(source)
+    stem = Path(key).stem
+    return slugify_result_name(stem) if stem else None
+
+
 def _anchor_for_layers(layer_names: list[str] | None) -> Path | None:
     from imajin.anchor import resolve_anchor_folder, resolve_session_anchor
 
@@ -244,17 +265,22 @@ def save_result_bundle(
             layer = call_on_main(snapshot_layer, labels_layer)
             data = _materialize(layer.data)
             labels = data.astype(_label_output_dtype(data), copy=False)
-            # If the analysis already wrote this layer into the bundle (under
-            # its per-file name), update that file instead of laying down a
-            # second full-resolution copy under the layer-derived name.
-            out = _registered_path_for(
-                bundle, "labels_tiff", "labels_layer", labels_layer
+            # Identity comes from the SOURCE FILE, exactly as the analysis path
+            # derives it. Keying on the layer name here would be the original
+            # bug in miniature: every file segments to `Ch2-T1_objects`, so the
+            # lookup would return the FIRST file's TIFF and each subsequent save
+            # would overwrite it.
+            slug = _sample_slug_for_layer(labels_layer)
+            out = (
+                _registered_path_for(bundle, "labels_tiff", "sample_slug", slug)
+                if slug
+                else None
             ) or _non_clobbering_path(
                 bundle,
                 "labels/cells",
-                f"{slugify_result_name(labels_layer)}.tif",
-                identity_key="labels_layer",
-                identity_value=labels_layer,
+                f"{slugify_result_name(slug or labels_layer)}.tif",
+                identity_key="sample_slug" if slug else "labels_layer",
+                identity_value=slug or labels_layer,
             )
             out.parent.mkdir(parents=True, exist_ok=True)
             _write_label_tiff(out, labels)
@@ -264,6 +290,7 @@ def save_result_bundle(
                 out,
                 {
                     "labels_layer": labels_layer,
+                    "sample_slug": slug,
                     "shape": tuple(int(s) for s in labels.shape),
                     "dtype": str(labels.dtype),
                 },

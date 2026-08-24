@@ -548,6 +548,15 @@ def write_combined_csv(bundle: Path, table_names: list[str]) -> Path:
     for entry in seed.get("outputs") or []:
         if not isinstance(entry, dict) or entry.get("kind") != "table_csv":
             continue
+        # ONLY the per-sample tables this module writes, identified by the
+        # sample_name write_sample_tables records. save_result_bundle also
+        # registers table_csv outputs — including a second copy of the very
+        # measurements already written here, and the pooled table that contains
+        # every row — so concatenating all of them double-counts samples and
+        # contributes rows with no sample_name.
+        metadata = entry.get("metadata")
+        if not isinstance(metadata, dict) or not metadata.get("sample_name"):
+            continue
         rel = str(entry.get("path") or "")
         if not rel or rel in seen or rel.endswith("combined.csv"):
             continue
