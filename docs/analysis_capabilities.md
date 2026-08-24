@@ -123,7 +123,7 @@ A CSV combined outside the app comes back in via `import_table` and continues id
 `measure_intensity_over_time(ROI, movie)` → `normalize_timecourse` / `extract_timecourse_features` → `plot_timecourse`. For calcium, `assess_calcium_timecourse` → `plot_dff_heatmap`.
 
 **⑤ Sequential multi-file (collected into one folder)**
-Call `start_analysis(<name>)` once → analyze per file → each `save_result_bundle` appends to that folder (do not call `finalize_analysis` between files) → `finalize_analysis` at the end.
+Call `start_analysis(<name>)` once → analyze per file (`analyze_target_cells` appends to the open bundle, as do `save_result_bundle`, figures, stats and QC) → `finalize_analysis` at the end; do not call it between files. Each file's measurements land in `tables/<file>.csv` and `tables/combined.csv` is rebuilt across all of them, so the folder stands alone as a result set. Without `start_analysis` each file gets its own folder.
 
 ---
 *This document is based on the tools actually registered in the code (110). Update it whenever new tools/options are added.*

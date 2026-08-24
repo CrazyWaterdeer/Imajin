@@ -743,9 +743,13 @@ def test_analyze_target_cells_writes_into_active_parent_bundle(
     assert res["ok"] is True
     assert res["result_bundle_path"] is None
     assert (parent / "labels" / "cells" / "reporter.tif").exists()
+    # Registering the child's outputs normalises the parent's v1 seed to
+    # schema_v3, so status now lives under run_context.
     meta = json.loads((parent / "metadata.json").read_text())
-    assert meta["status"] == "in_progress"
-    assert "samples" not in meta
+    run_context = meta.get("run_context") or meta
+    assert run_context["status"] == "in_progress"
+    # The batch runner owns the parent's sample records; the child writes none.
+    assert not run_context.get("samples")
 
 
 def test_analyze_target_cells_returns_primary_table_name_single_tier(viewer) -> None:
@@ -773,3 +777,614 @@ def test_analyze_target_cells_returns_primary_table_name_two_tier(viewer) -> Non
         cell_diameter_um=10.0,
     )
     assert res["primary_table_name"] == res["tier_table_name"]
+
+
+def _blob_image() -> np.ndarray:
+    img = np.zeros((256, 256), dtype=np.float32)
+    img[80:95, 90:105] = 100.0
+    img[150:168, 140:158] = 80.0
+    return img
+
+
+def test_per_file_identity_comes_from_the_source_file_not_the_layer(
+    viewer,
+    tmp_path,
+    monkeypatch,
+) -> None:
+    """Two files sharing a channel name must not share a bundle identity.
+
+    Channel names come from instrument metadata (Ch2-T1) and repeat for every
+    file in a folder. Deriving identity from the layer made all of a session's
+    files collide on one slug, which silently overwrote label TIFFs once they
+    shared a bundle.
+    """
+    raw = tmp_path / "raw"
+    raw.mkdir()
+    monkeypatch.setenv("IMAJIN_RESULTS_DIR", str(tmp_path / "results"))
+    source = raw / "rectum_1.lsm"
+    source.write_bytes(b"stub")
+
+    viewer.add_image(_blob_image(), name="Ch2-T1", scale=(0.5, 0.5))
+    viewer.layers["Ch2-T1"].metadata["source_path"] = str(source)
+
+    res = workflows.analyze_target_cells(target="Ch2-T1")
+
+    assert res["ok"] is True
+    bundle = Path(res["result_bundle_path"])
+    # Folder and per-sample outputs are named for the FILE, not the channel.
+    assert bundle.name.endswith("_rectum_1__single")
+    assert res["result_files"]["labels_cells"] == "labels/cells/rectum_1.tif"
+    assert (bundle / "labels" / "cells" / "rectum_1.tif").exists()
+
+    meta = json.loads((bundle / "metadata.json").read_text())
+    sample = meta["run_context"]["samples"][0]
+    assert sample["sample_name"] == "rectum_1"
+    assert sample["source_file"] == str(source)
+    assert sample["source_layer"] == "Ch2-T1"
+
+
+def test_layer_without_source_file_still_uses_the_layer_name(
+    viewer,
+    tmp_path,
+    monkeypatch,
+) -> None:
+    """In-memory layers have no file behind them; identity falls back cleanly."""
+    monkeypatch.setenv("IMAJIN_RESULTS_DIR", str(tmp_path / "results"))
+    viewer.add_image(_blob_image(), name="synthetic", scale=(0.5, 0.5))
+
+    res = workflows.analyze_target_cells(target="synthetic")
+
+    assert res["ok"] is True
+    assert res["result_files"]["labels_cells"] == "labels/cells/synthetic.tif"
+    meta = json.loads((Path(res["result_bundle_path"]) / "metadata.json").read_text())
+    assert meta["run_context"]["samples"][0]["sample_name"] == "synthetic"
+
+
+def test_sequential_per_file_analyses_collect_in_one_session_bundle(
+    viewer,
+    tmp_path,
+    monkeypatch,
+) -> None:
+    """The reported bug, end to end.
+
+    A hand-drawn-ROI session steps through files one at a time: start_analysis
+    once, then analyze_target_cells per file. Every file's outputs must land in
+    that ONE folder. Before this, analyze_target_cells minted a folder per file
+    and evicted the session bundle from the process slot, so seven files
+    produced seven folders and orphaned the bundle the agent had opened.
+    """
+    raw = tmp_path / "raw"
+    raw.mkdir()
+    results_root = tmp_path / "results"
+    monkeypatch.setenv("IMAJIN_RESULTS_DIR", str(results_root))
+
+    from imajin.result_bundles import reset_process_bundle
+    from imajin.tools import bundle as bundle_tools
+
+    reset_process_bundle()
+    opened = bundle_tools.start_analysis("hindgut_rectum_roi")
+    session_bundle = Path(opened["bundle_path"])
+
+    stems = ["rectum_1", "rectum_2", "rectum_3"]
+    for stem in stems:
+        source = raw / f"{stem}.lsm"
+        source.write_bytes(b"stub")
+        viewer.layers.clear()
+        # Every file loads under the SAME channel name, as real instruments emit.
+        viewer.add_image(_blob_image(), name="Ch2-T1", scale=(0.5, 0.5))
+        viewer.layers["Ch2-T1"].metadata["source_path"] = str(source)
+
+        res = workflows.analyze_target_cells(target="Ch2-T1", rerun=True)
+        assert res["ok"] is True
+        assert Path(res["result_bundle_path"]) == session_bundle, (
+            f"{stem} opened its own bundle instead of appending"
+        )
+
+    # Exactly one bundle folder exists — no per-file folders, no orphan.
+    bundles = sorted(p.name for p in results_root.iterdir() if p.is_dir())
+    assert bundles == [session_bundle.name]
+
+    # Each file kept its own label TIFF; none overwrote another.
+    written = sorted(p.stem for p in (session_bundle / "labels" / "cells").iterdir())
+    assert written == stems
+
+    meta = json.loads((session_bundle / "metadata.json").read_text())
+    run_context = meta["run_context"]
+    # Still open for more files — never finalized mid-session.
+    assert run_context["status"] == "in_progress"
+    assert [s["sample_name"] for s in run_context["samples"]] == stems
+    assert [Path(s["source_file"]).name for s in run_context["samples"]] == [
+        f"{stem}.lsm" for stem in stems
+    ]
+    reset_process_bundle()
+
+
+def test_analysis_does_not_adopt_a_stray_adhoc_bundle(
+    viewer,
+    tmp_path,
+    monkeypatch,
+) -> None:
+    """An ad-hoc bundle minted by a stray output must not swallow the analysis.
+
+    This is the property commit 53b26a0 was protecting when it switched to the
+    contextvar; the provenance check has to preserve it.
+    """
+    monkeypatch.setenv("IMAJIN_RESULTS_DIR", str(tmp_path / "results"))
+    from imajin.result_bundles import (
+        bundle_output_path,
+        ensure_active_bundle,
+        register_output,
+        reset_process_bundle,
+    )
+
+    reset_process_bundle()
+    adhoc = ensure_active_bundle()  # what a stray QC write would create
+    stray = bundle_output_path("qc", "stray.png")
+    stray.write_bytes(b"\x89PNG\r\n")
+    register_output("qc_png", stray, {})
+
+    viewer.add_image(_blob_image(), name="green_target", scale=(0.5, 0.5))
+    res = workflows.analyze_target_cells(target="green_target")
+
+    assert res["ok"] is True
+    assert Path(res["result_bundle_path"]) != adhoc
+    reset_process_bundle()
+
+
+def test_analysis_does_not_append_to_a_finalized_bundle(
+    viewer,
+    tmp_path,
+    monkeypatch,
+) -> None:
+    """A closed folder must not keep accepting new files' outputs."""
+    monkeypatch.setenv("IMAJIN_RESULTS_DIR", str(tmp_path / "results"))
+    from imajin.result_bundles import reset_process_bundle
+    from imajin.tools import bundle as bundle_tools
+
+    reset_process_bundle()
+    opened = bundle_tools.start_analysis("closed_session")
+    closed = Path(opened["bundle_path"])
+    bundle_tools.finalize_analysis()
+
+    viewer.add_image(_blob_image(), name="green_target", scale=(0.5, 0.5))
+    res = workflows.analyze_target_cells(target="green_target")
+
+    assert res["ok"] is True
+    assert Path(res["result_bundle_path"]) != closed
+    reset_process_bundle()
+
+
+def test_qc_png_never_lands_in_a_previous_files_bundle(
+    viewer,
+    tmp_path,
+    monkeypatch,
+) -> None:
+    """One file's outputs must not straddle two bundles.
+
+    The QC PNG used to resolve through ensure_active_bundle() during
+    segmentation — minutes before the analysis chose its bundle — so it landed
+    in the PREVIOUS file's already-finalized folder. In the reported session
+    every file's only informatively-named QC image was filed under the wrong
+    sample.
+    """
+    raw = tmp_path / "raw"
+    raw.mkdir()
+    results_root = tmp_path / "results"
+    monkeypatch.setenv("IMAJIN_RESULTS_DIR", str(results_root))
+
+    from imajin.result_bundles import reset_process_bundle
+
+    reset_process_bundle()
+    seen: list[Path] = []
+    for stem in ["rectum_1", "rectum_2"]:
+        source = raw / f"{stem}.lsm"
+        source.write_bytes(b"stub")
+        viewer.layers.clear()
+        viewer.add_image(_blob_image(), name="Ch2-T1", scale=(0.5, 0.5))
+        viewer.layers["Ch2-T1"].metadata["source_path"] = str(source)
+
+        res = workflows.analyze_target_cells(target="Ch2-T1", rerun=True)
+        assert res["ok"] is True
+        seen.append(Path(res["result_bundle_path"]))
+
+    assert seen[0] != seen[1]  # standalone runs still get their own folders
+    for bundle, stem in zip(seen, ["rectum_1", "rectum_2"], strict=True):
+        pngs = sorted(p.name for p in (bundle / "qc").iterdir())
+        # Every QC image in this folder belongs to THIS file.
+        assert pngs, f"{stem} bundle has no QC image"
+        for name in pngs:
+            assert stem in name, f"{name} in {bundle.name} belongs to another file"
+    reset_process_bundle()
+
+
+def test_session_bundle_accumulates_tables_and_a_pooled_combined_csv(
+    viewer,
+    tmp_path,
+    monkeypatch,
+) -> None:
+    """A session bundle must be a complete result set on its own.
+
+    The per-file measurements previously reached disk only if the agent
+    separately called save_result_bundle with the table name, so the pooled
+    table a session was actually analysing could be computed, plotted and then
+    lost with the process — the one artifact that cannot be regenerated without
+    redoing every ROI.
+    """
+    import pandas as pd
+
+    raw = tmp_path / "raw"
+    raw.mkdir()
+    results_root = tmp_path / "results"
+    monkeypatch.setenv("IMAJIN_RESULTS_DIR", str(results_root))
+
+    from imajin.result_bundles import reset_process_bundle
+    from imajin.tools import bundle as bundle_tools
+
+    reset_process_bundle()
+    session_bundle = Path(bundle_tools.start_analysis("pooled")["bundle_path"])
+
+    stems = ["rectum_1", "rectum_2"]
+    for stem in stems:
+        source = raw / f"{stem}.lsm"
+        source.write_bytes(b"stub")
+        viewer.layers.clear()
+        viewer.add_image(_blob_image(), name="Ch2-T1", scale=(0.5, 0.5))
+        viewer.layers["Ch2-T1"].metadata["source_path"] = str(source)
+        assert workflows.analyze_target_cells(target="Ch2-T1", rerun=True)["ok"]
+
+    tables = sorted(p.name for p in (session_bundle / "tables").iterdir())
+    assert tables == ["combined.csv", "rectum_1.csv", "rectum_2.csv"]
+
+    combined = pd.read_csv(session_bundle / "tables" / "combined.csv")
+    assert sorted(combined["sample_name"].unique()) == stems
+    per_file = [
+        pd.read_csv(session_bundle / "tables" / f"{stem}.csv") for stem in stems
+    ]
+    assert len(combined) == sum(len(df) for df in per_file)
+
+    # The durable index knows both files, so the session can be resumed.
+    from imajin.result_bundles import read_sample_index
+
+    index = read_sample_index(session_bundle)
+    assert sorted(e["key"] for e in index["entries"]) == [f"{s}.lsm" for s in stems]
+    assert not index.get("legacy_inferred")
+    reset_process_bundle()
+
+
+def test_labels_are_written_once_per_sample(viewer, tmp_path, monkeypatch) -> None:
+    """One writer per artifact.
+
+    populate_sample_outputs wrote labels/cells/<sample>.tif and registered
+    nothing, then save_result_bundle wrote the same volume again under the
+    layer-derived name — every bundle carried two full-resolution copies of the
+    identical array.
+    """
+    raw = tmp_path / "raw"
+    raw.mkdir()
+    monkeypatch.setenv("IMAJIN_RESULTS_DIR", str(tmp_path / "results"))
+    from imajin.result_bundles import reset_process_bundle
+    from imajin.tools import results as results_tools
+
+    reset_process_bundle()
+    source = raw / "rectum_1.lsm"
+    source.write_bytes(b"stub")
+    viewer.add_image(_blob_image(), name="Ch2-T1", scale=(0.5, 0.5))
+    viewer.layers["Ch2-T1"].metadata["source_path"] = str(source)
+
+    res = workflows.analyze_target_cells(target="Ch2-T1")
+    assert res["ok"] is True
+    bundle = Path(res["result_bundle_path"])
+
+    # The agent then saves the same labels layer, as the prompt tells it to.
+    results_tools.save_result_bundle(
+        "rectum_1", labels_layers=[res["labels_layer"]]
+    )
+
+    tifs = sorted(p.name for p in (bundle / "labels" / "cells").iterdir())
+    assert tifs == ["rectum_1.tif"]
+
+    meta = json.loads((bundle / "metadata.json").read_text())
+    label_entries = [o for o in meta["outputs"] if o["kind"] == "labels_tiff"]
+    assert len(label_entries) == 1
+    assert label_entries[0]["path"] == "labels/cells/rectum_1.tif"
+    reset_process_bundle()
+
+
+def test_reopened_bundle_is_really_the_append_target(
+    viewer,
+    tmp_path,
+    monkeypatch,
+) -> None:
+    """open_result_bundle promises the bundle is the append target — hold it to it.
+
+    A finalized bundle is deliberately not reusable, so promoting one without
+    re-opening it left every resumed file minting its own folder while the tool
+    reported that outputs would land in the bundle.
+    """
+    raw = tmp_path / "raw"
+    raw.mkdir()
+    monkeypatch.setenv("IMAJIN_RESULTS_DIR", str(tmp_path / "results"))
+    from imajin.result_bundles import reset_process_bundle
+    from imajin.tools import bundle_resume
+
+    reset_process_bundle()
+    first = raw / "rectum_1.lsm"
+    first.write_bytes(b"stub")
+    viewer.add_image(_blob_image(), name="Ch2-T1", scale=(0.5, 0.5))
+    viewer.layers["Ch2-T1"].metadata["source_path"] = str(first)
+    res = workflows.analyze_target_cells(target="Ch2-T1")
+    bundle = Path(res["result_bundle_path"])
+    assert res["bundle_created"] is True
+
+    # New session: reopen that bundle and analyse the next file.
+    reset_process_bundle()
+    bundle_resume.open_result_bundle(str(bundle))
+
+    second = raw / "rectum_2.lsm"
+    second.write_bytes(b"stub")
+    viewer.layers.clear()
+    viewer.add_image(_blob_image(), name="Ch2-T1", scale=(0.5, 0.5))
+    viewer.layers["Ch2-T1"].metadata["source_path"] = str(second)
+    res2 = workflows.analyze_target_cells(target="Ch2-T1", rerun=True)
+
+    assert Path(res2["result_bundle_path"]) == bundle
+    assert res2["bundle_created"] is False
+    tifs = sorted(p.stem for p in (bundle / "labels" / "cells").iterdir())
+    assert tifs == ["rectum_1", "rectum_2"]
+    reset_process_bundle()
+
+
+def test_saving_after_each_file_never_clobbers_an_earlier_files_labels(
+    viewer,
+    tmp_path,
+    monkeypatch,
+) -> None:
+    """analyze + save_result_bundle per file, the flow the prompt describes.
+
+    save_result_bundle looked up "where is this labels layer already stored?" by
+    LAYER NAME — the identity this whole series declares unreliable, because
+    every file segments to `Ch2-T1_objects`. The lookup returned the FIRST
+    file's TIFF, so each subsequent save overwrote it while metadata.json still
+    attributed the file to the earlier sample.
+    """
+    import tifffile
+
+    raw = tmp_path / "raw"
+    raw.mkdir()
+    monkeypatch.setenv("IMAJIN_RESULTS_DIR", str(tmp_path / "results"))
+    from imajin.result_bundles import reset_process_bundle
+    from imajin.tools import bundle as bundle_tools
+    from imajin.tools import results as results_tools
+
+    reset_process_bundle()
+    bundle = Path(bundle_tools.start_analysis("session")["bundle_path"])
+
+    def image_with(n_blobs: int) -> np.ndarray:
+        img = np.zeros((256, 256), dtype=np.float32)
+        for y, x in [(80, 90), (150, 140), (40, 200), (200, 40)][:n_blobs]:
+            img[y : y + 15, x : x + 15] = 100.0
+        return img
+
+    expected: dict[str, int] = {}
+    for stem, n_blobs in (("rectum_1", 2), ("rectum_2", 4)):
+        source = raw / f"{stem}.lsm"
+        source.write_bytes(b"stub")
+        viewer.layers.clear()
+        viewer.add_image(image_with(n_blobs), name="Ch2-T1", scale=(0.5, 0.5))
+        viewer.layers["Ch2-T1"].metadata["source_path"] = str(source)
+
+        res = workflows.analyze_target_cells(target="Ch2-T1", rerun=True)
+        assert res["ok"] is True
+        expected[stem] = int(res["n_objects"])
+        saved = results_tools.save_result_bundle(
+            stem, labels_layers=[res["labels_layer"]]
+        )
+        assert [Path(p).name for p in saved["outputs"]["labels"]] == [f"{stem}.tif"]
+
+    assert expected["rectum_1"] != expected["rectum_2"], "test needs distinct data"
+    for stem, n in expected.items():
+        tif = bundle / "labels" / "cells" / f"{stem}.tif"
+        assert int(tifffile.imread(tif).max()) == n, (
+            f"{stem}.tif holds another file's labels"
+        )
+
+
+def test_combined_csv_does_not_double_count_a_saved_table(
+    viewer,
+    tmp_path,
+    monkeypatch,
+) -> None:
+    """save_result_bundle(table_names=...) must not inflate the pooled table.
+
+    combined.csv is rebuilt from the registered table_csv outputs. Counting the
+    agent's own saved copies folded the same measurements in twice — and those
+    rows carry no sample_name, so a group-by silently mis-buckets them.
+    """
+    import pandas as pd
+
+    raw = tmp_path / "raw"
+    raw.mkdir()
+    monkeypatch.setenv("IMAJIN_RESULTS_DIR", str(tmp_path / "results"))
+    from imajin.result_bundles import reset_process_bundle
+    from imajin.tools import bundle as bundle_tools
+    from imajin.tools import results as results_tools
+
+    reset_process_bundle()
+    bundle = Path(bundle_tools.start_analysis("session")["bundle_path"])
+
+    stems = ["rectum_1", "rectum_2"]
+    for stem in stems:
+        source = raw / f"{stem}.lsm"
+        source.write_bytes(b"stub")
+        viewer.layers.clear()
+        viewer.add_image(_blob_image(), name="Ch2-T1", scale=(0.5, 0.5))
+        viewer.layers["Ch2-T1"].metadata["source_path"] = str(source)
+        res = workflows.analyze_target_cells(target="Ch2-T1", rerun=True)
+        # The agent also persists the table, exactly as the prompt instructs.
+        results_tools.save_result_bundle(stem, table_names=[res["table_name"]])
+
+    combined = pd.read_csv(bundle / "tables" / "combined.csv")
+    per_file = [pd.read_csv(bundle / "tables" / f"{s}.csv") for s in stems]
+    assert len(combined) == sum(len(df) for df in per_file)
+    assert combined["sample_name"].notna().all()
+    assert sorted(combined["sample_name"].unique()) == stems
+    reset_process_bundle()
+
+
+def test_a_failed_analysis_does_not_capture_the_next_file(
+    viewer,
+    tmp_path,
+    monkeypatch,
+) -> None:
+    """A per-file folder is not a session, even while it is still open.
+
+    Pinning the destination before segmentation means a file whose analysis
+    fails still mints a folder and leaves it in the process slot. The next file
+    must not quietly write into the failed file's folder.
+    """
+    raw = tmp_path / "raw"
+    raw.mkdir()
+    results_root = tmp_path / "results"
+    monkeypatch.setenv("IMAJIN_RESULTS_DIR", str(results_root))
+    from imajin.result_bundles import reset_process_bundle
+
+    reset_process_bundle()
+    blank_source = raw / "blank.lsm"
+    blank_source.write_bytes(b"stub")
+    viewer.add_image(np.zeros((256, 256), dtype=np.float32), name="Ch2-T1")
+    viewer.layers["Ch2-T1"].metadata["source_path"] = str(blank_source)
+    # A constant image gives segmentation nothing to threshold.
+    try:
+        workflows.analyze_target_cells(target="Ch2-T1", rerun=True)
+    except Exception:
+        pass
+
+    good_source = raw / "real.lsm"
+    good_source.write_bytes(b"stub")
+    viewer.layers.clear()
+    viewer.add_image(_blob_image(), name="Ch2-T1", scale=(0.5, 0.5))
+    viewer.layers["Ch2-T1"].metadata["source_path"] = str(good_source)
+    res = workflows.analyze_target_cells(target="Ch2-T1", rerun=True)
+
+    assert res["ok"] is True
+    assert res["bundle_created"] is True, "adopted the failed file's folder"
+    assert "real" in Path(res["result_bundle_path"]).name
+    reset_process_bundle()
+
+
+def test_same_stem_in_two_folders_stays_two_samples(
+    viewer,
+    tmp_path,
+    monkeypatch,
+) -> None:
+    """condition-per-subfolder (raw/a/x.lsm, raw/b/x.lsm) must not merge.
+
+    run_context.samples and combined.csv are both keyed by sample_name, so
+    disambiguating only the filename on disk left two different files sharing
+    one record and one label in the pooled table.
+    """
+    import pandas as pd
+
+    monkeypatch.setenv("IMAJIN_RESULTS_DIR", str(tmp_path / "results"))
+    from imajin.result_bundles import reset_process_bundle
+    from imajin.tools import bundle as bundle_tools
+
+    reset_process_bundle()
+    bundle = Path(bundle_tools.start_analysis("session")["bundle_path"])
+
+    for condition in ("a", "b"):
+        folder = tmp_path / "raw" / condition
+        folder.mkdir(parents=True)
+        source = folder / "rectum_1.lsm"
+        source.write_bytes(b"stub")
+        viewer.layers.clear()
+        viewer.add_image(_blob_image(), name="Ch2-T1", scale=(0.5, 0.5))
+        viewer.layers["Ch2-T1"].metadata["source_path"] = str(source)
+        assert workflows.analyze_target_cells(target="Ch2-T1", rerun=True)["ok"]
+
+    meta = json.loads((bundle / "metadata.json").read_text())
+    samples = meta["run_context"]["samples"]
+    assert meta["run_context"]["n_samples"] == 2, "the two files merged"
+    assert len({s["sample_name"] for s in samples}) == 2
+    assert len({s["source_file"] for s in samples}) == 2
+
+    combined = pd.read_csv(bundle / "tables" / "combined.csv")
+    assert combined["sample_name"].nunique() == 2
+    reset_process_bundle()
+
+
+def test_reopening_an_adhoc_bundle_makes_it_a_real_append_target(
+    viewer,
+    tmp_path,
+    monkeypatch,
+) -> None:
+    """open_result_bundle promises an append target even for an ad-hoc folder.
+
+    The reuse guard rejects kind == "adhoc" as well as a closed status, so
+    flipping only the status left the promise false: the analysis minted its own
+    folder and evicted the bundle the resume scope still pointed at.
+    """
+    raw = tmp_path / "raw"
+    raw.mkdir()
+    monkeypatch.setenv("IMAJIN_RESULTS_DIR", str(tmp_path / "results"))
+    from imajin.result_bundles import ensure_active_bundle, reset_process_bundle
+    from imajin.tools import bundle_resume
+
+    reset_process_bundle()
+    adhoc = ensure_active_bundle()
+    assert adhoc.name.endswith("_adhoc")
+    reset_process_bundle()
+
+    bundle_resume.open_result_bundle(str(adhoc))
+
+    source = raw / "rectum_1.lsm"
+    source.write_bytes(b"stub")
+    viewer.add_image(_blob_image(), name="Ch2-T1", scale=(0.5, 0.5))
+    viewer.layers["Ch2-T1"].metadata["source_path"] = str(source)
+    res = workflows.analyze_target_cells(target="Ch2-T1", rerun=True)
+
+    assert res["ok"] is True
+    assert Path(res["result_bundle_path"]) == adhoc
+    assert res["bundle_created"] is False
+    reset_process_bundle()
+
+
+def test_session_bundle_lands_next_to_the_data_in_documented_order(
+    viewer,
+    tmp_path,
+    monkeypatch,
+) -> None:
+    """register_files -> start_analysis puts the folder beside the .lsm files.
+
+    start_analysis derives its location from the registered files, so calling it
+    before them lands the session bundle in the default results folder while the
+    data sits elsewhere — which is how the reported session ended up with its
+    bundle on C: and its images on D:.
+    """
+    data = tmp_path / "260818"
+    data.mkdir()
+    monkeypatch.setenv("IMAJIN_RESULTS_DIR", str(tmp_path / "fallback"))
+    from imajin import session as state
+    from imajin.result_bundles import reset_process_bundle
+    from imajin.tools import bundle as bundle_tools
+
+    reset_process_bundle()
+    stems = ["rectum_1", "rectum_2"]
+    for stem in stems:
+        source = data / f"{stem}.lsm"
+        source.write_bytes(b"stub")
+        state.put_file(str(source), f"{stem}.lsm")
+
+    session_bundle = Path(bundle_tools.start_analysis("260818_roi")["bundle_path"])
+    assert session_bundle.parent == data.resolve()
+
+    for stem in stems:
+        viewer.layers.clear()
+        viewer.add_image(_blob_image(), name="Ch2-T1", scale=(0.5, 0.5))
+        viewer.layers["Ch2-T1"].metadata["source_path"] = str(data / f"{stem}.lsm")
+        assert workflows.analyze_target_cells(target="Ch2-T1", rerun=True)["ok"]
+
+    folders = sorted(p.name for p in data.iterdir() if p.is_dir())
+    assert folders == [session_bundle.name]
+    assert not (tmp_path / "fallback").exists()
+    reset_process_bundle()

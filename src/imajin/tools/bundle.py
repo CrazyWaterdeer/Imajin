@@ -36,8 +36,8 @@ def start_analysis(
     description=(
         "Finalize the currently active analysis bundle. Writes the final "
         "metadata.json status and clears the process slot so the next analysis "
-        "starts fresh. Safe to call even if no bundle has been opened (it will "
-        "lazily create one)."
+        "starts fresh. Safe to call even if no bundle has been opened — it is "
+        "then a no-op rather than creating an empty one."
     ),
     phase="0",
 )
@@ -45,6 +45,12 @@ def finalize_analysis(
     status: str = "complete",
 ) -> dict[str, Any]:
     bundle = _finalize_analysis(status=status)
+    if bundle is None:
+        return {
+            "bundle_path": None,
+            "status": status,
+            "message": "no analysis bundle was open; nothing to finalize",
+        }
     return {
         "bundle_path": str(bundle),
         "status": status,

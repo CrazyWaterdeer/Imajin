@@ -44,6 +44,84 @@ def _resolve_output_path(
     return bundle_output_path(category, filename)
 
 
+def _registered_identity(bundle: Path, rel_path: str, key: str) -> str | None:
+    """The identity value recorded for an existing output at ``rel_path``."""
+    try:
+        recorded = _bundle_io.read_bundle_metadata(bundle)
+    except Exception:  # noqa: BLE001 - a bad read must not block writing
+        return None
+    for entry in recorded.get("outputs") or []:
+        if not isinstance(entry, dict) or entry.get("path") != rel_path:
+            continue
+        metadata = entry.get("metadata")
+        if isinstance(metadata, dict) and metadata.get(key) is not None:
+            return str(metadata[key])
+    return None
+
+
+def _registered_path_for(
+    bundle: Path,
+    kind: str,
+    key: str,
+    value: str,
+) -> Path | None:
+    """Where this bundle already keeps the ``kind`` output for ``key == value``.
+
+    Matching on ``kind`` is load-bearing, not defensive: a segmentation QC PNG
+    records the same ``labels_layer`` as the label TIFF it illustrates, so a
+    key-only lookup finds the PNG and the caller writes a TIFF over it.
+    """
+    try:
+        recorded = _bundle_io.read_bundle_metadata(bundle)
+    except Exception:  # noqa: BLE001 - a bad read just means "not registered"
+        return None
+    for entry in recorded.get("outputs") or []:
+        if not isinstance(entry, dict) or entry.get("kind") != kind:
+            continue
+        metadata = entry.get("metadata")
+        if not isinstance(metadata, dict) or str(metadata.get(key)) != value:
+            continue
+        rel = entry.get("path")
+        if rel:
+            return bundle / str(rel)
+    return None
+
+
+def _non_clobbering_path(
+    bundle: Path,
+    category: str,
+    filename: str,
+    *,
+    identity_key: str,
+    identity_value: str,
+) -> Path:
+    """Resolve <bundle>/<category>/<filename>, never overwriting another file's output.
+
+    Re-saving the SAME source (same labels layer, same QC image) overwrites in
+    place so a repeated save stays idempotent. Anything else landing on a taken
+    name gets `_2`, `_3`, ... instead of silently replacing it — which is what
+    happened when several files shared a bundle under one layer-derived name and
+    six of seven label TIFFs were lost.
+
+    An existing file that this bundle's index does not attribute to anyone is
+    treated as somebody else's, not as free space: a pre-existing bundle written
+    by an older version registers nothing, and overwriting it would be the same
+    data loss by another route.
+    """
+    stem = Path(filename).stem
+    suffix = Path(filename).suffix
+    candidate = bundle / category / filename
+    index = 1
+    while candidate.exists():
+        rel = candidate.relative_to(bundle).as_posix()
+        if _registered_identity(bundle, rel, identity_key) == identity_value:
+            break  # our own earlier output — overwrite in place
+        index += 1
+        candidate = bundle / category / f"{stem}_{index}{suffix}"
+    candidate.parent.mkdir(parents=True, exist_ok=True)
+    return candidate
+
+
 def _source_paths_for_layers(layer_names: list[str] | None) -> list[str]:
     paths: list[str] = []
     for layer_name in layer_names or []:
@@ -72,6 +150,27 @@ def _source_paths_for_layers(layer_names: list[str] | None) -> list[str]:
     return list(dict.fromkeys(paths))
 
 
+def _sample_slug_for_layer(layer_name: str) -> str | None:
+    """Per-file identity for a layer, derived from the file behind it.
+
+    Mirrors the rule the analysis path uses (see
+    ``imajin.tools._workflow_outputs._sample_identity``) so both writers agree
+    on one name per source file. Returns ``None`` for an in-memory layer with no
+    file behind it, and the caller falls back to the layer name.
+    """
+    from imajin.analysis.resume import rel_key
+    from imajin.anchor import resolve_session_anchor
+
+    sources = _source_paths_for_layers([layer_name])
+    if not sources:
+        return None
+    source = sources[0]
+    anchor = resolve_session_anchor(extra_paths=[source])
+    key = rel_key(source, anchor) if anchor is not None else str(source)
+    stem = Path(key).stem
+    return slugify_result_name(stem) if stem else None
+
+
 def _anchor_for_layers(layer_names: list[str] | None) -> Path | None:
     from imajin.anchor import resolve_anchor_folder, resolve_session_anchor
 
@@ -95,17 +194,29 @@ def save_labels(
     out_dtype = _label_output_dtype(data)
     labels = data.astype(out_dtype, copy=False)
 
-    out = _resolve_output_path(
-        path,
-        category="labels",
-        filename=f"{slugify_result_name(labels_layer)}.tif",
-    )
+    slug = _sample_slug_for_layer(labels_layer)
+    if path:
+        out = normalize_user_path(path).resolve()
+        out.parent.mkdir(parents=True, exist_ok=True)
+    else:
+        # Same per-file identity + no-clobber rule as save_result_bundle: an
+        # explicit path is the caller's business, a default one must not
+        # overwrite another file's labels.
+        bundle = _bundle_io.ensure_active_bundle()
+        out = _non_clobbering_path(
+            bundle,
+            "labels",
+            f"{slugify_result_name(slug or labels_layer)}.tif",
+            identity_key="sample_slug" if slug else "labels_layer",
+            identity_value=slug or labels_layer,
+        )
     _write_label_tiff(out, labels)
     register_output(
         "labels_tiff",
         out,
         {
             "labels_layer": labels_layer,
+            "sample_slug": slug,
             "shape": tuple(int(s) for s in labels.shape),
             "dtype": str(labels.dtype),
         },
@@ -125,7 +236,8 @@ def save_labels(
     "bundle opened by start_analysis — or the one an earlier save/output created in this "
     "task — so a sequential multi-file workflow (e.g. per-file ROI analysis) lands in ONE "
     "folder. A new folder is created only when no bundle is active; pass new_bundle=True to "
-    "force a separate folder for a genuinely independent result.",
+    "force a separate folder for a genuinely independent result — that writes the one "
+    "result aside and leaves the active bundle in place for everything after it.",
     phase="4",
 )
 def save_result_bundle(
@@ -143,6 +255,13 @@ def save_result_bundle(
     # the process slot so subsequent tool calls in the same task share it too.
     bundle = None if new_bundle else current_bundle()
     reused = bundle is not None
+    if reused and metadata:
+        # Don't drop caller metadata just because we're appending.
+        seed = _bundle_io.read_bundle_metadata(bundle)
+        recipe_params = dict(seed.get("recipe_params") or {})
+        recipe_params.update(metadata)
+        seed["recipe_params"] = recipe_params
+        _bundle_io.write_bundle_metadata(bundle, seed)
     if bundle is None:
         bundle = create_result_bundle(
             name,
@@ -150,7 +269,14 @@ def save_result_bundle(
             metadata=metadata,
             root=_anchor_for_layers(labels_layers),
         )
-        promote_to_process_bundle(bundle)
+        if new_bundle and current_bundle() is not None:
+            # `new_bundle=True` means "put this ONE result somewhere separate",
+            # not "switch the session". Promoting here made every later
+            # analysis and save land in the sidecar folder instead of the
+            # session the user opened, with nothing reporting the switch.
+            pass
+        else:
+            promote_to_process_bundle(bundle)
     outputs: dict[str, list[str]] = {
         "labels": [],
         "tables": [],
@@ -163,7 +289,24 @@ def save_result_bundle(
             layer = call_on_main(snapshot_layer, labels_layer)
             data = _materialize(layer.data)
             labels = data.astype(_label_output_dtype(data), copy=False)
-            out = bundle / "labels" / "cells" / f"{slugify_result_name(labels_layer)}.tif"
+            # Identity comes from the SOURCE FILE, exactly as the analysis path
+            # derives it. Keying on the layer name here would be the original
+            # bug in miniature: every file segments to `Ch2-T1_objects`, so the
+            # lookup would return the FIRST file's TIFF and each subsequent save
+            # would overwrite it.
+            slug = _sample_slug_for_layer(labels_layer)
+            out = (
+                _registered_path_for(bundle, "labels_tiff", "sample_slug", slug)
+                if slug
+                else None
+            ) or _non_clobbering_path(
+                bundle,
+                "labels/cells",
+                f"{slugify_result_name(slug or labels_layer)}.tif",
+                identity_key="sample_slug" if slug else "labels_layer",
+                identity_value=slug or labels_layer,
+            )
+            out.parent.mkdir(parents=True, exist_ok=True)
             _write_label_tiff(out, labels)
             outputs["labels"].append(str(out))
             register_output(
@@ -171,6 +314,7 @@ def save_result_bundle(
                 out,
                 {
                     "labels_layer": labels_layer,
+                    "sample_slug": slug,
                     "shape": tuple(int(s) for s in labels.shape),
                     "dtype": str(labels.dtype),
                 },
@@ -191,8 +335,13 @@ def save_result_bundle(
             src = normalize_user_path(raw).resolve()
             if not src.exists():
                 continue
-            dst = bundle / "qc" / src.name
-            dst.parent.mkdir(parents=True, exist_ok=True)
+            dst = _non_clobbering_path(
+                bundle,
+                "qc",
+                src.name,
+                identity_key="source",
+                identity_value=str(src),
+            )
             if src.resolve() != dst.resolve():
                 shutil.copy2(src, dst)
             outputs["qc"].append(str(dst))
@@ -204,8 +353,13 @@ def save_result_bundle(
             src = normalize_user_path(raw).resolve()
             if not src.exists():
                 continue
-            dst = bundle / "figures" / src.name
-            dst.parent.mkdir(parents=True, exist_ok=True)
+            dst = _non_clobbering_path(
+                bundle,
+                "figures",
+                src.name,
+                identity_key="source",
+                identity_value=str(src),
+            )
             if src.resolve() != dst.resolve():
                 shutil.copy2(src, dst)
             outputs["figures"].append(str(dst))
@@ -228,4 +382,12 @@ def save_result_bundle(
         "metadata_path": str(bundle / "metadata.json"),
         "outputs": outputs,
         "reused": reused,
+        # When appending, `name` labels the outputs but does NOT rename the
+        # folder — say so, instead of letting the caller believe its per-sample
+        # name was applied. In the reported session the agent passed good names
+        # (mF_rectum_1 ... vF_rectum_2) that never reached any folder.
+        "name_applied": not reused,
+        "bundle_name": (
+            _bundle_io.read_bundle_metadata(bundle).get("run_context") or {}
+        ).get("name"),
     }

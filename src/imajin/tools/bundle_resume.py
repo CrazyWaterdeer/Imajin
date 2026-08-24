@@ -38,6 +38,48 @@ def _bundle_dirs_under(root: str | Path | None) -> list[Path]:
     return [c for c in children if c.is_dir() and (c / "metadata.json").exists()]
 
 
+def _reopen_bundle(bundle: Path) -> None:
+    """Flip a finalized bundle back to in_progress so it can be appended to."""
+    from imajin.result_bundles import read_bundle_metadata_normalized
+    from imajin.results import read_bundle_metadata, write_bundle_metadata
+
+    seed = read_bundle_metadata(bundle)
+    if not seed:
+        return
+    run_context = dict(seed.get("run_context") or {})
+    if not run_context:
+        # Legacy flat metadata: lift the status into run_context where the reuse
+        # check looks for it, but KEEP every other top-level key. Reopening a
+        # folder to browse or resume it must not be destructive, and the keys the
+        # v3 shape does not know about include input_anchor — which
+        # open_result_bundle reads two calls later to set the resume scope, so
+        # dropping it silently re-anchors which files count as already analysed.
+        normalized = read_bundle_metadata_normalized(bundle)
+        run_context = dict(normalized.get("run_context") or {})
+        seed = {
+            **dict(seed),
+            "schema_version": 3,
+            "recipe_params": dict(normalized.get("recipe_params") or {}),
+            "run_context": run_context,
+            "environment": dict(normalized.get("environment") or {}),
+            "table_specs": dict(seed.get("table_specs") or {}),
+            "outputs": list(seed.get("outputs") or []),
+            "sample_index": list(seed.get("sample_index") or []),
+        }
+    # An ad-hoc folder that the user explicitly reopens is a deliberate choice,
+    # so it stops being ad-hoc — otherwise the analysis path keeps refusing it
+    # and the "this bundle is now the append target" note below stays false.
+    was_adhoc = str(run_context.get("kind") or "") == "adhoc"
+    if run_context.get("status") == "in_progress" and not was_adhoc:
+        return
+    if was_adhoc:
+        run_context["kind"] = "single"
+    run_context["status"] = "in_progress"
+    run_context.pop("finalized_at", None)
+    seed["run_context"] = run_context
+    write_bundle_metadata(bundle, seed)
+
+
 def _bundle_brief(bundle: Path) -> dict[str, Any]:
     from imajin.result_bundles import read_sample_index
     from imajin.results import read_bundle_metadata
@@ -173,6 +215,16 @@ def open_result_bundle(bundle_path: str, directory: str | None = None) -> dict[s
     from imajin.tools.recipe_import import import_recipe_from_bundle
 
     bundle = Path(bundle_path).expanduser()
+    # Re-open it: resuming means this bundle is the append target again, and a
+    # finalized bundle is deliberately NOT reusable (that guard is what stops a
+    # closed folder silently collecting the next file's outputs). Without this
+    # the note below would be false and every resumed file would mint a folder.
+    _reopen_bundle(bundle)
+    # Explicitly reopening a folder promotes it to a session bundle, even if
+    # this process originally minted it for a single file.
+    from imajin.tools._workflow_outputs import _auto_per_file_bundles
+
+    _auto_per_file_bundles.discard(str(bundle))
     promote_to_process_bundle(bundle)
     try:
         recipe_info = import_recipe_from_bundle(str(bundle))

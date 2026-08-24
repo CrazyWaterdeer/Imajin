@@ -16,9 +16,27 @@ import tifffile
 
 
 @pytest.fixture(autouse=True)
+def _isolate_results_root(tmp_path_factory, monkeypatch):
+    """Give every test its own throwaway results root.
+
+    Without this the suite writes real bundles into the user's Documents folder
+    (hundreds of them per full run), and any test asserting "exactly N bundles
+    exist under this root" is meaningless because the root is shared.
+
+    Deliberately NOT under the test's own ``tmp_path``: tests that scan a
+    directory tree (register_files recursive) would otherwise count this folder
+    as data.
+    """
+    root = tmp_path_factory.mktemp("imajin_results")
+    monkeypatch.setenv("IMAJIN_RESULTS_DIR", str(root))
+    yield root
+
+
+@pytest.fixture(autouse=True)
 def _reset_sample_annotations():
     from imajin import session as state
     from imajin.result_bundles import reset_process_bundle
+    from imajin.tools._workflow_outputs import reset_auto_per_file_bundles
     from imajin.tools import trace
 
     trace.reset_skeletons()
@@ -29,6 +47,7 @@ def _reset_sample_annotations():
     state.reset_runs()
     state.reset_qc_records()
     reset_process_bundle()
+    reset_auto_per_file_bundles()
     yield
     trace.reset_skeletons()
     state.reset_samples()
@@ -38,6 +57,7 @@ def _reset_sample_annotations():
     state.reset_runs()
     state.reset_qc_records()
     reset_process_bundle()
+    reset_auto_per_file_bundles()
 
 
 @pytest.fixture

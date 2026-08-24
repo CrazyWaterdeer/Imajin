@@ -25,6 +25,8 @@ _active_sample_slug: contextvars.ContextVar[str | None] = contextvars.ContextVar
     "imajin_active_sample_slug", default=None
 )
 
+_TERMINAL_BUNDLE_STATUSES = {"complete", "failed", "cancelled"}
+
 _process_bundle_lock = threading.Lock()
 _process_bundle: Path | None = None
 
@@ -102,11 +104,22 @@ def ensure_active_bundle() -> Path:
         return _process_bundle
 
 
-def bundle_output_path(category: str, filename: str) -> Path:
-    """Resolve <bundle>/<category>/<filename>, lazily creating the bundle and parent."""
+def bundle_output_path(
+    category: str,
+    filename: str,
+    *,
+    create_parent: bool = True,
+) -> Path:
+    """Resolve <bundle>/<category>/<filename>, lazily creating the bundle and parent.
+
+    Pass ``create_parent=False`` when the caller may decide not to write after
+    all; the bundle layout is meant to grow only as writers actually emit files,
+    and an eagerly-created empty ``qc/`` misreports what a bundle contains.
+    """
     bundle = ensure_active_bundle()
     out = bundle / category / filename
-    out.parent.mkdir(parents=True, exist_ok=True)
+    if create_parent:
+        out.parent.mkdir(parents=True, exist_ok=True)
     return out
 
 
@@ -169,6 +182,22 @@ def register_output(
                 "outputs": outputs,
             },
         )
+
+
+def drop_output(bundle: Path | str, rel_path: Path | str) -> None:
+    """Remove an outputs-index entry whose file no longer exists at ``rel_path``."""
+    target = Path(rel_path).as_posix()
+    seed = read_bundle_metadata(bundle)
+    outputs = list(seed.get("outputs") or [])
+    remaining = [
+        entry
+        for entry in outputs
+        if not (isinstance(entry, dict) and entry.get("path") == target)
+    ]
+    if len(remaining) == len(outputs):
+        return
+    seed["outputs"] = remaining
+    write_bundle_metadata(bundle, seed)
 
 
 def register_table_spec(table_name: str, spec: dict[str, Any]) -> None:
@@ -355,8 +384,22 @@ def write_label_tiff(path: Path, labels: np.ndarray) -> None:
         tifffile.imwrite(path, labels, photometric="minisblack")
 
 
-def write_label_layer(bundle: Path, tier: str, sample_slug: str, layer_name: str) -> str:
-    """Snapshot a label layer and write it to bundle/labels/<tier>/<slug>.tif."""
+def write_label_layer(
+    bundle: Path,
+    tier: str,
+    sample_slug: str,
+    layer_name: str,
+    *,
+    owner: str | None = None,
+) -> str:
+    """Snapshot a label layer and write it to bundle/labels/<tier>/<slug>.tif.
+
+    ``owner`` identifies whose output this is — the source file, normally. When
+    the destination already belongs to the same owner the write proceeds, so
+    re-analysing a file with different parameters replaces its own labels. A
+    destination owned by someone ELSE is a slug collision and still raises,
+    because that is data loss.
+    """
     from imajin.tools.napari_ops import snapshot_layer
 
     layer = call_on_main(snapshot_layer, layer_name)
@@ -365,13 +408,27 @@ def write_label_layer(bundle: Path, tier: str, sample_slug: str, layer_name: str
     rel = Path("labels") / tier / f"{sample_slug}.tif"
     out = bundle / rel
     out.parent.mkdir(parents=True, exist_ok=True)
-    if out.exists():
+    if out.exists() and not _output_belongs_to(bundle, rel, owner):
         raise ValueError(
             f"{rel} already exists in bundle {bundle.name}; "
             "sample_slug collision suspected"
         )
     write_label_tiff(out, labels)
     return rel.as_posix()
+
+
+def _output_belongs_to(bundle: Path, rel: Path, owner: str | None) -> bool:
+    """Is the existing output at ``rel`` already this owner's own file?"""
+    if owner is None:
+        return False
+    target = rel.as_posix()
+    for entry in read_bundle_metadata(bundle).get("outputs") or []:
+        if not isinstance(entry, dict) or entry.get("path") != target:
+            continue
+        metadata = entry.get("metadata")
+        if isinstance(metadata, dict):
+            return str(metadata.get("owner") or "") == owner
+    return False
 
 
 def copy_qc_png(bundle: Path, qc_png: str, sample_slug: str) -> str | None:
@@ -402,43 +459,231 @@ def populate_sample_outputs(
     labels_cells: str | None = None,
     labels_domain: str | None = None,
     qc_png: str | None = None,
+    owner: str | None = None,
 ) -> dict[str, str | None]:
     out: dict[str, str | None] = {
         "labels_cells": None,
         "labels_domain": None,
         "qc_png": None,
     }
-    if labels_cells:
-        out["labels_cells"] = write_label_layer(
-            bundle, "cells", sample_slug, labels_cells
-        )
-    if labels_domain:
-        out["labels_domain"] = write_label_layer(
-            bundle, "domain", sample_slug, labels_domain
-        )
-    if qc_png:
-        out["qc_png"] = copy_qc_png(bundle, qc_png, sample_slug)
+    with with_active_bundle(bundle):
+        if labels_cells:
+            rel = write_label_layer(
+                bundle, "cells", sample_slug, labels_cells, owner=owner
+            )
+            out["labels_cells"] = rel
+            # Register what we write, so the outputs index reflects the files
+            # that actually exist and a second writer can upsert instead of
+            # laying down a duplicate copy under a different name.
+            register_output(
+                "labels_tiff",
+                bundle / rel,
+                {
+                    "labels_layer": labels_cells,
+                    "sample_slug": sample_slug,
+                    "owner": owner,
+                },
+            )
+        if labels_domain:
+            rel = write_label_layer(
+                bundle, "domain", sample_slug, labels_domain, owner=owner
+            )
+            out["labels_domain"] = rel
+            register_output(
+                "labels_tiff",
+                bundle / rel,
+                {
+                    "labels_layer": labels_domain,
+                    "sample_slug": sample_slug,
+                    "owner": owner,
+                },
+            )
+        if qc_png:
+            previous = Path(qc_png).resolve()
+            rel = copy_qc_png(bundle, qc_png, sample_slug)
+            out["qc_png"] = rel
+            if rel:
+                # copy_qc_png RENAMES when the source already lives in this
+                # bundle, so an entry registered under the old name now points
+                # at a file that no longer exists. Drop it before registering.
+                if not previous.exists():
+                    try:
+                        drop_output(bundle, previous.relative_to(bundle.resolve()))
+                    except ValueError:
+                        pass
+                register_output(
+                    "qc_png",
+                    bundle / rel,
+                    {
+                        "source": str(qc_png),
+                        "sample_slug": sample_slug,
+                        "owner": owner,
+                    },
+                )
     return out
 
 
-def write_combined_csv(bundle: Path, table_names: list[str]) -> Path:
+def write_sample_tables(
+    bundle: Path,
+    table_names: list[str],
+    *,
+    sample_name: str,
+    sample_slug: str,
+) -> list[Path]:
+    """Write this sample's measurement tables into ``<bundle>/tables/`` and register them.
+
+    A bundle has to be self-describing. Before this, the per-file measurements
+    only reached disk if the agent separately called ``save_result_bundle`` with
+    the table name — so a session's pooled table could be computed, plotted, and
+    then lost with the process, which is exactly what happened to the one
+    artifact that could not be regenerated without redoing every ROI.
+    """
     import pandas as pd
 
-    frames: list[pd.DataFrame] = []
+    from imajin.results import slugify_result_name
+
+    written: list[Path] = []
     for name in table_names:
         try:
             frame = get_table(name)
         except KeyError:
             continue
-        if frame is None or frame.empty:
+        if frame is None:
             continue
-        frames.append(frame)
+        if not isinstance(frame, pd.DataFrame):
+            continue
+        out = bundle / "tables" / f"{slugify_result_name(sample_slug)}.csv"
+        if len(table_names) > 1:
+            out = bundle / "tables" / (
+                f"{slugify_result_name(sample_slug)}__{slugify_result_name(name)}.csv"
+            )
+        out.parent.mkdir(parents=True, exist_ok=True)
+        tagged = frame.copy()
+        if "sample_name" not in tagged.columns:
+            tagged.insert(0, "sample_name", sample_name)
+        tagged.to_csv(out, index=False)
+        written.append(out)
+        with with_active_bundle(bundle):
+            register_output(
+                "table_csv",
+                out,
+                {"table_name": name, "sample_name": sample_name},
+            )
+    return written
+
+
+def _note_missing_sample_table(
+    rel: str,
+    reason: str,
+    entry: dict[str, Any],
+    unreadable: list[str],
+    warnings: list[str] | None,
+) -> None:
+    """Record that a registered per-sample table could not contribute rows.
+
+    A pooled table quietly missing a sample is worse than a loud one, because
+    the statistics still run on what is left.
+    """
+    message = f"{rel} {reason} and is MISSING from combined.csv"
+    if warnings is not None:
+        warnings.append(message)
+    else:
+        import warnings as _warnings
+
+        _warnings.warn(message, RuntimeWarning, stacklevel=3)
+    sample = (entry.get("metadata") or {}).get("sample_name")
+    if sample:
+        unreadable.append(str(sample))
+
+
+def write_combined_csv(
+    bundle: Path,
+    table_names: list[str],
+    *,
+    warnings: list[str] | None = None,
+) -> Path:
+    """Rebuild ``<bundle>/tables/combined.csv`` from every per-sample table on disk.
+
+    Concatenates the registered per-sample CSVs rather than only the current
+    call's in-session tables, so a bundle that accumulates files one at a time
+    ends up with a pooled table covering all of them. Columns are unioned, which
+    matters here: napari disambiguates a repeated layer name, so one file's
+    intensity column can arrive as ``mean_intensity_Ch2-T1 [1]`` while its
+    siblings use ``mean_intensity_Ch2-T1``.
+    """
+    import pandas as pd
+
     out = bundle / "tables" / "combined.csv"
     out.parent.mkdir(parents=True, exist_ok=True)
-    if frames:
-        combined = pd.concat(frames, ignore_index=True, sort=False)
-    else:
-        combined = pd.DataFrame()
+
+    frames: list[pd.DataFrame] = []
+    seen: set[str] = set()
+    unreadable: list[str] = []
+    seed = read_bundle_metadata(bundle)
+    for entry in seed.get("outputs") or []:
+        if not isinstance(entry, dict) or entry.get("kind") != "table_csv":
+            continue
+        # ONLY the per-sample tables this module writes, identified by the
+        # sample_name write_sample_tables records. save_result_bundle also
+        # registers table_csv outputs — including a second copy of the very
+        # measurements already written here, and the pooled table that contains
+        # every row — so concatenating all of them double-counts samples and
+        # contributes rows with no sample_name.
+        metadata = entry.get("metadata")
+        if not isinstance(metadata, dict) or not metadata.get("sample_name"):
+            continue
+        rel = str(entry.get("path") or "")
+        if not rel or rel in seen or rel.endswith("combined.csv"):
+            continue
+        path = bundle / rel
+        if not path.exists():
+            # A registered table that has gone missing is the same loss as an
+            # unreadable one — warn and rescue its rows below, rather than
+            # quietly rebuilding a smaller pooled table.
+            _note_missing_sample_table(
+                rel, "no longer exists", entry, unreadable, warnings
+            )
+            continue
+        seen.add(rel)
+        try:
+            frames.append(pd.read_csv(path))
+        except Exception as exc:  # noqa: BLE001 - one bad CSV must not block the run
+            _note_missing_sample_table(
+                rel,
+                f"could not be read ({type(exc).__name__}: {exc})",
+                entry,
+                unreadable,
+                warnings,
+            )
+            continue
+
+    if not frames:
+        # Nothing registered yet (or a legacy bundle): fall back to session tables.
+        for name in table_names:
+            try:
+                frame = get_table(name)
+            except KeyError:
+                continue
+            if frame is None or frame.empty:
+                continue
+            frames.append(frame)
+
+    # A rebuild must never LOSE a sample that was already pooled. If a
+    # per-sample CSV has become unreadable, carry its rows over from the
+    # previous combined.csv rather than dropping them on the floor.
+    if unreadable and out.exists():
+        try:
+            previous = pd.read_csv(out)
+        except Exception:  # noqa: BLE001
+            previous = None
+        if previous is not None and "sample_name" in previous.columns:
+            rescued = previous[previous["sample_name"].isin(unreadable)]
+            if not rescued.empty:
+                frames.append(rescued)
+
+    combined = (
+        pd.concat(frames, ignore_index=True, sort=False) if frames else pd.DataFrame()
+    )
     combined.to_csv(out, index=False)
     return out
 
@@ -516,9 +761,13 @@ def finalize_bundle_metadata(
         **dict(normalized.get("environment") or {}),
         **dict(extra.pop("environment", {}) or {}),
     }
-    samples_list = [_redact_sample(s) for s in samples]
+    existing_run_context = dict(normalized.get("run_context") or {})
+    samples_list = _merge_samples(
+        list(existing_run_context.get("samples") or []),
+        [_redact_sample(s) for s in samples],
+    )
     run_context = {
-        **dict(normalized.get("run_context") or {}),
+        **existing_run_context,
         "status": status,
         "finalized_at": _kst_now_iso(),
         "samples": samples_list,
@@ -547,6 +796,40 @@ def finalize_bundle_metadata(
     write_bundle_metadata(bundle, finalized)
 
 
+def _merge_samples(
+    existing: list[dict[str, Any]],
+    incoming: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Merge per-sample records, keyed by sample_name, incoming wins.
+
+    Finalization used to assign ``samples`` unconditionally, so any later
+    finalize with an empty list — ``finalize_analysis()`` and the atexit hook
+    both pass one — erased every sample record the run had accumulated.
+    Merging keeps the durable per-sample history that ``sample_index`` (two
+    lines below in the caller) has always been careful to preserve.
+    """
+    merged: dict[str, dict[str, Any]] = {}
+    order: list[str] = []
+
+    def _key(sample: dict[str, Any], index: int) -> str:
+        name = sample.get("sample_name")
+        return str(name) if name else f"__unnamed_{index}"
+
+    for i, sample in enumerate(existing):
+        if not isinstance(sample, dict):
+            continue
+        key = _key(sample, i)
+        if key not in merged:
+            order.append(key)
+        merged[key] = sample
+    for i, sample in enumerate(incoming):
+        key = _key(sample, i)
+        if key not in merged:
+            order.append(key)
+        merged[key] = sample
+    return [merged[k] for k in order]
+
+
 def _redact_sample(sample: dict[str, Any]) -> dict[str, Any]:
     out = dict(sample)
     out.pop("outputs", None)  # filesystem mirror removed
@@ -571,9 +854,15 @@ def start_analysis(
 ) -> Path:
     """Create a named bundle, write seed metadata.json (schema_v3, status='in_progress'),
     and set it as the active bundle for the calling context."""
-    from imajin.results import create_result_bundle, user_results_root
+    from imajin.results import create_result_bundle, results_root
 
-    root = user_results_root()
+    # Anchor-first, like every other bundle creator (the workflow path uses
+    # resolve_session_anchor, the batch runner resolve_anchor_folder, and the
+    # ad-hoc path _adhoc_bundle_root). Hard-coding the user results root put the
+    # session bundle on C:\Users\...\Documents while the per-file work landed on
+    # D:\ next to the data, and made the prompt's stated reason for calling this
+    # tool ("so outputs land next to the data") false.
+    root = results_root()
     bundle = create_result_bundle(
         name=name,
         kind=kind,
@@ -669,10 +958,16 @@ def finalize_analysis(
     status: str = "complete",
     samples: list[dict[str, Any]] | None = None,
     extra: dict[str, Any] | None = None,
-) -> Path:
+) -> Path | None:
     """Finalize the currently active bundle. Writes schema_v3 metadata.json with the
-    final status and clears the process slot."""
-    bundle = ensure_active_bundle()
+    final status and clears the process slot.
+
+    Returns ``None`` when nothing is open — closing a session that never wrote
+    anything used to mint a fresh empty bundle and immediately mark it complete.
+    """
+    bundle = current_bundle()
+    if bundle is None:
+        return None
     finalize_bundle_metadata(
         bundle,
         samples=list(samples or []),
@@ -695,7 +990,25 @@ def _run_atexit_finalize() -> None:
     if bundle is None:
         return
     try:
-        finalize_bundle_metadata(bundle, samples=[], status="complete")
+        # Status-only close: the interpreter is going away, so this hook knows
+        # nothing new about the run. Update run_context in place and leave every
+        # other key (outputs, table_specs, sample_index, ...) exactly as written.
+        seed = read_bundle_metadata(bundle)
+        if not seed:
+            return
+        # Preserve unknown top-level keys (operator notes, voxel_scale, ...)
+        # instead of narrowing the document to the v3 shape: this hook only
+        # closes the status, it is not a migration.
+        document = {**dict(seed), **_as_schema_v3(seed)}
+        run_context = dict(document.get("run_context") or {})
+        run_context["status"] = "complete"
+        run_context["finalized_at"] = _kst_now_iso()
+        document["run_context"] = run_context
+        if seed.get("sample_index") is not None:
+            document["sample_index"] = list(seed.get("sample_index") or [])
+        if seed.get("input_anchor"):
+            document["input_anchor"] = seed["input_anchor"]
+        write_bundle_metadata(bundle, document)
     finally:
         with _process_bundle_lock:
             _process_bundle = None

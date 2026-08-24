@@ -571,3 +571,241 @@ def test_workflow_bundle_is_promoted_to_process_slot(tmp_path, monkeypatch):
     adhoc_dirs = [p for p in tmp_path.iterdir() if p.is_dir() and p.name.endswith("_adhoc")]
     assert adhoc_dirs == []
     reset_process_bundle()
+
+
+def test_finalize_does_not_erase_recorded_samples(tmp_path, monkeypatch):
+    """A second finalize with no samples must not wipe the per-sample record.
+
+    finalize_analysis() and the atexit hook both pass samples=[]; before this
+    guard either one erased the whole run_context.samples list that per-file
+    analyses had accumulated.
+    """
+    monkeypatch.setenv("IMAJIN_RESULTS_DIR", str(tmp_path))
+    from imajin.result_bundles import finalize_bundle_metadata
+    from imajin.results import create_result_bundle, read_bundle_metadata
+
+    bundle = create_result_bundle("session", kind="single")
+    finalize_bundle_metadata(
+        bundle,
+        samples=[{"sample_name": "file_a", "status": "complete", "summary": {"n_cells": 16}}],
+        status="complete",
+    )
+    finalize_bundle_metadata(bundle, samples=[], status="complete")
+
+    run_context = read_bundle_metadata(bundle)["run_context"]
+    assert [s["sample_name"] for s in run_context["samples"]] == ["file_a"]
+    assert run_context["n_samples"] == 1
+    assert run_context["n_complete"] == 1
+
+
+def test_finalize_merges_samples_by_name(tmp_path, monkeypatch):
+    """Sequential per-file finalizes accumulate; a re-run of one file replaces it."""
+    monkeypatch.setenv("IMAJIN_RESULTS_DIR", str(tmp_path))
+    from imajin.result_bundles import finalize_bundle_metadata
+    from imajin.results import create_result_bundle, read_bundle_metadata
+
+    bundle = create_result_bundle("session", kind="single")
+    finalize_bundle_metadata(
+        bundle,
+        samples=[{"sample_name": "file_a", "status": "complete", "summary": {"n_cells": 16}}],
+        status="in_progress",
+    )
+    finalize_bundle_metadata(
+        bundle,
+        samples=[{"sample_name": "file_b", "status": "complete", "summary": {"n_cells": 61}}],
+        status="in_progress",
+    )
+    # Re-analysing file_a replaces its record rather than duplicating it.
+    finalize_bundle_metadata(
+        bundle,
+        samples=[{"sample_name": "file_a", "status": "complete", "summary": {"n_cells": 20}}],
+        status="complete",
+    )
+
+    run_context = read_bundle_metadata(bundle)["run_context"]
+    assert [s["sample_name"] for s in run_context["samples"]] == ["file_a", "file_b"]
+    assert run_context["samples"][0]["summary"]["n_cells"] == 20
+    assert run_context["n_samples"] == 2
+
+
+def test_atexit_close_preserves_outputs_and_samples(tmp_path, monkeypatch):
+    """The atexit hook is status-only: it must not drop outputs/table_specs/samples."""
+    monkeypatch.setenv("IMAJIN_RESULTS_DIR", str(tmp_path))
+    from imajin.result_bundles import (
+        _run_atexit_finalize,
+        bundle_output_path,
+        finalize_bundle_metadata,
+        promote_to_process_bundle,
+        register_output,
+        reset_process_bundle,
+    )
+    from imajin.results import create_result_bundle, read_bundle_metadata
+
+    reset_process_bundle()
+    bundle = create_result_bundle("session", kind="single")
+    promote_to_process_bundle(bundle)
+    finalize_bundle_metadata(
+        bundle,
+        samples=[{"sample_name": "file_a", "status": "complete", "summary": {"n_cells": 16}}],
+        status="in_progress",
+    )
+    fig = bundle_output_path("figures", "x.png")
+    fig.write_bytes(b"\x89PNG\r\n")
+    register_output("figure", fig, {})
+
+    _run_atexit_finalize()  # simulate process exit
+
+    meta = read_bundle_metadata(bundle)
+    assert meta["run_context"]["status"] == "complete"
+    assert [s["sample_name"] for s in meta["run_context"]["samples"]] == ["file_a"]
+    assert any(o["path"] == "figures/x.png" for o in meta["outputs"])
+    assert "sample_index" in meta
+    reset_process_bundle()
+
+
+def test_finalize_analysis_on_empty_slot_creates_nothing(tmp_path, monkeypatch):
+    """Closing a session that never opened a bundle must not mint an orphan."""
+    root = tmp_path / "empty_root"
+    root.mkdir()
+    monkeypatch.setenv("IMAJIN_RESULTS_DIR", str(root))
+    from imajin.result_bundles import finalize_analysis, reset_process_bundle
+
+    reset_process_bundle()
+    assert finalize_analysis() is None
+    assert list(root.iterdir()) == []
+
+
+def test_start_analysis_roots_at_the_session_anchor(tmp_path, monkeypatch):
+    """The session bundle lands next to the data, like every other bundle creator."""
+    raw = tmp_path / "raw"
+    raw.mkdir()
+    # Point the fallback at a DECOY: if start_analysis still hard-coded
+    # user_results_root() it would short-circuit on this env var and pass.
+    monkeypatch.setenv("IMAJIN_RESULTS_DIR", str(tmp_path / "fallback"))
+
+    from imajin import session as state
+    from imajin.result_bundles import reset_process_bundle, start_analysis
+
+    reset_process_bundle()
+    source = raw / "a.lsm"
+    source.write_bytes(b"stub")
+    state.put_file(str(source), "a.lsm")
+
+    bundle = start_analysis("session")
+    assert bundle.parent == raw.resolve()
+    assert not (tmp_path / "fallback").exists()
+    reset_process_bundle()
+
+
+def test_start_analysis_falls_back_to_results_root_without_session_files(
+    tmp_path, monkeypatch
+):
+    root = tmp_path / "results"
+    monkeypatch.setenv("IMAJIN_RESULTS_DIR", str(root))
+    from imajin.result_bundles import reset_process_bundle, start_analysis
+
+    reset_process_bundle()
+    bundle = start_analysis("session")
+    assert bundle.parent == root
+    reset_process_bundle()
+
+
+def test_combined_rebuild_does_not_lose_a_sample_with_an_unreadable_csv(
+    tmp_path, monkeypatch
+):
+    """A corrupt per-sample CSV must not silently shrink the pooled table."""
+    import pandas as pd
+
+    monkeypatch.setenv("IMAJIN_RESULTS_DIR", str(tmp_path))
+    from imajin import session as state
+    from imajin.result_bundles import (
+        reset_process_bundle,
+        write_combined_csv,
+        write_sample_tables,
+    )
+    from imajin.results import create_result_bundle
+
+    reset_process_bundle()
+    bundle = create_result_bundle("session", kind="single")
+    for stem in ("rectum_1", "rectum_2"):
+        state.put_table(stem, pd.DataFrame({"label": [1, 2], "area": [10, 20]}))
+        write_sample_tables(bundle, [stem], sample_name=stem, sample_slug=stem)
+    write_combined_csv(bundle, [])
+    assert len(pd.read_csv(bundle / "tables" / "combined.csv")) == 4
+
+    # rectum_1's CSV becomes unreadable between rebuilds.
+    (bundle / "tables" / "rectum_1.csv").write_bytes(b"\xff\xfe\x00\x01garbage")
+
+    warnings: list[str] = []
+    write_combined_csv(bundle, [], warnings=warnings)
+
+    combined = pd.read_csv(bundle / "tables" / "combined.csv")
+    assert sorted(combined["sample_name"].unique()) == ["rectum_1", "rectum_2"]
+    assert len(combined) == 4, "a sample was dropped from the pooled table"
+    assert any("rectum_1" in w for w in warnings), "the failure was silent"
+    reset_process_bundle()
+
+
+def test_atexit_close_preserves_unknown_top_level_keys(tmp_path, monkeypatch):
+    """The atexit hook closes the status; it is not a schema migration."""
+    monkeypatch.setenv("IMAJIN_RESULTS_DIR", str(tmp_path))
+    from imajin.result_bundles import (
+        _run_atexit_finalize,
+        promote_to_process_bundle,
+        reset_process_bundle,
+    )
+    from imajin.results import (
+        create_result_bundle,
+        read_bundle_metadata,
+        write_bundle_metadata,
+    )
+
+    reset_process_bundle()
+    bundle = create_result_bundle("legacy", kind="single")
+    seed = read_bundle_metadata(bundle)
+    seed["operator_notes"] = "drew ROI around the rectum"
+    seed["voxel_scale"] = [1.0, 0.15, 0.15]
+    write_bundle_metadata(bundle, seed)
+    promote_to_process_bundle(bundle)
+
+    _run_atexit_finalize()
+
+    final = read_bundle_metadata(bundle)
+    assert final["run_context"]["status"] == "complete"
+    assert final["operator_notes"] == "drew ROI around the rectum"
+    assert final["voxel_scale"] == [1.0, 0.15, 0.15]
+    reset_process_bundle()
+
+
+def test_combined_rebuild_does_not_lose_a_sample_whose_csv_went_missing(
+    tmp_path, monkeypatch
+):
+    """A registered per-sample table that vanished is the same loss as a corrupt one."""
+    import pandas as pd
+
+    monkeypatch.setenv("IMAJIN_RESULTS_DIR", str(tmp_path))
+    from imajin import session as state
+    from imajin.result_bundles import (
+        reset_process_bundle,
+        write_combined_csv,
+        write_sample_tables,
+    )
+    from imajin.results import create_result_bundle
+
+    reset_process_bundle()
+    bundle = create_result_bundle("session", kind="single")
+    for stem in ("rectum_1", "rectum_2"):
+        state.put_table(stem, pd.DataFrame({"label": [1, 2], "area": [10, 20]}))
+        write_sample_tables(bundle, [stem], sample_name=stem, sample_slug=stem)
+    write_combined_csv(bundle, [])
+
+    (bundle / "tables" / "rectum_1.csv").unlink()
+
+    warnings: list[str] = []
+    write_combined_csv(bundle, [], warnings=warnings)
+
+    combined = pd.read_csv(bundle / "tables" / "combined.csv")
+    assert sorted(combined["sample_name"].unique()) == ["rectum_1", "rectum_2"]
+    assert len(combined) == 4, "the pooled table shrank"
+    assert any("rectum_1" in w for w in warnings), "the loss was silent"
+    reset_process_bundle()

@@ -52,11 +52,12 @@ def test_save_labels_uses_source_layer_anchor(viewer, tmp_path, monkeypatch) -> 
 
     res = results.save_labels("target_objects")
 
-    # save_labels now uses bundle_output_path which routes via user_results_root()
-    # (IMAJIN_RESULTS_DIR), not the source-layer anchor.
+    # save_labels routes via user_results_root() (IMAJIN_RESULTS_DIR), not the
+    # source-layer anchor. The FILENAME comes from the source file, not the
+    # layer: `target_objects` repeats for every file in a folder.
     out = Path(res["path"])
     assert out.is_relative_to(tmp_path / "fallback")
-    assert out.name == "target_objects.tif"
+    assert out.name == "sample.tif"
     assert out.exists()
     reset_process_bundle()
 
@@ -312,4 +313,217 @@ def test_start_and_finalize_analysis_tools(tmp_path, monkeypatch):
     finalize = finalize_analysis()
     assert finalize["status"] == "complete"
     assert read_bundle_metadata(bundle)["run_context"]["status"] == "complete"
+    reset_process_bundle()
+
+
+def test_save_result_bundle_reuse_of_one_layer_is_idempotent(
+    viewer, tmp_path, monkeypatch
+):
+    """Re-saving the same in-memory layer updates one file, it does not pile up."""
+    monkeypatch.setenv("IMAJIN_RESULTS_DIR", str(tmp_path))
+    from imajin.result_bundles import reset_process_bundle
+    from imajin.tools import results as results_tools
+
+    reset_process_bundle()
+    labels = np.zeros((8, 8), dtype=np.uint16)
+    labels[1:3, 1:3] = 1
+    viewer.add_labels(labels, name="Ch2-T1_objects")
+
+    res1 = results_tools.save_result_bundle("a", labels_layers=["Ch2-T1_objects"])
+    bundle = Path(res1["bundle_path"])
+    results_tools.save_result_bundle("a", labels_layers=["Ch2-T1_objects"])
+
+    written = sorted(p.name for p in (bundle / "labels" / "cells").iterdir())
+    assert written == ["Ch2-T1_objects.tif"]
+    reset_process_bundle()
+
+
+def test_save_result_bundle_keeps_each_source_files_labels(
+    viewer, tmp_path, monkeypatch
+):
+    """Two FILES segmenting to the same layer name must both keep their labels.
+
+    Every file in a folder loads as `Ch2-T1` and segments to `Ch2-T1_objects`,
+    so keying the destination on the layer name sends the second file's save
+    straight onto the first file's TIFF. Identity has to come from the file.
+    """
+    import tifffile
+
+    raw = tmp_path / "raw"
+    raw.mkdir()
+    monkeypatch.setenv("IMAJIN_RESULTS_DIR", str(tmp_path / "results"))
+    from imajin.result_bundles import reset_process_bundle
+    from imajin.tools import bundle as bundle_tools
+    from imajin.tools import results as results_tools
+
+    reset_process_bundle()
+    bundle = Path(bundle_tools.start_analysis("session")["bundle_path"])
+
+    written_max = {}
+    for stem, n_objects in (("rectum_1", 1), ("rectum_2", 2)):
+        source = raw / f"{stem}.lsm"
+        source.write_bytes(b"stub")
+        labels = np.zeros((8, 8), dtype=np.uint16)
+        for i in range(n_objects):
+            labels[i * 3 : i * 3 + 2, 1:3] = i + 1
+
+        viewer.layers.clear()
+        # Both files load under the SAME names, as a real instrument emits.
+        viewer.add_image(np.zeros((8, 8), dtype=np.uint16), name="Ch2-T1")
+        viewer.layers["Ch2-T1"].metadata["source_path"] = str(source)
+        viewer.add_labels(labels, name="Ch2-T1_objects")
+        viewer.layers["Ch2-T1_objects"].metadata["source_layer"] = "Ch2-T1"
+
+        results_tools.save_result_bundle(stem, labels_layers=["Ch2-T1_objects"])
+        written_max[stem] = n_objects
+
+    files = sorted(p.name for p in (bundle / "labels" / "cells").iterdir())
+    assert files == ["rectum_1.tif", "rectum_2.tif"]
+    for stem, expected in written_max.items():
+        actual = int(tifffile.imread(bundle / "labels" / "cells" / f"{stem}.tif").max())
+        assert actual == expected, f"{stem}.tif holds another file's labels"
+    reset_process_bundle()
+
+
+def test_save_result_bundle_keeps_distinct_qc_images(viewer, tmp_path, monkeypatch):
+    """Two QC PNGs with the same basename from different sources both survive."""
+    monkeypatch.setenv("IMAJIN_RESULTS_DIR", str(tmp_path))
+    from imajin.result_bundles import reset_process_bundle
+    from imajin.tools import results as results_tools
+
+    reset_process_bundle()
+    src_a = tmp_path / "a" / "qc.png"
+    src_b = tmp_path / "b" / "qc.png"
+    for src, payload in ((src_a, b"AAAA"), (src_b, b"BBBB")):
+        src.parent.mkdir(parents=True, exist_ok=True)
+        src.write_bytes(b"\x89PNG\r\n" + payload)
+
+    res = results_tools.save_result_bundle("file_a", qc_png_paths=[str(src_a)])
+    bundle = Path(res["bundle_path"])
+    results_tools.save_result_bundle("file_b", qc_png_paths=[str(src_b)])
+
+    written = sorted(p.name for p in (bundle / "qc").iterdir())
+    assert written == ["qc.png", "qc_2.png"]
+    assert (bundle / "qc" / "qc.png").read_bytes().endswith(b"AAAA")
+    assert (bundle / "qc" / "qc_2.png").read_bytes().endswith(b"BBBB")
+    reset_process_bundle()
+
+
+def test_save_result_bundle_reports_that_an_appended_name_is_not_applied(
+    viewer, tmp_path, monkeypatch
+):
+    """Appending keeps the folder's name; the caller must be told, not misled."""
+    monkeypatch.setenv("IMAJIN_RESULTS_DIR", str(tmp_path))
+    from imajin.result_bundles import reset_process_bundle
+    from imajin.tools import bundle as bundle_tools
+    from imajin.tools import results as results_tools
+
+    reset_process_bundle()
+    bundle_tools.start_analysis("session_name")
+
+    res = results_tools.save_result_bundle("mF_rectum_1")
+    assert res["reused"] is True
+    assert res["name_applied"] is False
+    assert res["bundle_name"] == "session_name"
+    reset_process_bundle()
+
+
+def test_save_result_bundle_keeps_caller_metadata_when_appending(
+    viewer, tmp_path, monkeypatch
+):
+    monkeypatch.setenv("IMAJIN_RESULTS_DIR", str(tmp_path))
+    from imajin.result_bundles import reset_process_bundle
+    from imajin.results import read_bundle_metadata
+    from imajin.tools import bundle as bundle_tools
+    from imajin.tools import results as results_tools
+
+    reset_process_bundle()
+    bundle_tools.start_analysis("session_name")
+    res = results_tools.save_result_bundle("s", metadata={"roi": "hindgut"})
+
+    seed = read_bundle_metadata(Path(res["bundle_path"]))
+    assert seed["recipe_params"]["roi"] == "hindgut"
+    reset_process_bundle()
+
+
+def test_new_bundle_does_not_hijack_the_session(viewer, tmp_path, monkeypatch):
+    """new_bundle=True writes one result aside; it must not switch the session."""
+    monkeypatch.setenv("IMAJIN_RESULTS_DIR", str(tmp_path))
+    from imajin.result_bundles import current_bundle, reset_process_bundle
+    from imajin.tools import bundle as bundle_tools
+    from imajin.tools import results as results_tools
+
+    reset_process_bundle()
+    session = Path(bundle_tools.start_analysis("session")["bundle_path"])
+
+    sidecar = results_tools.save_result_bundle("sidecar", new_bundle=True)
+    assert Path(sidecar["bundle_path"]) != session
+    assert current_bundle() == session, "the sidecar stole the session slot"
+
+    later = results_tools.save_result_bundle("later")
+    assert Path(later["bundle_path"]) == session
+    reset_process_bundle()
+
+
+def test_save_labels_does_not_overwrite_another_files_labels(
+    viewer, tmp_path, monkeypatch
+):
+    """Default-path save_labels honours per-file identity like the other writers."""
+    import tifffile
+
+    monkeypatch.setenv("IMAJIN_RESULTS_DIR", str(tmp_path / "results"))
+    from imajin.result_bundles import reset_process_bundle
+    from imajin.tools import results as results_tools
+
+    reset_process_bundle()
+    raw = tmp_path / "raw"
+    raw.mkdir()
+    written = {}
+    for stem, n in (("rectum_1", 1), ("rectum_2", 2)):
+        source = raw / f"{stem}.lsm"
+        source.write_bytes(b"")
+        labels = np.zeros((12, 12), dtype=np.int32)
+        for i in range(n):
+            labels[i * 4 : i * 4 + 3, 1:4] = i + 1
+        viewer.layers.clear()
+        viewer.add_image(
+            np.zeros((12, 12), dtype=np.float32),
+            name="Ch2-T1",
+            metadata={"source_path": str(source)},
+        )
+        viewer.add_labels(
+            labels, name="Ch2-T1_objects", metadata={"source_layer": "Ch2-T1"}
+        )
+        written[stem] = Path(results_tools.save_labels("Ch2-T1_objects")["path"])
+
+    assert written["rectum_1"] != written["rectum_2"]
+    assert int(tifffile.imread(written["rectum_1"]).max()) == 1
+    assert int(tifffile.imread(written["rectum_2"]).max()) == 2
+    reset_process_bundle()
+
+
+def test_save_result_bundle_does_not_overwrite_an_unattributed_file(
+    viewer, tmp_path, monkeypatch
+):
+    """A pre-existing file the index does not attribute is somebody's, not free space."""
+    monkeypatch.setenv("IMAJIN_RESULTS_DIR", str(tmp_path))
+    from imajin.result_bundles import promote_to_process_bundle, reset_process_bundle
+    from imajin.results import create_result_bundle
+    from imajin.tools import results as results_tools
+
+    reset_process_bundle()
+    bundle = create_result_bundle("legacy", kind="single")
+    legacy = bundle / "labels" / "cells" / "Ch2-T1_objects.tif"
+    legacy.parent.mkdir(parents=True, exist_ok=True)
+    legacy.write_bytes(b"legacy-content-not-a-real-tiff")
+    promote_to_process_bundle(bundle)
+
+    labels = np.zeros((8, 8), dtype=np.uint16)
+    labels[1:3, 1:3] = 1
+    viewer.add_labels(labels, name="Ch2-T1_objects")
+    results_tools.save_result_bundle("new", labels_layers=["Ch2-T1_objects"])
+
+    assert legacy.read_bytes() == b"legacy-content-not-a-real-tiff"
+    written = sorted(p.name for p in (bundle / "labels" / "cells").iterdir())
+    assert written == ["Ch2-T1_objects.tif", "Ch2-T1_objects_2.tif"]
     reset_process_bundle()

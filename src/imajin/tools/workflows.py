@@ -28,6 +28,7 @@ from imajin.tools._workflow_outputs import (
     _bundle_qc_png_path,
     _empty_bundle_outputs,
     _write_analysis_bundle_outputs,
+    pin_analysis_bundle,
 )
 from imajin.tools._workflow_steps import (
     _layer_axes,
@@ -121,7 +122,10 @@ def _resume_skip(analysis_file_key: str) -> dict[str, Any] | None:
     description="High-level target object analysis workflow. Resolves the target "
     "channel, optionally preprocesses it, segments target-positive objects/ROIs, "
     "and measures per-object intensity and size on the same target channel. Pass "
-    "target as a layer name, color (green/red/UV/IR), or marker (GFP/DAPI). Pass preprocess="
+    "target as a layer name, color (green/red/UV/IR), or marker (GFP/DAPI). Writes its "
+    "outputs into the analysis bundle opened by start_analysis when one is open, and "
+    "otherwise creates a per-file folder of its own; the folder is reported as "
+    "result_bundle_path and bundle_created says which of the two happened. Pass preprocess="
     "'rolling_ball' / 'auto_contrast' / 'gaussian_denoise' to apply one preprocessing "
     "step before segmentation. Returns labels layer, measurement table, object count, "
     "and QC metrics. Counterstain channels are not auto-selected — annotate them as "
@@ -173,7 +177,10 @@ def analyze_target_cells(
     method = _normalize_segmentation_method(segmentation_method)
     mode = "two_tier" if domain_strategy is not None else "single"
     orig_snapshot = call_on_main(snapshot_layer, target_layer)
-    analysis_file_key = _layer_source_path(orig_snapshot) or target_layer
+    # None for an in-memory layer with no file behind it; the bundle falls back
+    # to the layer name for identity in that case.
+    analysis_source_file = _layer_source_path(orig_snapshot)
+    analysis_file_key = analysis_source_file or target_layer
     analysis_recipe_key = f"interactive:{method}:{mode}"
 
     if not batch_managed and not rerun:
@@ -203,6 +210,19 @@ def analyze_target_cells(
     snapshot = call_on_main(snapshot_layer, seg_input_layer)
     axes = _layer_axes(snapshot)
     use_3d = _decide_3d(do_3D, axes, getattr(snapshot.data, "ndim", 2))
+
+    # Pin the destination bundle BEFORE the domain pre-compute and segmentation,
+    # both of which write QC PNGs through ensure_active_bundle(). Deciding it
+    # afterwards let a single file's outputs straddle two folders.
+    analysis_bundle = pin_analysis_bundle(
+        target_layer=target_layer,
+        target_source=resolution.source,
+        segmentation_method=method,
+        analysis_dim="3d" if use_3d else "2d",
+        tier="two_tier" if domain_strategy is not None else "single_tier",
+        bundle_suffix="two_tier" if domain_strategy is not None else "single",
+        source_file=analysis_source_file,
+    )
 
     # A hand-drawn ROI (region_mask) constrains BOTH tiers to inside the region.
     if region_mask is not None:
@@ -343,15 +363,13 @@ def analyze_target_cells(
     bundle_path: Path | None = None
     bundle_outputs = _empty_bundle_outputs()
     if domain_strategy is None:
-        bundle_path, own_bundle, bundle_outputs, bundle_warnings = (
+        bundle_path, own_bundle, bundle_batch_managed, bundle_outputs, bundle_warnings = (
             _write_analysis_bundle_outputs(
+                bundle=analysis_bundle,
                 target_layer=target_layer,
-                target_source=resolution.source,
-                segmentation_method=method,
-                analysis_dim="3d" if use_3d else "2d",
-                tier="single_tier",
-                bundle_suffix="single",
                 table_names=[measure_result["table_name"]],
+                method_label=method,
+                mode_label=mode,
                 labels_cells=seg_result["labels_layer"],
                 qc_png=seg_result.get("qc_png_path"),
                 sample_summary={
@@ -415,15 +433,13 @@ def analyze_target_cells(
             },
         )
 
-        bundle_path, own_bundle, bundle_outputs, bundle_warnings = (
+        bundle_path, own_bundle, bundle_batch_managed, bundle_outputs, bundle_warnings = (
             _write_analysis_bundle_outputs(
+                bundle=analysis_bundle,
                 target_layer=target_layer,
-                target_source=resolution.source,
-                segmentation_method=method,
-                analysis_dim="3d" if use_3d else "2d",
-                tier="two_tier",
-                bundle_suffix="two_tier",
                 table_names=[tier_table_name],
+                method_label=method,
+                mode_label=mode,
                 labels_cells=seg_result["labels_layer"],
                 labels_domain=domain_layer,
                 qc_png=seg_result.get("qc_png_path"),
@@ -476,7 +492,10 @@ def analyze_target_cells(
             "qc_png_path": qc_png_path,
             "qc_png_error": seg_result.get("qc_png_error"),
             "qc_png_skipped_reason": seg_result.get("qc_png_skipped_reason"),
-            "result_bundle_path": str(bundle_path) if own_bundle else None,
+            "result_bundle_path": (
+                None if bundle_batch_managed else str(bundle_path)
+            ),
+            "bundle_created": own_bundle,
             "result_files": dict(bundle_outputs),
             "voxel_scale": voxel,
             "warnings": (
@@ -520,7 +539,10 @@ def analyze_target_cells(
         "table_name": measure_result["table_name"],
         "primary_table_name": measure_result["table_name"],
         "table_columns": measure_result["columns"],
-        "result_bundle_path": str(bundle_path) if own_bundle else None,
+        "result_bundle_path": (
+            None if bundle_batch_managed else str(bundle_path)
+        ),
+        "bundle_created": own_bundle,
         "result_files": dict(bundle_outputs),
         "voxel_scale": voxel,
         "has_physical_units": bool(measure_result.get("has_physical_units")),
