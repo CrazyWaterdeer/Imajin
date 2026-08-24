@@ -61,8 +61,14 @@ def _reopen_bundle(bundle: Path) -> None:
             "outputs": list(seed.get("outputs") or []),
             "sample_index": list(seed.get("sample_index") or []),
         }
-    if run_context.get("status") == "in_progress":
+    # An ad-hoc folder that the user explicitly reopens is a deliberate choice,
+    # so it stops being ad-hoc — otherwise the analysis path keeps refusing it
+    # and the "this bundle is now the append target" note below stays false.
+    was_adhoc = str(run_context.get("kind") or "") == "adhoc"
+    if run_context.get("status") == "in_progress" and not was_adhoc:
         return
+    if was_adhoc:
+        run_context["kind"] = "single"
     run_context["status"] = "in_progress"
     run_context.pop("finalized_at", None)
     seed["run_context"] = run_context
@@ -209,6 +215,11 @@ def open_result_bundle(bundle_path: str, directory: str | None = None) -> dict[s
     # closed folder silently collecting the next file's outputs). Without this
     # the note below would be false and every resumed file would mint a folder.
     _reopen_bundle(bundle)
+    # Explicitly reopening a folder promotes it to a session bundle, even if
+    # this process originally minted it for a single file.
+    from imajin.tools._workflow_outputs import _auto_per_file_bundles
+
+    _auto_per_file_bundles.discard(str(bundle))
     promote_to_process_bundle(bundle)
     try:
         recipe_info = import_recipe_from_bundle(str(bundle))

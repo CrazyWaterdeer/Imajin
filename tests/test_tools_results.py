@@ -52,11 +52,12 @@ def test_save_labels_uses_source_layer_anchor(viewer, tmp_path, monkeypatch) -> 
 
     res = results.save_labels("target_objects")
 
-    # save_labels now uses bundle_output_path which routes via user_results_root()
-    # (IMAJIN_RESULTS_DIR), not the source-layer anchor.
+    # save_labels routes via user_results_root() (IMAJIN_RESULTS_DIR), not the
+    # source-layer anchor. The FILENAME comes from the source file, not the
+    # layer: `target_objects` repeats for every file in a folder.
     out = Path(res["path"])
     assert out.is_relative_to(tmp_path / "fallback")
-    assert out.name == "target_objects.tif"
+    assert out.name == "sample.tif"
     assert out.exists()
     reset_process_bundle()
 
@@ -442,4 +443,87 @@ def test_save_result_bundle_keeps_caller_metadata_when_appending(
 
     seed = read_bundle_metadata(Path(res["bundle_path"]))
     assert seed["recipe_params"]["roi"] == "hindgut"
+    reset_process_bundle()
+
+
+def test_new_bundle_does_not_hijack_the_session(viewer, tmp_path, monkeypatch):
+    """new_bundle=True writes one result aside; it must not switch the session."""
+    monkeypatch.setenv("IMAJIN_RESULTS_DIR", str(tmp_path))
+    from imajin.result_bundles import current_bundle, reset_process_bundle
+    from imajin.tools import bundle as bundle_tools
+    from imajin.tools import results as results_tools
+
+    reset_process_bundle()
+    session = Path(bundle_tools.start_analysis("session")["bundle_path"])
+
+    sidecar = results_tools.save_result_bundle("sidecar", new_bundle=True)
+    assert Path(sidecar["bundle_path"]) != session
+    assert current_bundle() == session, "the sidecar stole the session slot"
+
+    later = results_tools.save_result_bundle("later")
+    assert Path(later["bundle_path"]) == session
+    reset_process_bundle()
+
+
+def test_save_labels_does_not_overwrite_another_files_labels(
+    viewer, tmp_path, monkeypatch
+):
+    """Default-path save_labels honours per-file identity like the other writers."""
+    import tifffile
+
+    monkeypatch.setenv("IMAJIN_RESULTS_DIR", str(tmp_path / "results"))
+    from imajin.result_bundles import reset_process_bundle
+    from imajin.tools import results as results_tools
+
+    reset_process_bundle()
+    raw = tmp_path / "raw"
+    raw.mkdir()
+    written = {}
+    for stem, n in (("rectum_1", 1), ("rectum_2", 2)):
+        source = raw / f"{stem}.lsm"
+        source.write_bytes(b"")
+        labels = np.zeros((12, 12), dtype=np.int32)
+        for i in range(n):
+            labels[i * 4 : i * 4 + 3, 1:4] = i + 1
+        viewer.layers.clear()
+        viewer.add_image(
+            np.zeros((12, 12), dtype=np.float32),
+            name="Ch2-T1",
+            metadata={"source_path": str(source)},
+        )
+        viewer.add_labels(
+            labels, name="Ch2-T1_objects", metadata={"source_layer": "Ch2-T1"}
+        )
+        written[stem] = Path(results_tools.save_labels("Ch2-T1_objects")["path"])
+
+    assert written["rectum_1"] != written["rectum_2"]
+    assert int(tifffile.imread(written["rectum_1"]).max()) == 1
+    assert int(tifffile.imread(written["rectum_2"]).max()) == 2
+    reset_process_bundle()
+
+
+def test_save_result_bundle_does_not_overwrite_an_unattributed_file(
+    viewer, tmp_path, monkeypatch
+):
+    """A pre-existing file the index does not attribute is somebody's, not free space."""
+    monkeypatch.setenv("IMAJIN_RESULTS_DIR", str(tmp_path))
+    from imajin.result_bundles import promote_to_process_bundle, reset_process_bundle
+    from imajin.results import create_result_bundle
+    from imajin.tools import results as results_tools
+
+    reset_process_bundle()
+    bundle = create_result_bundle("legacy", kind="single")
+    legacy = bundle / "labels" / "cells" / "Ch2-T1_objects.tif"
+    legacy.parent.mkdir(parents=True, exist_ok=True)
+    legacy.write_bytes(b"legacy-content-not-a-real-tiff")
+    promote_to_process_bundle(bundle)
+
+    labels = np.zeros((8, 8), dtype=np.uint16)
+    labels[1:3, 1:3] = 1
+    viewer.add_labels(labels, name="Ch2-T1_objects")
+    results_tools.save_result_bundle("new", labels_layers=["Ch2-T1_objects"])
+
+    assert legacy.read_bytes() == b"legacy-content-not-a-real-tiff"
+    written = sorted(p.name for p in (bundle / "labels" / "cells").iterdir())
+    assert written == ["Ch2-T1_objects.tif", "Ch2-T1_objects_2.tif"]
     reset_process_bundle()

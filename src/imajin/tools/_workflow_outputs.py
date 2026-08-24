@@ -45,6 +45,18 @@ def _single_bundle_run_context_extras(anchor: Path | None) -> dict[str, Any]:
     }
 
 
+# Folders this module minted for ONE file. A per-file folder is not a session,
+# so it must never become the next file's destination — otherwise a file whose
+# analysis failed (or was rejected by argument validation) leaves its folder in
+# the process slot and the next file quietly writes into it.
+_auto_per_file_bundles: set[str] = set()
+
+
+def reset_auto_per_file_bundles() -> None:
+    """Forget the per-file folders this process minted. Intended for tests."""
+    _auto_per_file_bundles.clear()
+
+
 def _reusable_session_bundle() -> Path | None:
     """The open session bundle to append this file's outputs to, if there is one.
 
@@ -56,6 +68,9 @@ def _reusable_session_bundle() -> Path | None:
     * ``status == "in_progress"`` — never append to a finalized bundle. A closed
       folder that keeps accepting writes is how each file's QC ended up filed
       under the previous file.
+    * not one of the per-file folders this module minted itself — those belong
+      to a single file even while still open, which matters when that file's
+      analysis fails before anything finalizes it.
 
     Discriminates on the metadata ``kind`` field, not the ``_adhoc`` folder-name
     suffix, which misfires on the ``_adhoc_2``/``_adhoc_3`` dedup variants.
@@ -64,6 +79,8 @@ def _reusable_session_bundle() -> Path | None:
 
     bundle = current_bundle()
     if bundle is None:
+        return None
+    if str(bundle) in _auto_per_file_bundles:
         return None
     try:
         run_context = (
@@ -124,7 +141,14 @@ def _sample_identity(
                 continue
             prior = sample.get("source_file")
             if prior and str(prior) != str(source_file):
-                return stem, sample_slug_for(key)
+                # Disambiguate the NAME too, not just the filename on disk.
+                # run_context.samples and combined.csv are both keyed by
+                # sample_name, so leaving it as the bare stem merges two
+                # different files into one record — the ordinary
+                # condition-per-subfolder layout (raw/a/x.lsm, raw/b/x.lsm)
+                # would silently lose one of them.
+                unique = sample_slug_for(key)
+                return unique, unique
     return stem, slug
 
 
@@ -225,6 +249,7 @@ def pin_analysis_bundle(
         },
         root=anchor,
     )
+    _auto_per_file_bundles.add(str(bundle_path))
     promote_to_process_bundle(bundle_path)
     return AnalysisBundle(
         path=bundle_path,
@@ -273,6 +298,9 @@ def _write_analysis_bundle_outputs(
             labels_cells=labels_cells,
             labels_domain=labels_domain,
             qc_png=qc_png,
+            # Re-analysing a file replaces its own outputs; only a DIFFERENT
+            # file landing on the same slug is a collision worth refusing.
+            owner=str(file_path) if file_path else sample_slug,
         )
     except Exception as exc:  # noqa: BLE001
         # Loud, not decorative: the sample's labels/QC are NOT in the bundle, so
@@ -293,9 +321,39 @@ def _write_analysis_bundle_outputs(
         source_file=str(file_path) if file_path else None,
         **dict(sample_summary or {}),
     )
-    # Durable per-sample done-record, so a session bundle can be resumed and a
-    # finished file is never silently re-analysed. Best-effort: a metadata hiccup
-    # must not fail an analysis that already completed.
+    try:
+        if not batch_managed:
+            # Every file's measurements land in the bundle, then combined.csv is
+            # rebuilt across all of them — a session bundle is now a complete,
+            # self-describing result set without a separate save_result_bundle.
+            write_sample_tables(
+                bundle_path,
+                table_names,
+                sample_name=sample_name,
+                sample_slug=sample_slug,
+            )
+            write_combined_csv(bundle_path, table_names, warnings=warnings)
+        if not batch_managed:
+            finalize_bundle_metadata(
+                bundle_path,
+                samples=[summary],
+                status="complete" if own_bundle else "in_progress",
+                extra={
+                    "run_context_extras": _single_bundle_run_context_extras(anchor)
+                }
+                if own_bundle
+                else {},
+            )
+    except Exception as exc:  # noqa: BLE001
+        warnings.append(
+            f"sample {sample_name!r} could not be recorded in the bundle: "
+            f"{type(exc).__name__}: {exc}"
+        )
+
+    # Durable per-sample done-record — the COMMIT POINT, so it is written last,
+    # after the labels, QC and tables it points at. A crash before this leaves
+    # the sample unrecorded and therefore pending, which is the safe direction.
+    # Best-effort: a metadata hiccup must not fail an analysis that finished.
     if not batch_managed and file_path:
         try:
             from imajin.result_bundles import record_sample_index_entry
@@ -315,34 +373,5 @@ def _write_analysis_bundle_outputs(
                 f"sample index entry for {sample_name!r} could not be written: "
                 f"{type(exc).__name__}: {exc}"
             )
-
-    try:
-        if not batch_managed:
-            # Every file's measurements land in the bundle, then combined.csv is
-            # rebuilt across all of them — a session bundle is now a complete,
-            # self-describing result set without a separate save_result_bundle.
-            write_sample_tables(
-                bundle_path,
-                table_names,
-                sample_name=sample_name,
-                sample_slug=sample_slug,
-            )
-            write_combined_csv(bundle_path, table_names)
-        if not batch_managed:
-            finalize_bundle_metadata(
-                bundle_path,
-                samples=[summary],
-                status="complete" if own_bundle else "in_progress",
-                extra={
-                    "run_context_extras": _single_bundle_run_context_extras(anchor)
-                }
-                if own_bundle
-                else {},
-            )
-    except Exception as exc:  # noqa: BLE001
-        warnings.append(
-            f"sample {sample_name!r} could not be recorded in the bundle: "
-            f"{type(exc).__name__}: {exc}"
-        )
 
     return bundle_path, own_bundle, batch_managed, bundle_outputs, warnings

@@ -384,8 +384,22 @@ def write_label_tiff(path: Path, labels: np.ndarray) -> None:
         tifffile.imwrite(path, labels, photometric="minisblack")
 
 
-def write_label_layer(bundle: Path, tier: str, sample_slug: str, layer_name: str) -> str:
-    """Snapshot a label layer and write it to bundle/labels/<tier>/<slug>.tif."""
+def write_label_layer(
+    bundle: Path,
+    tier: str,
+    sample_slug: str,
+    layer_name: str,
+    *,
+    owner: str | None = None,
+) -> str:
+    """Snapshot a label layer and write it to bundle/labels/<tier>/<slug>.tif.
+
+    ``owner`` identifies whose output this is — the source file, normally. When
+    the destination already belongs to the same owner the write proceeds, so
+    re-analysing a file with different parameters replaces its own labels. A
+    destination owned by someone ELSE is a slug collision and still raises,
+    because that is data loss.
+    """
     from imajin.tools.napari_ops import snapshot_layer
 
     layer = call_on_main(snapshot_layer, layer_name)
@@ -394,13 +408,27 @@ def write_label_layer(bundle: Path, tier: str, sample_slug: str, layer_name: str
     rel = Path("labels") / tier / f"{sample_slug}.tif"
     out = bundle / rel
     out.parent.mkdir(parents=True, exist_ok=True)
-    if out.exists():
+    if out.exists() and not _output_belongs_to(bundle, rel, owner):
         raise ValueError(
             f"{rel} already exists in bundle {bundle.name}; "
             "sample_slug collision suspected"
         )
     write_label_tiff(out, labels)
     return rel.as_posix()
+
+
+def _output_belongs_to(bundle: Path, rel: Path, owner: str | None) -> bool:
+    """Is the existing output at ``rel`` already this owner's own file?"""
+    if owner is None:
+        return False
+    target = rel.as_posix()
+    for entry in read_bundle_metadata(bundle).get("outputs") or []:
+        if not isinstance(entry, dict) or entry.get("path") != target:
+            continue
+        metadata = entry.get("metadata")
+        if isinstance(metadata, dict):
+            return str(metadata.get("owner") or "") == owner
+    return False
 
 
 def copy_qc_png(bundle: Path, qc_png: str, sample_slug: str) -> str | None:
@@ -431,6 +459,7 @@ def populate_sample_outputs(
     labels_cells: str | None = None,
     labels_domain: str | None = None,
     qc_png: str | None = None,
+    owner: str | None = None,
 ) -> dict[str, str | None]:
     out: dict[str, str | None] = {
         "labels_cells": None,
@@ -439,7 +468,9 @@ def populate_sample_outputs(
     }
     with with_active_bundle(bundle):
         if labels_cells:
-            rel = write_label_layer(bundle, "cells", sample_slug, labels_cells)
+            rel = write_label_layer(
+                bundle, "cells", sample_slug, labels_cells, owner=owner
+            )
             out["labels_cells"] = rel
             # Register what we write, so the outputs index reflects the files
             # that actually exist and a second writer can upsert instead of
@@ -447,15 +478,25 @@ def populate_sample_outputs(
             register_output(
                 "labels_tiff",
                 bundle / rel,
-                {"labels_layer": labels_cells, "sample_slug": sample_slug},
+                {
+                    "labels_layer": labels_cells,
+                    "sample_slug": sample_slug,
+                    "owner": owner,
+                },
             )
         if labels_domain:
-            rel = write_label_layer(bundle, "domain", sample_slug, labels_domain)
+            rel = write_label_layer(
+                bundle, "domain", sample_slug, labels_domain, owner=owner
+            )
             out["labels_domain"] = rel
             register_output(
                 "labels_tiff",
                 bundle / rel,
-                {"labels_layer": labels_domain, "sample_slug": sample_slug},
+                {
+                    "labels_layer": labels_domain,
+                    "sample_slug": sample_slug,
+                    "owner": owner,
+                },
             )
         if qc_png:
             previous = Path(qc_png).resolve()
@@ -473,7 +514,11 @@ def populate_sample_outputs(
                 register_output(
                     "qc_png",
                     bundle / rel,
-                    {"source": str(qc_png), "sample_slug": sample_slug},
+                    {
+                        "source": str(qc_png),
+                        "sample_slug": sample_slug,
+                        "owner": owner,
+                    },
                 )
     return out
 
@@ -527,7 +572,12 @@ def write_sample_tables(
     return written
 
 
-def write_combined_csv(bundle: Path, table_names: list[str]) -> Path:
+def write_combined_csv(
+    bundle: Path,
+    table_names: list[str],
+    *,
+    warnings: list[str] | None = None,
+) -> Path:
     """Rebuild ``<bundle>/tables/combined.csv`` from every per-sample table on disk.
 
     Concatenates the registered per-sample CSVs rather than only the current
@@ -544,6 +594,7 @@ def write_combined_csv(bundle: Path, table_names: list[str]) -> Path:
 
     frames: list[pd.DataFrame] = []
     seen: set[str] = set()
+    unreadable: list[str] = []
     seed = read_bundle_metadata(bundle)
     for entry in seed.get("outputs") or []:
         if not isinstance(entry, dict) or entry.get("kind") != "table_csv":
@@ -566,7 +617,22 @@ def write_combined_csv(bundle: Path, table_names: list[str]) -> Path:
         seen.add(rel)
         try:
             frames.append(pd.read_csv(path))
-        except Exception:  # noqa: BLE001 - a malformed CSV must not block the run
+        except Exception as exc:  # noqa: BLE001 - one bad CSV must not block the run
+            # But it must not vanish either: a pooled table quietly missing a
+            # sample is worse than a loud one, because the statistics still run.
+            message = (
+                f"{rel} could not be read and is MISSING from combined.csv "
+                f"({type(exc).__name__}: {exc})"
+            )
+            if warnings is not None:
+                warnings.append(message)
+            else:
+                import warnings as _warnings
+
+                _warnings.warn(message, RuntimeWarning, stacklevel=2)
+            sample = (entry.get("metadata") or {}).get("sample_name")
+            if sample:
+                unreadable.append(str(sample))
             continue
 
     if not frames:
@@ -579,6 +645,19 @@ def write_combined_csv(bundle: Path, table_names: list[str]) -> Path:
             if frame is None or frame.empty:
                 continue
             frames.append(frame)
+
+    # A rebuild must never LOSE a sample that was already pooled. If a
+    # per-sample CSV has become unreadable, carry its rows over from the
+    # previous combined.csv rather than dropping them on the floor.
+    if unreadable and out.exists():
+        try:
+            previous = pd.read_csv(out)
+        except Exception:  # noqa: BLE001
+            previous = None
+        if previous is not None and "sample_name" in previous.columns:
+            rescued = previous[previous["sample_name"].isin(unreadable)]
+            if not rescued.empty:
+                frames.append(rescued)
 
     combined = (
         pd.concat(frames, ignore_index=True, sort=False) if frames else pd.DataFrame()
@@ -895,11 +974,18 @@ def _run_atexit_finalize() -> None:
         seed = read_bundle_metadata(bundle)
         if not seed:
             return
-        document = dict(seed)
+        # Preserve unknown top-level keys (operator notes, voxel_scale, ...)
+        # instead of narrowing the document to the v3 shape: this hook only
+        # closes the status, it is not a migration.
+        document = {**dict(seed), **_as_schema_v3(seed)}
         run_context = dict(document.get("run_context") or {})
         run_context["status"] = "complete"
         run_context["finalized_at"] = _kst_now_iso()
         document["run_context"] = run_context
+        if seed.get("sample_index") is not None:
+            document["sample_index"] = list(seed.get("sample_index") or [])
+        if seed.get("input_anchor"):
+            document["input_anchor"] = seed["input_anchor"]
         write_bundle_metadata(bundle, document)
     finally:
         with _process_bundle_lock:

@@ -36,6 +36,7 @@ def _isolate_results_root(tmp_path_factory, monkeypatch):
 def _reset_sample_annotations():
     from imajin import session as state
     from imajin.result_bundles import reset_process_bundle
+    from imajin.tools._workflow_outputs import reset_auto_per_file_bundles
     from imajin.tools import trace
 
     trace.reset_skeletons()
@@ -46,6 +47,7 @@ def _reset_sample_annotations():
     state.reset_runs()
     state.reset_qc_records()
     reset_process_bundle()
+    reset_auto_per_file_bundles()
     yield
     trace.reset_skeletons()
     state.reset_samples()
@@ -55,6 +57,7 @@ def _reset_sample_annotations():
     state.reset_runs()
     state.reset_qc_records()
     reset_process_bundle()
+    reset_auto_per_file_bundles()
 
 
 @pytest.fixture

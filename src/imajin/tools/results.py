@@ -98,10 +98,15 @@ def _non_clobbering_path(
     """Resolve <bundle>/<category>/<filename>, never overwriting another file's output.
 
     Re-saving the SAME source (same labels layer, same QC image) overwrites in
-    place so a repeated save stays idempotent. A different source landing on a
-    taken name gets `_2`, `_3`, ... instead of silently replacing it — which is
-    what happened when several files shared a bundle under one layer-derived
-    name and six of seven label TIFFs were lost.
+    place so a repeated save stays idempotent. Anything else landing on a taken
+    name gets `_2`, `_3`, ... instead of silently replacing it — which is what
+    happened when several files shared a bundle under one layer-derived name and
+    six of seven label TIFFs were lost.
+
+    An existing file that this bundle's index does not attribute to anyone is
+    treated as somebody else's, not as free space: a pre-existing bundle written
+    by an older version registers nothing, and overwriting it would be the same
+    data loss by another route.
     """
     stem = Path(filename).stem
     suffix = Path(filename).suffix
@@ -109,9 +114,8 @@ def _non_clobbering_path(
     index = 1
     while candidate.exists():
         rel = candidate.relative_to(bundle).as_posix()
-        prior = _registered_identity(bundle, rel, identity_key)
-        if prior is None or prior == identity_value:
-            break  # same source (or unattributed) — overwrite in place
+        if _registered_identity(bundle, rel, identity_key) == identity_value:
+            break  # our own earlier output — overwrite in place
         index += 1
         candidate = bundle / category / f"{stem}_{index}{suffix}"
     candidate.parent.mkdir(parents=True, exist_ok=True)
@@ -190,17 +194,29 @@ def save_labels(
     out_dtype = _label_output_dtype(data)
     labels = data.astype(out_dtype, copy=False)
 
-    out = _resolve_output_path(
-        path,
-        category="labels",
-        filename=f"{slugify_result_name(labels_layer)}.tif",
-    )
+    slug = _sample_slug_for_layer(labels_layer)
+    if path:
+        out = normalize_user_path(path).resolve()
+        out.parent.mkdir(parents=True, exist_ok=True)
+    else:
+        # Same per-file identity + no-clobber rule as save_result_bundle: an
+        # explicit path is the caller's business, a default one must not
+        # overwrite another file's labels.
+        bundle = _bundle_io.ensure_active_bundle()
+        out = _non_clobbering_path(
+            bundle,
+            "labels",
+            f"{slugify_result_name(slug or labels_layer)}.tif",
+            identity_key="sample_slug" if slug else "labels_layer",
+            identity_value=slug or labels_layer,
+        )
     _write_label_tiff(out, labels)
     register_output(
         "labels_tiff",
         out,
         {
             "labels_layer": labels_layer,
+            "sample_slug": slug,
             "shape": tuple(int(s) for s in labels.shape),
             "dtype": str(labels.dtype),
         },
@@ -220,7 +236,8 @@ def save_labels(
     "bundle opened by start_analysis — or the one an earlier save/output created in this "
     "task — so a sequential multi-file workflow (e.g. per-file ROI analysis) lands in ONE "
     "folder. A new folder is created only when no bundle is active; pass new_bundle=True to "
-    "force a separate folder for a genuinely independent result.",
+    "force a separate folder for a genuinely independent result — that writes the one "
+    "result aside and leaves the active bundle in place for everything after it.",
     phase="4",
 )
 def save_result_bundle(
@@ -252,7 +269,14 @@ def save_result_bundle(
             metadata=metadata,
             root=_anchor_for_layers(labels_layers),
         )
-        promote_to_process_bundle(bundle)
+        if new_bundle and current_bundle() is not None:
+            # `new_bundle=True` means "put this ONE result somewhere separate",
+            # not "switch the session". Promoting here made every later
+            # analysis and save land in the sidecar folder instead of the
+            # session the user opened, with nothing reporting the switch.
+            pass
+        else:
+            promote_to_process_bundle(bundle)
     outputs: dict[str, list[str]] = {
         "labels": [],
         "tables": [],

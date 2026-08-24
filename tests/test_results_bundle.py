@@ -708,3 +708,70 @@ def test_start_analysis_falls_back_to_results_root_without_session_files(
     bundle = start_analysis("session")
     assert bundle.parent == root
     reset_process_bundle()
+
+
+def test_combined_rebuild_does_not_lose_a_sample_with_an_unreadable_csv(
+    tmp_path, monkeypatch
+):
+    """A corrupt per-sample CSV must not silently shrink the pooled table."""
+    import pandas as pd
+
+    monkeypatch.setenv("IMAJIN_RESULTS_DIR", str(tmp_path))
+    from imajin import session as state
+    from imajin.result_bundles import (
+        reset_process_bundle,
+        write_combined_csv,
+        write_sample_tables,
+    )
+    from imajin.results import create_result_bundle
+
+    reset_process_bundle()
+    bundle = create_result_bundle("session", kind="single")
+    for stem in ("rectum_1", "rectum_2"):
+        state.put_table(stem, pd.DataFrame({"label": [1, 2], "area": [10, 20]}))
+        write_sample_tables(bundle, [stem], sample_name=stem, sample_slug=stem)
+    write_combined_csv(bundle, [])
+    assert len(pd.read_csv(bundle / "tables" / "combined.csv")) == 4
+
+    # rectum_1's CSV becomes unreadable between rebuilds.
+    (bundle / "tables" / "rectum_1.csv").write_bytes(b"\xff\xfe\x00\x01garbage")
+
+    warnings: list[str] = []
+    write_combined_csv(bundle, [], warnings=warnings)
+
+    combined = pd.read_csv(bundle / "tables" / "combined.csv")
+    assert sorted(combined["sample_name"].unique()) == ["rectum_1", "rectum_2"]
+    assert len(combined) == 4, "a sample was dropped from the pooled table"
+    assert any("rectum_1" in w for w in warnings), "the failure was silent"
+    reset_process_bundle()
+
+
+def test_atexit_close_preserves_unknown_top_level_keys(tmp_path, monkeypatch):
+    """The atexit hook closes the status; it is not a schema migration."""
+    monkeypatch.setenv("IMAJIN_RESULTS_DIR", str(tmp_path))
+    from imajin.result_bundles import (
+        _run_atexit_finalize,
+        promote_to_process_bundle,
+        reset_process_bundle,
+    )
+    from imajin.results import (
+        create_result_bundle,
+        read_bundle_metadata,
+        write_bundle_metadata,
+    )
+
+    reset_process_bundle()
+    bundle = create_result_bundle("legacy", kind="single")
+    seed = read_bundle_metadata(bundle)
+    seed["operator_notes"] = "drew ROI around the rectum"
+    seed["voxel_scale"] = [1.0, 0.15, 0.15]
+    write_bundle_metadata(bundle, seed)
+    promote_to_process_bundle(bundle)
+
+    _run_atexit_finalize()
+
+    final = read_bundle_metadata(bundle)
+    assert final["run_context"]["status"] == "complete"
+    assert final["operator_notes"] == "drew ROI around the rectum"
+    assert final["voxel_scale"] == [1.0, 0.15, 0.15]
+    reset_process_bundle()

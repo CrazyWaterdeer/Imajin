@@ -1229,3 +1229,121 @@ def test_combined_csv_does_not_double_count_a_saved_table(
     assert combined["sample_name"].notna().all()
     assert sorted(combined["sample_name"].unique()) == stems
     reset_process_bundle()
+
+
+def test_a_failed_analysis_does_not_capture_the_next_file(
+    viewer,
+    tmp_path,
+    monkeypatch,
+) -> None:
+    """A per-file folder is not a session, even while it is still open.
+
+    Pinning the destination before segmentation means a file whose analysis
+    fails still mints a folder and leaves it in the process slot. The next file
+    must not quietly write into the failed file's folder.
+    """
+    raw = tmp_path / "raw"
+    raw.mkdir()
+    results_root = tmp_path / "results"
+    monkeypatch.setenv("IMAJIN_RESULTS_DIR", str(results_root))
+    from imajin.result_bundles import reset_process_bundle
+
+    reset_process_bundle()
+    blank_source = raw / "blank.lsm"
+    blank_source.write_bytes(b"stub")
+    viewer.add_image(np.zeros((256, 256), dtype=np.float32), name="Ch2-T1")
+    viewer.layers["Ch2-T1"].metadata["source_path"] = str(blank_source)
+    # A constant image gives segmentation nothing to threshold.
+    try:
+        workflows.analyze_target_cells(target="Ch2-T1", rerun=True)
+    except Exception:
+        pass
+
+    good_source = raw / "real.lsm"
+    good_source.write_bytes(b"stub")
+    viewer.layers.clear()
+    viewer.add_image(_blob_image(), name="Ch2-T1", scale=(0.5, 0.5))
+    viewer.layers["Ch2-T1"].metadata["source_path"] = str(good_source)
+    res = workflows.analyze_target_cells(target="Ch2-T1", rerun=True)
+
+    assert res["ok"] is True
+    assert res["bundle_created"] is True, "adopted the failed file's folder"
+    assert "real" in Path(res["result_bundle_path"]).name
+    reset_process_bundle()
+
+
+def test_same_stem_in_two_folders_stays_two_samples(
+    viewer,
+    tmp_path,
+    monkeypatch,
+) -> None:
+    """condition-per-subfolder (raw/a/x.lsm, raw/b/x.lsm) must not merge.
+
+    run_context.samples and combined.csv are both keyed by sample_name, so
+    disambiguating only the filename on disk left two different files sharing
+    one record and one label in the pooled table.
+    """
+    import pandas as pd
+
+    monkeypatch.setenv("IMAJIN_RESULTS_DIR", str(tmp_path / "results"))
+    from imajin.result_bundles import reset_process_bundle
+    from imajin.tools import bundle as bundle_tools
+
+    reset_process_bundle()
+    bundle = Path(bundle_tools.start_analysis("session")["bundle_path"])
+
+    for condition in ("a", "b"):
+        folder = tmp_path / "raw" / condition
+        folder.mkdir(parents=True)
+        source = folder / "rectum_1.lsm"
+        source.write_bytes(b"stub")
+        viewer.layers.clear()
+        viewer.add_image(_blob_image(), name="Ch2-T1", scale=(0.5, 0.5))
+        viewer.layers["Ch2-T1"].metadata["source_path"] = str(source)
+        assert workflows.analyze_target_cells(target="Ch2-T1", rerun=True)["ok"]
+
+    meta = json.loads((bundle / "metadata.json").read_text())
+    samples = meta["run_context"]["samples"]
+    assert meta["run_context"]["n_samples"] == 2, "the two files merged"
+    assert len({s["sample_name"] for s in samples}) == 2
+    assert len({s["source_file"] for s in samples}) == 2
+
+    combined = pd.read_csv(bundle / "tables" / "combined.csv")
+    assert combined["sample_name"].nunique() == 2
+    reset_process_bundle()
+
+
+def test_reopening_an_adhoc_bundle_makes_it_a_real_append_target(
+    viewer,
+    tmp_path,
+    monkeypatch,
+) -> None:
+    """open_result_bundle promises an append target even for an ad-hoc folder.
+
+    The reuse guard rejects kind == "adhoc" as well as a closed status, so
+    flipping only the status left the promise false: the analysis minted its own
+    folder and evicted the bundle the resume scope still pointed at.
+    """
+    raw = tmp_path / "raw"
+    raw.mkdir()
+    monkeypatch.setenv("IMAJIN_RESULTS_DIR", str(tmp_path / "results"))
+    from imajin.result_bundles import ensure_active_bundle, reset_process_bundle
+    from imajin.tools import bundle_resume
+
+    reset_process_bundle()
+    adhoc = ensure_active_bundle()
+    assert adhoc.name.endswith("_adhoc")
+    reset_process_bundle()
+
+    bundle_resume.open_result_bundle(str(adhoc))
+
+    source = raw / "rectum_1.lsm"
+    source.write_bytes(b"stub")
+    viewer.add_image(_blob_image(), name="Ch2-T1", scale=(0.5, 0.5))
+    viewer.layers["Ch2-T1"].metadata["source_path"] = str(source)
+    res = workflows.analyze_target_cells(target="Ch2-T1", rerun=True)
+
+    assert res["ok"] is True
+    assert Path(res["result_bundle_path"]) == adhoc
+    assert res["bundle_created"] is False
+    reset_process_bundle()
