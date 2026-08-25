@@ -200,6 +200,30 @@ def _force_subscription_env():
 _SENTINEL = object()
 
 
+def _explain_connect_failure(exc: Exception) -> Exception:
+    """Turn the SDK's misleading 'Claude Code not found' into the real reason.
+
+    The SDK catches ``FileNotFoundError`` from the process spawn and blames the
+    CLI path. On Windows that same exception is what a command line over 32,767
+    characters produces (WinError 206), so a perfectly present 230 MB claude.exe
+    gets reported as missing. If the path it names is actually there, say what is
+    really wrong.
+    """
+    message = str(exc)
+    marker = "Claude Code not found at: "
+    if marker not in message:
+        return exc
+    cli_path = message.split(marker, 1)[1].strip()
+    if not cli_path or not Path(cli_path).exists():
+        return exc  # genuinely missing — the SDK's message is correct
+    return RuntimeError(
+        f"the Claude Code CLI at {cli_path} exists but could not be launched. "
+        "On Windows this is almost always a command line over the 32,767-character "
+        "limit — the system prompt plus the bridged tool list. Shorten the system "
+        "prompt or reduce the number of bridged tools."
+    )
+
+
 class ClaudeAgentRunner:
     """Runner backed by the local Claude Code subscription via the Claude Agent SDK.
 
@@ -231,6 +255,7 @@ class ClaudeAgentRunner:
         self._server: Any | None = None
         self._allowed: list[str] = []
         self._cwd = tempfile.gettempdir()
+        self._prompt_file: Path | None = None
         # Persistent async machinery (created lazily on the first turn).
         self._loop: asyncio.AbstractEventLoop | None = None
         self._thread: threading.Thread | None = None
@@ -314,11 +339,42 @@ class ClaudeAgentRunner:
         self._allowed = allowed
         return self._server, self._allowed
 
+    def _write_prompt_file(self) -> Path:
+        """Spill the system prompt to a file so it stays off the command line.
+
+        The SDK passes ``--system-prompt <text>`` as one argv element. Windows
+        caps a whole command line at 32,767 characters, and the system prompt
+        alone is ~30k before the ~3k of ``--allowedTools`` for Imajin's 130
+        bridged tools — so inlining it overflows, CreateProcess fails with
+        WinError 206, and Python raises FileNotFoundError, which the SDK reports
+        as the thoroughly misleading "Claude Code not found at: <path>".
+
+        ``--system-prompt-file`` takes the text out of the argv budget entirely,
+        so the limit stops depending on how long the prompt has grown.
+        """
+        if self._prompt_file is not None and self._prompt_file.exists():
+            return self._prompt_file
+        fd, name = tempfile.mkstemp(prefix="imajin_system_prompt_", suffix=".md")
+        os.close(fd)
+        path = Path(name)
+        path.write_text(self.system_prompt, encoding="utf-8")
+        self._prompt_file = path
+        return path
+
+    def _cleanup_prompt_file(self) -> None:
+        path, self._prompt_file = self._prompt_file, None
+        if path is None:
+            return
+        try:
+            path.unlink()
+        except OSError:  # noqa: PERF203 - best-effort cleanup
+            pass
+
     def _build_options(self, server: Any, allowed: list[str]) -> Any:
         sdk = _sdk()
         return sdk.ClaudeAgentOptions(
             model=self.model,
-            system_prompt=self.system_prompt,
+            system_prompt={"type": "file", "path": str(self._write_prompt_file())},
             mcp_servers={_MCP_SERVER: server},
             allowed_tools=allowed,
             disallowed_tools=list(_DISALLOWED_BUILTINS),
@@ -357,12 +413,16 @@ class ClaudeAgentRunner:
         # The CLI subprocess is spawned during connect(); strip API-key env vars
         # for that window so it authenticates against the subscription OAuth.
         with _force_subscription_env():
-            self._call(client.connect())
+            try:
+                self._call(client.connect())
+            except Exception as exc:  # noqa: BLE001
+                raise _explain_connect_failure(exc) from exc
         self._client = client
 
     def _disconnect(self) -> None:
         client = self._client
         self._client = None
+        self._cleanup_prompt_file()
         if client is None or self._loop is None:
             return
         try:
