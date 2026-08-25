@@ -5,11 +5,13 @@ tested here with lightweight fakes, so no `claude` CLI or network is required.
 """
 from __future__ import annotations
 
+from pathlib import Path
 from types import SimpleNamespace
 
 from imajin.agent.providers.base import TextDelta, ToolUse, ToolUseStart
 from imajin.agent.providers.claude_agent import (
     ClaudeAgentRunner,
+    _explain_connect_failure,
     _flatten_tool_result,
     _map_usage,
     _strip_ns,
@@ -219,3 +221,59 @@ def test_turn_reports_connect_failure_in_stream(monkeypatch):
 
     assert any(isinstance(e, TextDelta) and "no claude login" in e.text for e in events)
     assert isinstance(events[-1], TurnDone) and events[-1].stop_reason == "error"
+
+
+def test_system_prompt_is_passed_as_a_file_not_on_the_command_line(tmp_path):
+    """The system prompt must not be an argv element.
+
+    The SDK inlines `--system-prompt <text>`. Windows caps a whole command line
+    at 32,767 characters and Imajin's prompt is ~30k before the ~3k of
+    --allowedTools for its bridged tools, so inlining it overflowed:
+    CreateProcess failed with WinError 206, Python raised FileNotFoundError, and
+    the SDK reported it as "Claude Code not found at: <path>" for a claude.exe
+    that was sitting right there.
+    """
+    prompt = "x" * 30_000
+    runner = ClaudeAgentRunner(model="m", system_prompt=prompt)
+    try:
+        options = runner._build_options(server=object(), allowed=["mcp__imajin__a"])
+        spec = options.system_prompt
+        assert isinstance(spec, dict) and spec["type"] == "file"
+        path = Path(spec["path"])
+        assert path.read_text(encoding="utf-8") == prompt
+        # Nothing prompt-sized is left inline.
+        assert len(str(spec)) < 500
+    finally:
+        runner._cleanup_prompt_file()
+
+
+def test_prompt_file_is_reused_then_cleaned_up():
+    runner = ClaudeAgentRunner(model="m", system_prompt="hello")
+    first = runner._write_prompt_file()
+    assert first.exists()
+    assert runner._write_prompt_file() == first  # reused, not re-created per turn
+    runner._cleanup_prompt_file()
+    assert not first.exists()
+    assert runner._prompt_file is None
+    runner._cleanup_prompt_file()  # idempotent
+
+
+def test_connect_failure_explains_a_present_cli(tmp_path):
+    """A 'not found' error naming a CLI that exists must not be taken at face value."""
+    cli = tmp_path / "claude.exe"
+    cli.write_bytes(b"MZ")
+
+    explained = _explain_connect_failure(
+        RuntimeError(f"Claude Code not found at: {cli}")
+    )
+    assert "exists but could not be launched" in str(explained)
+    assert "32,767" in str(explained)
+
+
+def test_connect_failure_is_left_alone_when_the_cli_really_is_missing(tmp_path):
+    missing = tmp_path / "nope" / "claude.exe"
+    original = RuntimeError(f"Claude Code not found at: {missing}")
+    assert _explain_connect_failure(original) is original
+
+    unrelated = RuntimeError("something else entirely")
+    assert _explain_connect_failure(unrelated) is unrelated
