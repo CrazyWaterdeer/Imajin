@@ -16,8 +16,14 @@ from qtpy.QtWidgets import (
     QWidget,
 )
 
-from imajin.agent.qt_tool_runner import MainThreadToolRunner
 from imajin.agent.execution import get_execution_service
+from imajin.agent.local_models import (
+    LocalModel,
+    choose_num_ctx,
+    discover_ollama_models,
+    estimate_prompt_tokens,
+)
+from imajin.agent.qt_tool_runner import MainThreadToolRunner
 from imajin.ui.chat_transcript import ChatTranscript
 from imajin.ui.provider_status import ProviderStatus, compute_statuses
 from imajin.ui.theme import apply_dock_theme
@@ -25,15 +31,46 @@ from imajin.ui.theme import apply_dock_theme
 # The model field for API-backed Claude and OpenAI is a *tier* token, not a pinned
 # id: the provider resolves it to the latest concrete model at connection time (see
 # imajin.agent.model_catalog). Subscription entries use the CLI's own always-latest
-# aliases; the local model stays pinned.
+# aliases. Local (Ollama) rows are deliberately NOT listed here -- a hardcoded
+# model name would go stale the moment the user pulls a different one, so
+# ChatDock._build_model_choices appends those from live discovery instead.
 _MODEL_CHOICES: list[tuple[str, str, str]] = [
     ("Claude Sonnet (API, latest)", "anthropic", "sonnet"),
     ("Claude Opus (API, latest)", "anthropic", "opus"),
     ("Claude Sonnet (subscription)", "claude-agent", "sonnet"),
     ("Claude Opus (subscription)", "claude-agent", "opus"),
     ("GPT (OpenAI, latest)", "openai", "gpt"),
-    ("Local: qwen3.5:9b (multimodal, 256K)", "ollama", "qwen3.5:9b"),
 ]
+
+
+def _format_context_length(n: int) -> str:
+    """Render token count the way Ollama model cards do, e.g. 262144 -> "256K",
+    rather than showing the raw six-digit number."""
+    return f"{round(n / 1024)}K"
+
+
+def _local_model_label(model: LocalModel) -> str:
+    details = []
+    if model.parameter_size:
+        details.append(model.parameter_size)
+    if model.context_length:
+        details.append(_format_context_length(model.context_length))
+    suffix = f" ({', '.join(details)})" if details else ""
+    return f"Local: {model.name}{suffix}"
+
+
+def _fallback_local_choice(settings: Any) -> tuple[str, str, str]:
+    """One row to show when discover_ollama_models finds no tool-capable model
+    (daemon offline, or nothing pulled yet) -- an empty picker looks broken, a
+    row naming the configured fallback (or saying none is configured) reads as
+    the true state. It only becomes *selectable* once compute_statuses reports
+    Ollama available again (see provider_status.probe_ollama), so this can never
+    hand the user a model that was never actually confirmed to exist.
+    """
+    model = settings.ollama_model.strip()
+    if model:
+        return (f"Local: {model} (unconfirmed)", "ollama", model)
+    return ("Local: none configured", "ollama", "")
 
 
 def _short_label(label: str) -> str:
@@ -118,6 +155,40 @@ class _ModelPickerButton(QPushButton):
                 self.currentIndexChanged.emit(new_idx)
         self._build_menu()
         self._refresh_text()
+
+    def set_choices(
+        self, choices: list[tuple[str, str, str]], statuses: dict[str, ProviderStatus]
+    ) -> None:
+        """Replace the choice list in place (e.g. newly discovered local models).
+
+        Keeps the same (kind, model) selected when it is still in the new list
+        *and* still available; otherwise falls back to the first available
+        choice, same policy as refresh_statuses for a pure status change. This
+        is a rebuild, not a click, so userSelected never fires -- but
+        currentIndexChanged always does when the index actually moves, exactly
+        once: ChatDock.invalidate_runner relies on that signal to release a
+        runner that's pointed at a model no longer in the list (e.g. the user
+        deleted a pulled model between turns).
+        """
+        start_index = self._index
+        _, kind, model = self._choices[start_index]
+        self._choices = choices
+        self._statuses = statuses
+
+        found = next(
+            (i for i, (_, k, m) in enumerate(self._choices) if k == kind and m == model),
+            None,
+        )
+        status = self._statuses.get(kind)
+        if found is not None and (status is None or status.available):
+            self._index = found
+        else:
+            self._index = self._first_available_index()
+
+        self._build_menu()
+        self._refresh_text()
+        if self._index != start_index:
+            self.currentIndexChanged.emit(self._index)
 
     def current_status(self) -> ProviderStatus | None:
         kind = self._choices[self._index][1]
@@ -259,10 +330,11 @@ class ChatDock(QWidget):
         toolbar.setContentsMargins(0, 0, 0, 0)
         toolbar.setSpacing(6)
 
+        self.model_choices = self._build_model_choices()
         statuses = compute_statuses(self.settings)
         preferred = (self.settings.default_provider, self.settings.default_model)
         self.model_picker = _ModelPickerButton(
-            _MODEL_CHOICES, statuses=statuses, preferred=preferred
+            self.model_choices, statuses=statuses, preferred=preferred
         )
         self.model_picker.currentIndexChanged.connect(self._on_model_change)
         self.model_picker.userSelected.connect(self._on_user_model_select)
@@ -310,8 +382,11 @@ class ChatDock(QWidget):
         self._release_runner()
         self._provider_kind = None
         self._provider_model = None
-        # Re-probe in case API keys were just edited or Ollama just came up.
-        self.model_picker.refresh_statuses(compute_statuses(self.settings))
+        # Re-probe in case API keys were just edited or Ollama just came up, and
+        # rebuild the local rows so a model pulled (or un-pulled) since the dock
+        # was created shows up without restarting Imajin.
+        self.model_choices = self._build_model_choices()
+        self.model_picker.set_choices(self.model_choices, compute_statuses(self.settings))
 
     def closeEvent(self, event) -> None:
         # Both teardowns must run on close: stop receiving job callbacks, then
@@ -322,14 +397,38 @@ class ChatDock(QWidget):
         self._release_runner()
         super().closeEvent(event)
 
+    def _build_model_choices(self) -> list[tuple[str, str, str]]:
+        """Cloud rows are static (_MODEL_CHOICES); local rows come from live
+        Ollama discovery, filtered to models that actually advertise "tools" --
+        Imajin always needs tool calling, so a vision- or text-only model would
+        just be a picker entry that fails on the first turn. self._local_models
+        is rebuilt alongside the row list so _make_provider can look up each
+        local row's real LocalModel (context length, capabilities) by name; the
+        row tuple itself only carries the (label, kind, model) every kind shares.
+        """
+        models = [
+            m
+            for m in discover_ollama_models(self.settings.ollama_base_url)
+            if m.supports_tools
+        ]
+        self._local_models = {m.name: m for m in models}
+        if models:
+            local_rows = [(_local_model_label(m), "ollama", m.name) for m in models]
+        else:
+            local_rows = [_fallback_local_choice(self.settings)]
+        return [*_MODEL_CHOICES, *local_rows]
+
     def _make_provider(self):
+        from imajin.agent.prompts import build_system_prompt
         from imajin.agent.providers import (
             AnthropicProvider,
+            OllamaProvider,
             OpenAICompatProvider,
         )
+        from imajin.tools import tools_for_anthropic
 
         idx = self.model_picker.currentIndex()
-        _, kind, model = _MODEL_CHOICES[idx]
+        _, kind, model = self.model_choices[idx]
         if kind == "anthropic":
             if not self.settings.anthropic_api_key:
                 raise RuntimeError(
@@ -348,15 +447,51 @@ class ChatDock(QWidget):
                 model=model,
                 base_url=self.settings.openai_base_url,
             )
-        return OpenAICompatProvider(
-            api_key=None, model=model, base_url=self.settings.ollama_base_url
+
+        # "ollama" -- native /api/chat, never the OpenAI-compat endpoint: the
+        # compat endpoint ignores num_ctx in every form tested and silently
+        # truncates to Ollama's 4096-token default, which with the full 104-tool
+        # prompt (~28.3K tokens) leaves the model narrating a tool call instead
+        # of emitting one (see local_models.py's module docstring for the
+        # measured numbers). choose_num_ctx sizes the window from the model's
+        # real context_length when discovery found one; when it has to clamp
+        # below what the prompt actually needs, that's real, user-visible
+        # truncation, so it's announced in the transcript here rather than left
+        # to surface later as a model that "forgot" its tools mid-turn.
+        local_model = self._local_models.get(model)
+        if local_model is None:
+            # Unconfirmed fallback row (settings.ollama_model; discovery found
+            # nothing) -- no known context_length to clamp to, and no confirmed
+            # capabilities, so default vision off rather than trust a guess.
+            local_model = LocalModel(
+                name=model,
+                context_length=None,
+                capabilities=frozenset(),
+                parameter_size=None,
+                size_bytes=None,
+            )
+        tools_spec = tools_for_anthropic()
+        est = estimate_prompt_tokens(build_system_prompt(), tools_spec, [])
+        num_ctx = choose_num_ctx(local_model, est)
+        if num_ctx < est:
+            self._append_system(
+                f"[warning] {model}'s context window ({num_ctx} tokens) is "
+                f"smaller than the system prompt + {len(tools_spec)} tools "
+                f"(~{est} tokens). Requests will be truncated and the model may "
+                "stop seeing some or all of its tools."
+            )
+        return OllamaProvider(
+            model=model,
+            base_url=self.settings.ollama_base_url,
+            num_ctx=num_ctx,
+            supports_vision=local_model.supports_vision,
         )
 
     def _ensure_runner(self):
         from imajin.agent.prompts import build_system_prompt
 
         idx = self.model_picker.currentIndex()
-        _, kind, model = _MODEL_CHOICES[idx]
+        _, kind, model = self.model_choices[idx]
         if (
             self._runner is not None
             and self._provider_kind == kind
@@ -407,7 +542,7 @@ class ChatDock(QWidget):
     def _on_user_model_select(self, index: int) -> None:
         # Persist the user's pick so the next launch restores it. Best-effort: a
         # write failure (e.g. read-only config dir) must not break model switching.
-        _, kind, model = _MODEL_CHOICES[index]
+        _, kind, model = self.model_choices[index]
         self.settings.default_provider = kind
         self.settings.default_model = model
         try:

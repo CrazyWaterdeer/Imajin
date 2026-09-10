@@ -15,6 +15,11 @@ class Settings:
     openai_api_key: str | None = None
     openai_base_url: str = "https://api.openai.com/v1"
     ollama_base_url: str = "http://localhost:11434/v1"
+    # Only consulted when discover_ollama_models() finds no tool-capable model
+    # (daemon offline, or nothing pulled yet) -- see chat_dock._build_model_choices.
+    # Blank means "nothing configured"; the picker then shows an unconfirmed
+    # placeholder row instead of pretending a model is available.
+    ollama_model: str = ""
     default_provider: str = "anthropic"
     # Last-used model picker choice, stored as the picker's (provider, tier) tokens
     # (e.g. provider "anthropic"/"claude-agent"/"openai"/"ollama", model "sonnet"/
@@ -30,6 +35,7 @@ class Settings:
         "openai_api_key",
         "openai_base_url",
         "ollama_base_url",
+        "ollama_model",
         "ui_scale",
         "default_provider",
         "default_model",
@@ -65,6 +71,7 @@ class Settings:
             ollama_base_url=pick(
                 "OLLAMA_BASE_URL", "ollama_base_url", "http://localhost:11434/v1"
             ),
+            ollama_model=pick("OLLAMA_MODEL", "ollama_model", ""),
             ui_scale=file_data.get("ui_scale") or "auto",
             default_provider=file_data.get("default_provider") or "anthropic",
             default_model=file_data.get("default_model") or "sonnet",

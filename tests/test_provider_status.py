@@ -18,7 +18,7 @@ def _settings(**overrides) -> Settings:
 
 def test_all_available_when_keys_set_and_ollama_up() -> None:
     s = _settings()
-    with patch.object(provider_status, "is_running", return_value=True):
+    with patch.object(provider_status, "probe_ollama", return_value=(True, None)):
         statuses = provider_status.compute_statuses(s)
     assert statuses["anthropic"].available is True
     assert statuses["openai"].available is True
@@ -28,7 +28,7 @@ def test_all_available_when_keys_set_and_ollama_up() -> None:
 
 def test_anthropic_unavailable_without_key() -> None:
     s = _settings(anthropic_api_key=None)
-    with patch.object(provider_status, "is_running", return_value=True):
+    with patch.object(provider_status, "probe_ollama", return_value=(True, None)):
         statuses = provider_status.compute_statuses(s)
     assert statuses["anthropic"].available is False
     assert statuses["anthropic"].reason == "no API key"
@@ -36,24 +36,49 @@ def test_anthropic_unavailable_without_key() -> None:
 
 def test_openai_unavailable_without_key() -> None:
     s = _settings(openai_api_key=None)
-    with patch.object(provider_status, "is_running", return_value=True):
+    with patch.object(provider_status, "probe_ollama", return_value=(True, None)):
         statuses = provider_status.compute_statuses(s)
     assert statuses["openai"].available is False
 
 
 def test_ollama_unavailable_when_offline() -> None:
     s = _settings()
-    with patch.object(provider_status, "is_running", return_value=False):
+    with patch.object(provider_status, "probe_ollama", return_value=(False, "Ollama offline")):
         statuses = provider_status.compute_statuses(s)
     assert statuses["ollama"].available is False
     assert statuses["ollama"].reason == "Ollama offline"
+
+
+def test_ollama_unavailable_when_no_models_pulled() -> None:
+    # Daemon is up (TCP connects) but `ollama pull` was never run -- distinct
+    # from "offline" so the picker can tell the user what to actually do.
+    s = _settings()
+    with patch.object(
+        provider_status, "probe_ollama", return_value=(False, "no models pulled")
+    ):
+        statuses = provider_status.compute_statuses(s)
+    assert statuses["ollama"].available is False
+    assert statuses["ollama"].reason == "no models pulled"
+
+
+def test_ollama_unavailable_when_no_tool_capable_model() -> None:
+    # Daemon up, models pulled, but none advertise "tools" -- Imajin's agent
+    # loop is unusable without tool calling, so this must read as unavailable
+    # rather than a green light that fails on the first turn.
+    s = _settings()
+    with patch.object(
+        provider_status, "probe_ollama", return_value=(False, "no tool-capable model")
+    ):
+        statuses = provider_status.compute_statuses(s)
+    assert statuses["ollama"].available is False
+    assert statuses["ollama"].reason == "no tool-capable model"
 
 
 def test_all_unavailable_on_laptop_scenario() -> None:
     # No keys set + Ollama not installed/running + no `claude` login.
     s = _settings(anthropic_api_key=None, openai_api_key=None)
     with (
-        patch.object(provider_status, "is_running", return_value=False),
+        patch.object(provider_status, "probe_ollama", return_value=(False, "Ollama offline")),
         patch.object(
             provider_status, "subscription_available", return_value=(False, "not logged in")
         ),
@@ -67,7 +92,7 @@ def test_subscription_available_without_api_keys() -> None:
     # makes it available even when no keys are configured.
     s = _settings(anthropic_api_key=None, openai_api_key=None)
     with (
-        patch.object(provider_status, "is_running", return_value=False),
+        patch.object(provider_status, "probe_ollama", return_value=(False, "Ollama offline")),
         patch.object(provider_status, "subscription_available", return_value=(True, None)),
     ):
         statuses = provider_status.compute_statuses(s)

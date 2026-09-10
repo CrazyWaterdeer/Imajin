@@ -68,3 +68,41 @@ def test_from_env_defaults_model_choice_when_missing(tmp_path: Path) -> None:
     with patch.object(Settings, "secrets_path", classmethod(lambda cls: secrets)):
         s = Settings.from_env()
         assert (s.default_provider, s.default_model) == ("anthropic", "sonnet")
+
+
+def test_ollama_model_defaults_to_blank() -> None:
+    # Blank means "nothing configured" -- the model picker then shows an
+    # unconfirmed placeholder row rather than a fabricated model name.
+    s = Settings()
+    assert s.ollama_model == ""
+
+
+def test_ollama_model_persists_in_secrets_file(tmp_path: Path) -> None:
+    secrets = tmp_path / "secrets.json"
+    with patch.object(Settings, "secrets_path", classmethod(lambda cls: secrets)):
+        s = Settings()
+        s.ollama_model = "qwen3.5:9b"
+        s.save_secrets()
+
+        raw = json.loads(secrets.read_text())
+        assert raw["ollama_model"] == "qwen3.5:9b"
+
+
+def test_from_env_reads_ollama_model_from_file(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.delenv("OLLAMA_MODEL", raising=False)
+    secrets = tmp_path / "secrets.json"
+    secrets.write_text(json.dumps({"ollama_model": "llama3.1:8b"}))
+    with patch.object(Settings, "secrets_path", classmethod(lambda cls: secrets)):
+        s = Settings.from_env()
+        assert s.ollama_model == "llama3.1:8b"
+
+
+def test_from_env_prefers_ollama_model_env_var_over_file(
+    tmp_path: Path, monkeypatch
+) -> None:
+    secrets = tmp_path / "secrets.json"
+    secrets.write_text(json.dumps({"ollama_model": "from-file:1b"}))
+    monkeypatch.setenv("OLLAMA_MODEL", "from-env:1b")
+    with patch.object(Settings, "secrets_path", classmethod(lambda cls: secrets)):
+        s = Settings.from_env()
+        assert s.ollama_model == "from-env:1b"

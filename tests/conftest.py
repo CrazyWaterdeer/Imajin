@@ -33,6 +33,36 @@ def _isolate_results_root(tmp_path_factory, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _no_local_model_network(monkeypatch):
+    """Keep the suite hermetic: no test may talk to a real Ollama daemon.
+
+    ChatDock builds its model picker from live discovery, and compute_statuses
+    probes the daemon, so simply constructing a ChatDock (test_ui_skeletons)
+    opened two real sockets to 127.0.0.1:11434 -- passing or failing depending
+    on whether the developer happened to have Ollama running, and stalling for
+    the full probe timeout on a host that drops rather than refuses.
+
+    Tests that need specific discovery results override these in the usual way
+    (monkeypatch.setattr / patch.object on the *consuming* module); the later
+    override wins and is undone first, so this default never fights them.
+
+    The cache clear matters independently: local_models memoises discovery per
+    base URL for 300s, so one test that reached a real daemon would otherwise
+    leak that result into every later test in the run.
+    """
+    from imajin.agent import local_models
+    from imajin.ui import chat_dock, provider_status
+
+    local_models.clear_cache()
+    monkeypatch.setattr(chat_dock, "discover_ollama_models", lambda *a, **k: [])
+    monkeypatch.setattr(
+        provider_status, "probe_ollama", lambda *a, **k: (False, "Ollama offline")
+    )
+    yield
+    local_models.clear_cache()
+
+
+@pytest.fixture(autouse=True)
 def _reset_sample_annotations():
     from imajin import session as state
     from imajin.result_bundles import reset_process_bundle

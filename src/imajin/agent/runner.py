@@ -358,6 +358,20 @@ def _context_limit_error(exc: Exception) -> bool:
     return any(marker in text for marker in markers)
 
 
+def _drop_orphan_tool_use(blocks: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Strip tool_use blocks from an assistant message that will never get a
+    matching tool_result (the turn stopped before dispatching them, or is
+    aborting outright on a mid-stream exception).
+
+    Every provider API rejects a later request whose history carries a
+    tool_use block with no tool_result immediately after it, so committing
+    one here would not just lose this turn's call -- it would 400 every
+    subsequent turn on this conversation until the chat is reset. Text
+    blocks carry no such constraint and are kept.
+    """
+    return [b for b in blocks if b.get("type") != "tool_use"]
+
+
 class AgentRunner:
     def __init__(
         self,
@@ -519,6 +533,23 @@ class AgentRunner:
                             total_usage=total_usage,
                         )
                         return
+                    # A mid-stream failure (dropped connection, server 500, a
+                    # local model that dies mid-generation...) must not erase
+                    # output already shown to the user -- a local server can
+                    # spend minutes producing text before failing, and losing
+                    # all of it on every transient blip would be worse than a
+                    # slightly stale history entry. Any tool_use collected so
+                    # far is dropped (see _drop_orphan_tool_use): the turn is
+                    # aborting right here, so it will never get a matching
+                    # tool_result, and committing an orphan would corrupt
+                    # every future request on this conversation, not just
+                    # this turn.
+                    if current_text:
+                        assistant_blocks.append({"type": "text", "text": current_text})
+                        current_text = ""
+                    partial_blocks = _drop_orphan_tool_use(assistant_blocks)
+                    if partial_blocks:
+                        self.messages.append({"role": "assistant", "content": partial_blocks})
                     raise
 
             if self._cancelled:
@@ -528,6 +559,31 @@ class AgentRunner:
 
             if current_text:
                 assistant_blocks.append({"type": "text", "text": current_text})
+
+            if stop_reason != "tool_use" and any(
+                b.get("type") == "tool_use" for b in assistant_blocks
+            ):
+                # The provider stopped for a reason other than "tool_use"
+                # (notably "length") while assistant_blocks still holds one or
+                # more tool_use blocks it never finished emitting. Committing
+                # that tool_use anyway would leave every later request on this
+                # conversation carrying a tool_use with no matching
+                # tool_result -- Anthropic rejects that outright and local
+                # servers mishandle it, permanently corrupting the chat rather
+                # than just failing this turn. Drop it, keep whatever text the
+                # model did finish, and say plainly what happened instead of
+                # silently losing the tool call.
+                assistant_blocks = _drop_orphan_tool_use(assistant_blocks)
+                if stop_reason == "length":
+                    hint = "hit max_tokens"
+                else:
+                    hint = f"stop_reason={stop_reason}"
+                yield TextDelta(
+                    text=(
+                        "\n\n[The response was cut off before it finished calling a "
+                        f"tool ({hint}), so that tool call did not run. Please retry.]"
+                    )
+                )
 
             if assistant_blocks:
                 self.messages.append({"role": "assistant", "content": assistant_blocks})
