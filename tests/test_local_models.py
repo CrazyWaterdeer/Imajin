@@ -269,3 +269,35 @@ def test_estimate_prompt_tokens_matches_char_over_3_5_heuristic() -> None:
 
 def test_estimate_prompt_tokens_empty_inputs() -> None:
     assert lm.estimate_prompt_tokens("", [], []) == int(len("[]") * 2 / 3.5)
+
+
+# -- floor=16384 at the ollama call site (core-tool-subset num_ctx) ----------
+#
+# chat_dock._make_provider now calls choose_num_ctx(..., floor=16384) instead
+# of relying on the implicit 32768 default -- see tests/test_tool_subset.py
+# for the honest, live-registry-measured caveat: TODAY, with the tool set
+# trimmed to the 20-tool core but the system prompt not yet also trimmed
+# (that's prompts.py's separate half of this change), the real estimate
+# (~16.4K tokens) still rounds up to exactly 32768 either way, because
+# ceil-to-8192 -- not the floor -- is what lands it there. These two tests
+# isolate the floor mechanism itself with numbers standing in for "once the
+# prompt is also trimmed", so the fix is provably in place even though it is
+# not yet visible in today's single real number.
+
+
+def test_choose_num_ctx_floor_16384_lets_a_trimmed_subset_estimate_through() -> None:
+    # 9_000 * 1.5 = 13_500 -> ceils to 16384, one bucket below the old 32768
+    # default. This is what a further-trimmed prompt (core-20 tool schemas
+    # alone already cost roughly this much -- see test_tool_subset.py) would
+    # produce once prompts.py's available_tools trim also lands.
+    trimmed_subset_estimate = 9_000
+    assert lm.choose_num_ctx(_UNBOUNDED, trimmed_subset_estimate, floor=16384) == 16384
+
+
+def test_choose_num_ctx_old_default_floor_would_have_swallowed_that_saving() -> None:
+    # Same estimate as above, but with the OLD implicit default (no floor=
+    # kwarg at all) -- this is exactly the "floor swallows the saving" failure
+    # mode the call-site change fixes: a legitimately smaller window silently
+    # re-inflated back to 32768.
+    trimmed_subset_estimate = 9_000
+    assert lm.choose_num_ctx(_UNBOUNDED, trimmed_subset_estimate) == 32768

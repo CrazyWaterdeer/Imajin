@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
@@ -24,7 +25,9 @@ from imajin.agent.local_models import (
     discover_ollama_models,
     estimate_prompt_tokens,
 )
+from imajin.agent.providers.base import Event
 from imajin.agent.qt_tool_runner import MainThreadToolRunner
+from imajin.agent.tool_subset import CORE_TOOL_NAMES, core_tools, missing_core_names
 from imajin.ui.chat_transcript import ChatTranscript
 from imajin.ui.provider_status import ProviderStatus, compute_statuses
 from imajin.ui.theme import apply_dock_theme
@@ -372,6 +375,63 @@ class _ComposerInput(QPlainTextEdit):
         super().keyPressEvent(event)
 
 
+def _local_system_prompt(available_tools: set[str]) -> str:
+    """build_system_prompt(available_tools=...), so the model's own instructions
+    never point it at a tool outside the core set it was actually given.
+
+    Called directly rather than through a capability probe: an earlier
+    inspect.signature() shim guarded against prompts.py's half of this change
+    landing later, but both halves are in the tree now, and that shim failed
+    OPEN -- a rename would have silently reverted the local path to the full
+    33k-char prompt naming 87 uncallable tools, with no error. A TypeError on
+    a rename is the better failure, and the tests call this kwarg by keyword.
+    """
+    from imajin.agent.prompts import build_system_prompt
+
+    return build_system_prompt(available_tools=available_tools)
+
+
+class _OllamaCoreToolsProvider:
+    """Wraps a local-model Provider so its turns advertise core_tools(...)
+    instead of the full registry.
+
+    Why here, rather than on OllamaProvider itself or on AgentRunner:
+    AgentRunner.turn() always calls the module-level tools_for_anthropic()
+    fresh and hands the FULL list straight to provider.stream() (see
+    runner.py) -- _make_provider building a plain OllamaProvider does not
+    change that, since nothing about a provider's construction narrows what a
+    *later* turn sends it. Trimming has to happen where stream() actually
+    receives the tools, which is here -- the one seam _ensure_runner controls
+    without editing runner.py or providers/ollama.py.
+
+    Filtering is gated on "this tools list IS the full top-level registry" (by
+    exact name-set), not applied to every stream() call: a specialist consult
+    mid-turn (imajin.tools.specialists) fetches this SAME provider instance
+    back via get_current_provider() and calls .stream() again with its own,
+    disjoint, subagent-scoped tool list (SubAgent.run(), specialists/base.py).
+    Unconditional filtering would run core_tools() on THAT list too -- and
+    since none of a specialist's tools are in CORE_TOOL_NAMES, it would come
+    back empty, silently breaking specialist consults for local models. The
+    top-level list's exact name-set is captured once, at construction, and is
+    the only shape of `tools` that ever gets narrowed; anything else (a
+    specialist's own list) passes straight through unchanged.
+    """
+
+    def __init__(self, inner: Any, full_tool_names: frozenset[str]) -> None:
+        self._inner = inner
+        self._full_tool_names = full_tool_names
+        self.name = inner.name
+        self.model = inner.model
+
+    def stream(
+        self, messages: list[dict[str, Any]], tools: list[dict[str, Any]], system: str
+    ) -> Iterator[Event]:
+        names = frozenset(t.get("name") for t in tools)
+        if names == self._full_tool_names:
+            tools = core_tools(tools)
+        yield from self._inner.stream(messages, tools, system)
+
+
 class ChatDock(QWidget):
     _job_updated = Signal(object)
 
@@ -503,7 +563,6 @@ class ChatDock(QWidget):
         return [*_MODEL_CHOICES, *local_rows]
 
     def _make_provider(self):
-        from imajin.agent.prompts import build_system_prompt
         from imajin.agent.providers import (
             AnthropicProvider,
             OllamaProvider,
@@ -554,9 +613,44 @@ class ChatDock(QWidget):
                 parameter_size=None,
                 size_bytes=None,
             )
-        tools_spec = tools_for_anthropic()
-        est = estimate_prompt_tokens(build_system_prompt(), tools_spec, [])
-        num_ctx = choose_num_ctx(local_model, est)
+        # Advertise the 20-tool core, not the full registry: with all 107
+        # tools offered, qwen3.5:4b never terminated a multi-step task (see
+        # tool_subset.py for the measured before/after). Recomputing the
+        # estimate from the SUBSET -- not the full list -- is what actually
+        # lets num_ctx reflect the smaller prompt; estimating from the full
+        # list here while only ever sending the subset (see
+        # _OllamaCoreToolsProvider, wired in by _ensure_runner) would silently
+        # throw the saving away.
+        full_tools_spec = tools_for_anthropic()
+        tools_spec = core_tools(full_tools_spec)
+        missing = missing_core_names(full_tools_spec)
+        if missing:
+            # A core tool was renamed/removed without updating tool_subset.py:
+            # local models now see fewer than 20 tools. Loud on purpose --
+            # silent capability loss is worse than a visible warning.
+            self._append_system(
+                f"[warning] {len(missing)} core tool(s) not found in the "
+                f"registry: {', '.join(missing)}. Local models will see "
+                f"{len(tools_spec)} tools instead of {len(CORE_TOOL_NAMES)}."
+            )
+        # Says how to reach the other 87 tools, not "call get_help" -- get_help
+        # is onboarding-scoped and returns a docs link, so pointing the user
+        # there for a missing capability sends them somewhere that cannot answer.
+        self._append_system(
+            f"[info] Local models see a {len(tools_spec)}-tool core set "
+            f"({len(tools_spec)} of {len(full_tools_spec)} available) so a small "
+            "model decides instead of dithering; switch to a cloud model for the "
+            "full set."
+        )
+        available_tool_names = {t["name"] for t in tools_spec}
+        est = estimate_prompt_tokens(
+            _local_system_prompt(available_tool_names), tools_spec, []
+        )
+        # floor=16384 -- was the implicit 32768 default, which is what would
+        # re-inflate a legitimately smaller subset-driven estimate right back
+        # up to the window a 107-tool prompt needed, throwing the saving away
+        # instead of letting it show up as a smaller num_ctx / less VRAM.
+        num_ctx = choose_num_ctx(local_model, est, floor=16384)
         if num_ctx < est:
             self._append_system(
                 f"[warning] {model}'s context window ({num_ctx} tokens) is "
@@ -620,6 +714,29 @@ class ChatDock(QWidget):
             self._runner = CodexAgentRunner(
                 model=model,
                 system_prompt=build_system_prompt(),
+                tool_caller=call_tool_via_jobs,
+            )
+        elif kind == "ollama":
+            # Local path only (SCOPE DISCIPLINE: anthropic/openai below keep
+            # seeing the full registry via plain AgentRunner). The provider
+            # gets wrapped -- not AgentRunner itself -- so runner.py and
+            # providers/ollama.py stay untouched; see _OllamaCoreToolsProvider
+            # for why that's also the *safe* seam (a filter living on
+            # AgentRunner or applied unconditionally in the provider would
+            # also reach specialist consults, which reuse this same provider
+            # instance with their own, disjoint tool list).
+            from imajin.agent.runner import AgentRunner
+            from imajin.tools import tools_for_anthropic
+
+            full_tools_spec = tools_for_anthropic()
+            subset_tools_spec = core_tools(full_tools_spec)
+            available_tool_names = {t["name"] for t in subset_tools_spec}
+            provider = _OllamaCoreToolsProvider(
+                self._make_provider(), frozenset(t["name"] for t in full_tools_spec)
+            )
+            self._runner = AgentRunner(
+                provider,
+                _local_system_prompt(available_tool_names),
                 tool_caller=call_tool_via_jobs,
             )
         else:

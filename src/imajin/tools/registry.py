@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import difflib
 import functools
 import inspect
 import time
@@ -111,8 +112,60 @@ def tool(
     return decorator
 
 
+class ToolNotFoundError(KeyError):
+    """``get_tool``/``call_tool`` found no entry for the given name.
+
+    Subclasses ``KeyError`` rather than a fresh ``Exception`` type on purpose:
+    runner.py's vision-hint overlay check and qt_tool_runner.py's cross-thread
+    dispatch both already do a defensive ``except KeyError`` around a tool
+    lookup (for a name an injected or marshalled caller doesn't fully
+    control) and must keep degrading gracefully instead of seeing this as an
+    unrecognized type and propagating past them.
+    """
+
+    def __str__(self) -> str:
+        # KeyError.__str__ reprs a lone arg -- quoting it and escaping any
+        # quotes inside -- because it's built for a bare missing key, not a
+        # written-out sentence; return the message verbatim instead.
+        return str(self.args[0]) if self.args else super().__str__()
+
+
+def _tool_not_found_message(name: str) -> str:
+    """Build the error text for an unregistered tool ``name``.
+
+    Names near matches (via difflib) so a typo or a renamed tool is
+    self-correctable instead of provoking an identical retry, and says the name
+    may be real but unadvertised this session (the local-model 20-tool core,
+    notably) rather than misspelled or removed -- otherwise a model that knows
+    the tool exists reads "unknown tool" as a transport glitch and retries the
+    identical call. It does NOT send the model to get_help to find the tool:
+    get_help is onboarding-scoped (imajin/tools/help.py) and returns a docs URL
+    plus guide-section titles, never a tool list, so that would spend another
+    turn and answer nothing.
+    """
+    close = difflib.get_close_matches(name, sorted(_REGISTRY), n=3)
+    msg = f"Unknown tool {name!r}."
+    if close:
+        suggestions = ", ".join(repr(c) for c in close)
+        msg += f" Did you mean: {suggestions}?"
+    msg += (
+        " It may be a real tool that just isn't advertised in this session"
+        " (e.g. the local-model core subset) rather than misspelled or"
+        " removed: only the tools in your current tool list are callable, so"
+        " do not retry this name. (get_help returns the getting-started guide,"
+        " not a tool list.)"
+    )
+    return msg
+
+
 def get_tool(name: str) -> ToolEntry:
-    return _REGISTRY[name]
+    try:
+        return _REGISTRY[name]
+    except KeyError:
+        # from None: this *is* the KeyError (see class docstring above), so
+        # chaining "during handling of the above exception" onto itself is
+        # just noise for whoever reads the traceback.
+        raise ToolNotFoundError(_tool_not_found_message(name)) from None
 
 
 def iter_tools() -> list[ToolEntry]:
@@ -120,7 +173,12 @@ def iter_tools() -> list[ToolEntry]:
 
 
 def call_tool(tool_name: str, **kwargs: Any) -> Any:
-    entry = _REGISTRY[tool_name]
+    # Routed through get_tool (not a raw _REGISTRY[tool_name]) so a bad name
+    # gets the same suggest-and-point-at-get_help message instead of a bare
+    # KeyError -- call_tool is the dispatch path every tool_caller (the agent
+    # loop, the job execution service, the MCP bridge) actually calls, so
+    # this is where the model would otherwise see the unhelpful raw KeyError.
+    entry = get_tool(tool_name)
     validated = entry.input_model(**kwargs)
     return entry.func(**validated.model_dump())
 

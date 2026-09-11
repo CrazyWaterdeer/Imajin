@@ -109,3 +109,72 @@ def test_call_tool_provenance_records(tmp_path, monkeypatch) -> None:
     assert rec["ok"] is True
     assert rec["driver"] == "test"
     assert rec["output_summary"] == 5
+
+
+# -- get_tool/call_tool on an unknown name ----------------------------------
+#
+# A bare `_REGISTRY[name]` KeyError gives the model only `ERROR: 'the_name'`
+# (see runner.py's `except Exception as e: content = f"ERROR: {e}"`), which
+# doesn't say whether the name is misspelled, renamed, or just not advertised
+# this session -- so the model retries the identical call. That bites harder
+# now that local models see only the 20-tool core of the full 107-tool
+# registry (a real tool is routinely "not advertised"), and it also protects
+# a cloud model that misremembers a renamed tool.
+
+
+def test_get_tool_unknown_name_names_it_in_the_message() -> None:
+    from imajin.tools.registry import get_tool
+
+    with pytest.raises(KeyError) as exc_info:
+        get_tool("list_registered_files")
+
+    assert "list_registered_files" in str(exc_info.value)
+
+
+def test_get_tool_unknown_name_is_still_a_key_error() -> None:
+    # runner.py's vision-hint overlay check and qt_tool_runner.py's
+    # cross-thread dispatch both already do a defensive `except KeyError`
+    # around a tool lookup and must keep degrading gracefully rather than
+    # seeing an unrecognized exception type -- so this must stay a KeyError.
+    from imajin.tools.registry import ToolNotFoundError, get_tool
+
+    with pytest.raises(KeyError) as exc_info:
+        get_tool("does_not_exist_at_all")
+
+    assert isinstance(exc_info.value, ToolNotFoundError)
+
+
+def test_get_tool_near_miss_suggests_the_real_tool_name() -> None:
+    from imajin.tools.registry import get_tool
+
+    @tool()
+    def measure_intensity(x: int) -> int:
+        return x
+
+    @tool()
+    def segment_target_objects(x: int) -> int:
+        return x
+
+    with pytest.raises(KeyError) as exc_info:
+        get_tool("measure_intensityy")
+
+    assert "measure_intensity" in str(exc_info.value)
+
+
+def test_get_tool_unknown_name_points_at_get_help() -> None:
+    from imajin.tools.registry import get_tool
+
+    with pytest.raises(KeyError) as exc_info:
+        get_tool("some_made_up_tool")
+
+    assert "get_help" in str(exc_info.value)
+
+
+def test_call_tool_unknown_name_raises_the_same_clear_error() -> None:
+    # call_tool (the path every tool_caller actually dispatches through), not
+    # just get_tool, must not regress to a raw `_REGISTRY[tool_name]` KeyError.
+    with pytest.raises(KeyError) as exc_info:
+        call_tool("list_registered_files", foo=1)
+
+    assert "list_registered_files" in str(exc_info.value)
+    assert "get_help" in str(exc_info.value)

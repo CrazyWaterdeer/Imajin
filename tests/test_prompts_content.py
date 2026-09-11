@@ -12,6 +12,8 @@ shortcut, or drops the new tool names, should fail here before it ships.
 """
 from __future__ import annotations
 
+from imajin.agent.prompts import SYSTEM_PROMPT
+from imajin.agent.prompts import _REDUCTION_SPANS
 from imajin.agent.prompts import build_system_prompt
 
 _NEW_TOOLS = ("track_roi_over_time", "resegment_roi_over_time")
@@ -96,3 +98,26 @@ def test_time_course_pipeline_recommends_structural_channel_tracking() -> None:
     # The bias must be named as a bias, not left as a silent coverage number.
     assert "bias" in block
     assert "missed a few" in block
+
+
+def test_reduction_span_markers_all_resolve_against_system_prompt() -> None:
+    """_reduced_system_prompt() (used by build_system_prompt(available_tools=...))
+    skips a _REDUCTION_SPANS entry whose markers no longer match SYSTEM_PROMPT rather
+    than raising, so a prompt copy-edit degrades gracefully for chat_dock's local-model
+    path in production instead of crashing it -- but that means a marker going stale
+    is otherwise SILENT there. This is what should catch it, loudly, in CI: every
+    span's start and end marker must still resolve to exactly one location, in order,
+    in the current SYSTEM_PROMPT.
+    """
+    for start_marker, end_marker, required in _REDUCTION_SPANS:
+        assert SYSTEM_PROMPT.count(start_marker) == 1, (
+            f"start marker for required={sorted(required)} no longer matches "
+            f"exactly once: {start_marker!r}"
+        )
+        assert SYSTEM_PROMPT.count(end_marker) == 1, (
+            f"end marker for required={sorted(required)} no longer matches "
+            f"exactly once: {end_marker!r}"
+        )
+        assert SYSTEM_PROMPT.index(end_marker) > SYSTEM_PROMPT.index(start_marker), (
+            f"end marker now precedes start marker for required={sorted(required)}"
+        )
