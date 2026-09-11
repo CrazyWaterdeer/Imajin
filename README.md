@@ -25,8 +25,9 @@ and watch it happen — offered through two interchangeable interfaces:
 
 - a **manual button dock** (magicgui forms — LLM-free, offline, deterministic);
 - an **LLM chat dock** — Claude through a **Pro/Max subscription** (no API key, via
-  the Claude Agent SDK) or an **Anthropic API key**, plus any OpenAI-compatible
-  endpoint (ChatGPT, Ollama, vLLM, LM Studio).
+  the Claude Agent SDK) or an **Anthropic API key**, any OpenAI-compatible
+  endpoint (ChatGPT, Ollama, vLLM, LM Studio), or **Codex through your own
+  ChatGPT subscription** (no API key, via the unmodified `codex` CLI).
 
 ## Install
 
@@ -60,6 +61,13 @@ you have credentials for. You do **not** need an API key.
   logged in (`claude` on your `PATH` with a Pro/Max login, or a
   `CLAUDE_CODE_OAUTH_TOKEN`), the "Claude … (subscription)" entries just work —
   Imajin drives them through the Claude Agent SDK.
+- **Codex via subscription (no API key).** With the
+  [Codex CLI](https://github.com/openai/codex) installed and logged in
+  (run `codex login` yourself, once, in a terminal), the "Codex (subscription)"
+  entry just works — Imajin drives your own, unmodified `codex` binary as a
+  subprocess. It never builds a login UI and never reads, stores, or forwards
+  the contents of `~/.codex/auth.json`; only the file's *existence* is checked,
+  to show the entry as available.
 - **Claude / OpenAI via API key.** Read from environment variables (or the in-app
   settings dock): `ANTHROPIC_API_KEY` for Claude, `OPENAI_API_KEY` for OpenAI and
   Anthropic-compatible backends.

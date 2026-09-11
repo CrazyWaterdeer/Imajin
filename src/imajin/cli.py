@@ -218,13 +218,13 @@ def _doctor(settings: Settings) -> int:
 
     # Providers/Ollama below are informational only: `ok` (and so the exit code)
     # stays driven solely by imports/CUDA/display, exactly as before this
-    # section existed. Most users configure one provider, not all four, so an
+    # section existed. Most users configure one provider, not all five, so an
     # unavailable one is a normal state, not a failed doctor run.
     print("\n[Providers]")
     from imajin.ui.provider_status import compute_statuses
 
     statuses = compute_statuses(settings)
-    for kind in ("anthropic", "claude-agent", "openai", "ollama"):
+    for kind in ("anthropic", "claude-agent", "openai", "codex-agent", "ollama"):
         status = statuses.get(kind)
         if status is None:
             continue

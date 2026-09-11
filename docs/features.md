@@ -199,15 +199,21 @@ task-oriented [getting-started guide](getting_started.md). Back to the
   external connectome lookup (neuPrint/FlyWire) are an opt-in Tier-2 backend
   (`uv sync --extra connectome`) that is not yet wired up; mouse connectomes
   (MICrONS/Allen) are out of scope. Not part of the default cell workflow.
-- **LLM-driven analysis**: three interchangeable chat backends behind one dock —
+- **LLM-driven analysis**: four interchangeable chat backends behind one dock —
   (1) **Claude via subscription**, where the Claude Agent SDK drives your
   logged-in `claude` CLI (no API key) and Imajin's own tools are bridged in as an
   in-process MCP server; (2) **Claude via Anthropic API key**, direct with prompt
-  caching; and (3) any **OpenAI-compatible `/v1` endpoint** (OpenAI, Ollama,
-  vLLM, LM Studio) through a translation layer. The API-backed Claude / OpenAI
-  entries resolve to the **latest model** for a tier (`sonnet` / `opus` / `gpt`)
-  at connection time, so new releases need no code change. Streaming chat and
-  tool-use are non-blocking via napari's `thread_worker`.
+  caching; (3) any **OpenAI-compatible `/v1` endpoint** (OpenAI, Ollama,
+  vLLM, LM Studio) through a translation layer; and (4) **Codex via
+  subscription**, where the unmodified `codex` CLI drives its own agentic loop
+  against your logged-in ChatGPT account (no API key) and calls Imajin's tools
+  back over the same kind of in-process, loopback-only MCP bridge as the Claude
+  subscription path — run `codex login` yourself once in a terminal; Imajin
+  ships the stock binary, builds no login UI, and never reads, stores, or
+  forwards `~/.codex/auth.json`. The API-backed Claude / OpenAI entries resolve
+  to the **latest model** for a tier (`sonnet` / `opus` / `gpt`) at connection
+  time, so new releases need no code change. Streaming chat and tool-use are
+  non-blocking via napari's `thread_worker`.
 - **Specialist sub-agents**: `consult_neural_tracer` and
   `consult_methods_writer` route domain-specific questions to focused
   sub-agents with their own prompts and (for the tracer) their own tool sets.
@@ -220,6 +226,7 @@ task-oriented [getting-started guide](getting_started.md). Back to the
 
 `napari ≥ 0.7` + `PyQt6`, `magicgui`, `tifffile`, `bioio` + `bioio-czi`,
 `dask`, `cellpose ≥ 4`, `scikit-image`, `skan`, `btrack`, `anthropic`,
-`openai`, `claude-agent-sdk` (subscription path), `pydantic v2`,
+`openai`, `claude-agent-sdk` (Claude subscription path), `mcp` (in-process
+tool bridge for both subscription paths), `pydantic v2`,
 `torch + torchvision` (CUDA cu128 via custom uv index). Python pinned to
 **3.12** because PyTorch has no `cp314` CUDA wheels yet (PyTorch issue #169929).

@@ -43,6 +43,11 @@ dependencies = [
     # Utilities
     "platformdirs>=4.2",
     "claude-agent-sdk>=0.2.110",
+    # In-process MCP tool bridge for the Codex (subscription) chat backend
+    # (imajin.agent.mcp_bridge). Already pulled in transitively by
+    # claude-agent-sdk; pinned directly so an SDK bump can't silently change
+    # the version this bridge is tested against.
+    "mcp>=1.28,<2",
 ]
 
 [project.optional-dependencies]

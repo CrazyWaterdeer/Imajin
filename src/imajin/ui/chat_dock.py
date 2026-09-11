@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any
 
@@ -28,10 +29,68 @@ from imajin.ui.chat_transcript import ChatTranscript
 from imajin.ui.provider_status import ProviderStatus, compute_statuses
 from imajin.ui.theme import apply_dock_theme
 
+
+def _codex_default_model() -> str:
+    """Best-effort read of codex's own model catalog for the picker's default slug.
+
+    codex has no "sonnet"/"opus"-style stable alias (unlike the claude-agent
+    rows below) -- every slug it accepts for `-m` is itself a dated/versioned
+    name that rotates over time (this project's own memory already records
+    one such rotation: bare "sol" became "gpt-5.6-sol"). Reading the live
+    catalog here instead of hardcoding a slug is the same reason local Ollama
+    rows come from live discovery rather than a fixed name -- see the comment
+    below _MODEL_CHOICES.
+
+    ~/.codex/models_cache.json ($CODEX_HOME/models_cache.json when that's
+    set -- the same resolution codex_agent.codex_available() uses for
+    auth.json) is codex's own cache of the models it would offer an
+    interactive picker, refreshed by `codex update` / ordinary use. This
+    picks the lowest-`priority` entry marked `visibility: "list"` (codex's
+    own "show this, ranked" flag) -- the same one codex itself would default
+    an interactive picker to.
+
+    Runs once at import time, so it must never raise: a missing
+    CODEX_HOME/file (not logged in yet, or logged in but never run anything
+    that populated the cache), malformed JSON, or an unexpected shape all
+    fall through to "" so the caller can supply a verified fallback instead.
+    """
+    codex_home = os.environ.get("CODEX_HOME")
+    cache_path = (
+        Path(codex_home) if codex_home else Path.home() / ".codex"
+    ) / "models_cache.json"
+    try:
+        data = json.loads(cache_path.read_text(encoding="utf-8"))
+        listed = [
+            m
+            for m in data["models"]
+            if isinstance(m, dict) and m.get("visibility") == "list" and m.get("slug")
+        ]
+        if not listed:
+            return ""
+        listed.sort(key=lambda m: m.get("priority", float("inf")))
+        return str(listed[0]["slug"])
+    except (OSError, ValueError, KeyError, TypeError):
+        return ""
+
+
+# Verified against the live cache on the dev machine (2026-09-11, codex-cli
+# 0.144.3): the lowest-`priority` `visibility: "list"` entry was
+# "gpt-5.6-sol" -- the exact slug the codex-agent runner's own probe evidence
+# verified working end-to-end (see codex_agent.py's _build_argv /
+# _MODEL_REASONING_EFFORT). Used only when _codex_default_model() can't read
+# the user's own cache; deliberately NOT the bare "" this slice's brief
+# allows as a fallback, because CodexAgentRunner._build_argv passes
+# `-m self.model` unconditionally with no empty-string case (traced in
+# codex_agent.py, which this slice does not own and so cannot change) -- an
+# empty model would reach codex as a literal `-m ""` on every turn instead of
+# letting codex fall back to its own default.
+_CODEX_FALLBACK_MODEL = "gpt-5.6-sol"
+
 # The model field for API-backed Claude and OpenAI is a *tier* token, not a pinned
 # id: the provider resolves it to the latest concrete model at connection time (see
 # imajin.agent.model_catalog). Subscription entries use the CLI's own always-latest
-# aliases. Local (Ollama) rows are deliberately NOT listed here -- a hardcoded
+# aliases. Codex (subscription) has no such alias -- see _codex_default_model()
+# above. Local (Ollama) rows are deliberately NOT listed here -- a hardcoded
 # model name would go stale the moment the user pulls a different one, so
 # ChatDock._build_model_choices appends those from live discovery instead.
 _MODEL_CHOICES: list[tuple[str, str, str]] = [
@@ -40,6 +99,7 @@ _MODEL_CHOICES: list[tuple[str, str, str]] = [
     ("Claude Sonnet (subscription)", "claude-agent", "sonnet"),
     ("Claude Opus (subscription)", "claude-agent", "opus"),
     ("GPT (OpenAI, latest)", "openai", "gpt"),
+    ("Codex (subscription)", "codex-agent", _codex_default_model() or _CODEX_FALLBACK_MODEL),
 ]
 
 
@@ -73,11 +133,39 @@ def _fallback_local_choice(settings: Any) -> tuple[str, str, str]:
     return ("Local: none configured", "ollama", "")
 
 
+# What to actually DO about an unavailable backend. The subscription backends
+# ship no in-app login on purpose (Imajin never handles those credentials), so
+# for them the terminal is the only route — pointing the user at the API Keys
+# dialog would be advice that cannot work.
+_FIX_HINTS: dict[str, str] = {
+    "claude-agent": "Run `claude` in a terminal and sign in.",
+    "codex-agent": "Run `codex login` in a terminal.",
+    "ollama": "Start Ollama, then `ollama pull` a tool-capable model.",
+}
+_DEFAULT_FIX_HINT = "Open Imajin → API Keys…"
+
+
+def _fix_hint(kind: str) -> str:
+    return _FIX_HINTS.get(kind, _DEFAULT_FIX_HINT)
+
+
 def _short_label(label: str) -> str:
     short = label.replace("Claude ", "").replace(" (OpenAI)", "").replace("Local: ", "")
     if len(short) > 26:
         short = short[:24] + "…"
     return short
+
+
+# A picker kind with no entry in `statuses` means whoever added it to
+# _MODEL_CHOICES/_build_model_choices forgot to add a matching
+# compute_statuses() branch -- that used to read as "available" here (a bare
+# `.get(kind)` returning None was treated the same as a green light in half a
+# dozen places below), which is exactly how a backend with no working status
+# check could still land in the menu, selected by default, with no warning in
+# its label. Every lookup now goes through _status_for() instead of a bare
+# `self._statuses.get(kind)`, so that mistake reads as "unavailable" -- with a
+# reason that says why -- everywhere at once.
+_UNREGISTERED_STATUS = ProviderStatus(available=False, reason="not registered")
 
 
 class _ModelPickerButton(QPushButton):
@@ -103,21 +191,22 @@ class _ModelPickerButton(QPushButton):
         self._build_menu()
         self._refresh_text()
 
+    def _status_for(self, kind: str) -> ProviderStatus:
+        return self._statuses.get(kind, _UNREGISTERED_STATUS)
+
     def _resolve_initial_index(self, preferred: tuple[str, str] | None) -> int:
         if preferred is not None:
             pref_kind, pref_model = preferred
             for i, (_, kind, model) in enumerate(self._choices):
                 if kind == pref_kind and model == pref_model:
-                    st = self._statuses.get(kind)
-                    if st is None or st.available:
+                    if self._status_for(kind).available:
                         return i
                     break  # preferred choice exists but is currently unavailable
         return self._first_available_index()
 
     def _first_available_index(self) -> int:
         for i, (_, kind, _) in enumerate(self._choices):
-            st = self._statuses.get(kind)
-            if st is None or st.available:
+            if self._status_for(kind).available:
                 return i
         return 0
 
@@ -127,14 +216,11 @@ class _ModelPickerButton(QPushButton):
         for i, (label, kind, _) in enumerate(self._choices):
             if last_kind is not None and kind != last_kind:
                 menu.addSeparator()
-            status = self._statuses.get(kind)
-            if status is not None and not status.available:
+            status = self._status_for(kind)
+            if not status.available:
                 action = menu.addAction(f"{label} — {status.reason}")
                 action.setEnabled(False)
-                action.setToolTip(
-                    f"Unavailable: {status.reason}. "
-                    "Open Imajin → API Keys… or start Ollama."
-                )
+                action.setToolTip(f"Unavailable: {status.reason}. {_fix_hint(kind)}")
             else:
                 action = menu.addAction(label)
                 action.triggered.connect(
@@ -147,8 +233,7 @@ class _ModelPickerButton(QPushButton):
         self._statuses = statuses
         # If the current selection went unavailable, switch to first available.
         kind = self._choices[self._index][1]
-        cur_status = self._statuses.get(kind)
-        if cur_status is not None and not cur_status.available:
+        if not self._status_for(kind).available:
             new_idx = self._first_available_index()
             if new_idx != self._index:
                 self._index = new_idx
@@ -179,8 +264,7 @@ class _ModelPickerButton(QPushButton):
             (i for i, (_, k, m) in enumerate(self._choices) if k == kind and m == model),
             None,
         )
-        status = self._statuses.get(kind)
-        if found is not None and (status is None or status.available):
+        if found is not None and self._status_for(kind).available:
             self._index = found
         else:
             self._index = self._first_available_index()
@@ -190,9 +274,9 @@ class _ModelPickerButton(QPushButton):
         if self._index != start_index:
             self.currentIndexChanged.emit(self._index)
 
-    def current_status(self) -> ProviderStatus | None:
+    def current_status(self) -> ProviderStatus:
         kind = self._choices[self._index][1]
-        return self._statuses.get(kind)
+        return self._status_for(kind)
 
     def setCurrentIndex(self, idx: int) -> None:
         if idx == self._index:
@@ -218,7 +302,7 @@ class _ModelPickerButton(QPushButton):
         label = self._choices[self._index][0]
         status = self.current_status()
         suffix = "  ▾"
-        if status is not None and not status.available:
+        if not status.available:
             self.setText(f"{_short_label(label)} ({status.reason}){suffix}")
         else:
             self.setText(f"{_short_label(label)}{suffix}")
@@ -517,6 +601,23 @@ class ChatDock(QWidget):
             from imajin.agent.providers.claude_agent import ClaudeAgentRunner
 
             self._runner = ClaudeAgentRunner(
+                model=model,
+                system_prompt=build_system_prompt(),
+                tool_caller=call_tool_via_jobs,
+            )
+        elif kind == "codex-agent":
+            # Subscription-backed like claude-agent above: codex owns its own
+            # agentic loop (it drives the `codex` CLI, which calls back into
+            # Imajin's tools over an in-process MCP bridge), so this is a
+            # CodexAgentRunner, not a Provider behind AgentRunner. Same
+            # turn()/reset()/cancel()/close() surface, so everything
+            # downstream is unchanged. No API key -- it uses whatever the
+            # user set up themselves with `codex login`; see
+            # imajin.agent.providers.codex_agent's module docstring for the
+            # ToS/auth decision this mirrors from ClaudeAgentRunner.
+            from imajin.agent.providers.codex_agent import CodexAgentRunner
+
+            self._runner = CodexAgentRunner(
                 model=model,
                 system_prompt=build_system_prompt(),
                 tool_caller=call_tool_via_jobs,

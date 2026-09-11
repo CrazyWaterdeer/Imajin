@@ -63,6 +63,32 @@ def _no_local_model_network(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _no_codex_subscription(monkeypatch):
+    """Pin the Codex (subscription) backend to "unavailable" for the whole suite.
+
+    Same reason as _no_local_model_network above, one layer down: ChatDock's
+    model picker calls compute_statuses(), which calls
+    codex_agent.codex_available(), which reads real machine state --
+    `shutil.which("codex")` and whether $CODEX_HOME/~/.codex/auth.json exists.
+    Left alone, "is the Codex row selectable, and is it the picker's default?"
+    silently becomes a property of the developer's laptop: it passes on a host
+    with codex installed and logged in, and takes a different branch on CI or a
+    teammate's machine. Nothing spawns codex here (codex_available is
+    filesystem-only by contract) -- this is about determinism, not quota.
+
+    Tests that need the other answer override it the usual way (patch.object on
+    the *consuming* module, as tests/test_provider_status.py does); the later
+    override wins and is undone first, so this default never fights them.
+    """
+    from imajin.ui import provider_status
+
+    monkeypatch.setattr(
+        provider_status, "codex_available", lambda *a, **k: (False, "codex not found")
+    )
+    yield
+
+
+@pytest.fixture(autouse=True)
 def _reset_sample_annotations():
     from imajin import session as state
     from imajin.result_bundles import reset_process_bundle
