@@ -106,7 +106,9 @@ def segment_3d_cells_auto(
         image_layer,
         tool_name="segment_3d_cells_auto",
         dims="3d_only",
-        ts_hint="Extract a timepoint or run a per-frame workflow first.",
+        ts_hint="Extract a timepoint first (this tool is 3D-only, not time-aware); "
+        "to carry a 3D ROI across a movie use resegment_roi_over_time -- "
+        "track_roi_over_time is 2D+T only.",
     )
     saturation_warnings = _saturation_warnings(data, layer_name=L.name)
 

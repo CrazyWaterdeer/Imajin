@@ -11,7 +11,7 @@ from imajin.analysis.arrays import materialize_array, metadata_axes_without_chan
 from imajin.agent.qt_dispatch import call_on_main
 from imajin.session import get_layer, get_viewer, list_channel_annotations
 from imajin.paths import normalize_user_path
-from imajin.tools.napari_ops import add_image_from_worker, snapshot_layer
+from imajin.tools.napari_ops import add_image_from_worker, add_labels_from_worker, snapshot_layer
 from imajin.tools.registry import tool
 
 
@@ -237,9 +237,10 @@ def set_colormap(layer: str, colormap: str) -> dict[str, Any]:
 
 
 @tool(
-    description="Extract a single timepoint from a time-series image layer and add it "
-    "as a new image layer. Use this to create a reference frame for segmentation or "
-    "manual ROI drawing before measuring intensity over time.",
+    description="Extract a single timepoint from a time-series image or labels layer "
+    "and add it as a new layer of the same kind. Use this to create a reference frame "
+    "for segmentation or manual ROI drawing before measuring intensity over time, or "
+    "to inspect/correct one frame of a per-frame tracked-ROI labels stack.",
     phase="2",
     worker=True,
 )
@@ -259,12 +260,35 @@ def extract_timepoint(
     frame = np.take(data, t, axis=idx)
     scale_in = tuple(float(s) for s in L.scale)
     new_scale = tuple(s for i, s in enumerate(scale_in) if i != idx)
+
+    # Drop the time entry from the recorded axes string, mirroring the scale drop
+    # above, so a frame pulled from e.g. a TZYX movie is labeled ZYX instead of
+    # being re-guessed by whatever reads it next (this module's own _resolve_axis,
+    # or measure.py's fail-loud time-axis resolver, would otherwise fall back to a
+    # default_3d guess with no recorded 'T' to exclude). voxel_size_um carries no
+    # time entry to begin with (io/metadata.py always records it as a plain ZYX
+    # triple), so it copies straight across.
+    axes_in = metadata_axes_without_channel(L.metadata, data.ndim)
+    new_metadata: dict[str, Any] = {
+        "source_layer": L.name,
+        "op": "extract_timepoint",
+        "timepoint": t,
+    }
+    if axes_in is not None:
+        new_metadata["axes"] = "".join(c for i, c in enumerate(axes_in) if i != idx)
+    if "voxel_size_um" in L.metadata:
+        new_metadata["voxel_size_um"] = L.metadata["voxel_size_um"]
+
+    # A Labels stack (e.g. a per-frame tracked/redetected ROI) must come back as
+    # Labels, not Image -- add_image_from_worker would silently drop the label IDs
+    # a correction pass or measure_intensity_over_time depends on.
+    add_fn = add_labels_from_worker if L.kind == "labels" else add_image_from_worker
     new = call_on_main(
-        add_image_from_worker,
+        add_fn,
         frame,
         name=f"{L.name}_t{t}",
         scale=new_scale,
-        metadata={"source_layer": L.name, "op": "extract_timepoint", "timepoint": t},
+        metadata=new_metadata,
     )
     return {
         "new_layer": new.name,

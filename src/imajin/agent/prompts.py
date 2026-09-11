@@ -144,11 +144,52 @@ Pipeline "compare" — triggered by "compare channels", "colocalization", "공�
 Pipeline "time course" — triggered by "intensity over time", "time-series",
 "live imaging", "GCaMP trace", "CaLexA over time", "시간에 따른 강도":
   step 1: invoke list_layers if needed
-  step 2: if an ROI/Labels layer already exists, invoke measure_intensity_over_time
-          with labels_layer=<ROI layer> and image_layer=<reporter movie layer>
-  step 3: if no ROI/Labels layer exists, invoke extract_timepoint on a representative
-          frame first so the user can segment or draw ROIs, then continue once ROIs exist
-  step 4: summarize table name, number of ROIs, and timepoints
+  step 2: get a seed Labels layer on ONE representative frame — reuse one if it
+          already exists (segment_target_objects/cellpose_sam output, or a hand-drawn
+          Shapes layer converted via boundary_mask_from_shapes), otherwise create one
+          now via extract_timepoint + segmentation. This single frame is only the
+          seed for step 3; it is never the measurement itself. If the recording has
+          a structural / activity-independent channel — a co-imaged marker or
+          morphology channel that stays lit throughout, unlike the signal channel,
+          which can dip toward baseline between events (correct_sparse's own
+          docstring calls this "an activity-independent landmark") — prefer
+          segmenting the seed and tracking on THAT channel instead of the signal
+          channel itself.
+  step 3: invoke track_roi_over_time(labels_layer=<seed>, image_layer=<the channel
+          chosen in step 2 — the structural channel when there is one, otherwise
+          the signal channel>) to carry that ROI through every frame. Then check
+          the result's `coverage` and `warnings` even when nothing is `rejected`:
+          track_roi_over_time gates each frame by the tracked object's own signal
+          CONTRAST, never by drift, so on a channel whose own brightness varies,
+          low coverage means the DIM frames were systematically dropped — not that
+          tracking merely "missed a few" — and the surviving trace is biased
+          toward brighter frames. If the `rejected` list is non-empty (any label
+          under 50% usable coverage), a `warnings` entry names this contrast bias,
+          or coverage otherwise looks poor, fall back instead: max_projection the
+          movie, boundary_mask_from_shapes on that projection (the same recipe
+          used for hand-drawn ROI regions above), then resegment_roi_over_time(
+          boundary_mask=<that mask>, image_layer=<the same channel>) to re-detect
+          the object inside it on every frame.
+  step 4: invoke measure_intensity_over_time with labels_layer=<the Labels layer
+          track_roi_over_time or resegment_roi_over_time produced> and image_layer=
+          <the SIGNAL channel to report on, even when step 2/3 tracked a different
+          structural channel instead — this already works, since the tracked
+          output is just a Labels layer>. Never measure a single-frame seed ROI
+          directly against a multi-frame movie — a static ROI only reflects where
+          the object sat in that one frame, so drift silently changes what is
+          actually being measured at every later timepoint.
+  step 5: summarize table name, number of ROIs, timepoints, and — when tracking or
+          resegmentation ran — its coverage/rejected labels, and relay any
+          contrast-bias warning from step 3 to the user rather than reporting the
+          trace uncritically.
+
+Real limits — do not promise more than the tools deliver: track_roi_over_time only
+corrects lateral (XY) drift and is 2D+T only; a 4D TZYX movie needs z_project="max"
+first (lateral-only correction across the projected stack) or resegment_roi_over_time,
+which re-detects per frame and so also works in 3D+T. Both tools write background (0)
+for a frame they cannot confidently place — a deliberate gap, never an extrapolated
+guess — so measure_intensity_over_time emits no row for that (label, time) pair by
+design.
 
 Pipeline "representative image / figure export" — triggered by "대표 이미지",
 "merge channels", "scale bar", "PNG로 저장", "figure 만들기":
@@ -264,9 +305,11 @@ When the user's request matches one of these intents, run the full pipeline with
 
 - **"intensity over time"** / **"GCaMP trace"** / **"live imaging 분석"** /
   **"시간에 따른 강도"** →
-  use existing Labels/ROI layers with `measure_intensity_over_time`. If no ROI layer
-  exists, call `extract_timepoint` to create a reference frame first; the user can then
-  segment or draw ROIs before time-course measurement.
+  get a seed ROI on one frame, then `track_roi_over_time` (or, on low coverage, a
+  wide `boundary_mask_from_shapes` region plus `resegment_roi_over_time`) to carry
+  it through every frame, THEN `measure_intensity_over_time` on that result — never
+  measure a single frame's ROI against the whole movie. See Pipeline "time course"
+  above for the full sequence and its limits.
 
 - **sample/group annotations** / **"control vs treatment"** / **"이 파일은 treatment"** →
   call `register_files` first if the user provided file or folder paths, then call

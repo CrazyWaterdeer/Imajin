@@ -46,7 +46,10 @@ def segment_intensity_regions(
         image_layer,
         tool_name="segment_intensity_regions",
         dims="2d_or_3d",
-        ts_hint="Use extract_timepoint or a per-frame workflow first.",
+        ts_hint="Use extract_timepoint to segment a representative frame first, "
+        "then track_roi_over_time (or resegment_roi_over_time for a wide boundary) "
+        "to carry the ROI across every frame -- never measure this single frame "
+        "against the whole movie.",
     )
     spacing = _voxel_spacing(tuple(L.scale), data.ndim)
     effective_min_size = _min_size_from_physical(

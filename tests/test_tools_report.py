@@ -307,3 +307,38 @@ def test_generate_report_omits_acquisition_without_metadata(fake_session, tmp_pa
     report.generate_report(str(out), format="md")
     body = out.read_text(encoding="utf-8")
     assert "## Acquisition" not in body
+
+
+def test_format_phrase_track_roi_over_time() -> None:
+    phrase = report._format_phrase(
+        "track_roi_over_time",
+        {
+            "labels_layer": "roi_seed",
+            "image_layer": "movie",
+            "search_radius": 6,
+            "conf_floor": 0.5,
+        },
+    )
+    assert phrase is not None
+    assert "{" not in phrase and "}" not in phrase
+    # Method must be named honestly (publication-facing) ...
+    assert "template cross-correlation tracking" in phrase
+    # ... and a reader must be able to tell gaps are real, not smoothed over.
+    assert "excluded" in phrase
+    assert "interpolated" in phrase
+
+
+def test_format_phrase_resegment_roi_over_time() -> None:
+    phrase = report._format_phrase(
+        "resegment_roi_over_time",
+        {
+            "labels_layer": "roi_seed",
+            "image_layer": "movie",
+            "boundary_mask": "wide_boundary",
+        },
+    )
+    assert phrase is not None
+    assert "{" not in phrase and "}" not in phrase
+    assert "per-frame re-detection within a user-defined boundary" in phrase
+    assert "excluded" in phrase
+    assert "interpolated" in phrase

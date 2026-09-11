@@ -21,7 +21,8 @@ dock or click a button in the manual dock.
 | **Spot / puncta detection** | target channel (puncta, FISH, vesicles) | `detect_spots` (blob LoG/DoG, µm-scale, 2D-projection/3D, boundary-aware → Points + table), `compute_spots_qc` | `describe_table`, `compare_groups` | `plot_group_distribution` |
 | **Object spatial relationships** | Points/Labels × Labels | `assign_objects_to_parents` (spots-per-cell), `measure_distance_to_reference` (distance to surface, µm), `nearest_neighbor_distances` | `compare_groups` | `plot_group_distribution`, `plot_scatter` |
 | **Intensity measurement (per object)** | labels × channel | `measure_intensity`, `measure_projected_intensity` (measure after projection), `refresh_measurement` | `describe_table`, `compare_groups` | `plot_group_distribution` |
-| **Timecourse intensity (ROI over time)** | ROI labels × T | `measure_intensity_over_time`, `extract_timepoint` | `normalize_timecourse`, `extract_timecourse_features` | `plot_timecourse` |
+| **ROI drift correction (live imaging)** | ROI seed labels × time-series movie | `track_roi_over_time` (draw once → template cross-correlation tracking, 2D+T only), `resegment_roi_over_time` (draw wide `boundary_mask` → per-frame re-detection, 2D+T or 3D+T), `set_labels_at_frame` (manual per-frame fix) | — | — |
+| **Timecourse intensity (ROI over time)** | ROI labels × T | `measure_intensity_over_time` (static or per-frame ROI — see ROI drift-correction guide below), `extract_timepoint` | `normalize_timecourse`, `extract_timecourse_features` | `plot_timecourse` |
 | Colocalization | channel pair · object pair | `manders_coefficients` (M1/M2), `pearson_correlation`, `costes_threshold` (auto threshold), `costes_significance` (randomization p), `object_colocalization` (proximity vs mask-constrained null) | Costes p-value | `plot_scatter` |
 | **inside / outside domain** | channel mask | `mask_logic`, `partition_inside_outside`, `classify_labels_by_mask` | `compare_groups` (**paired** wilcoxon) | `plot_group_distribution` (`paired=True`) |
 | Calcium imaging | ROI × T movie | `assess_calcium_timecourse` (ΔF/F0 + gating), `correct_calcium_motion`, `stabilize_calcium_dense` | — | `plot_dff_heatmap` |
@@ -107,6 +108,36 @@ Noto Serif (`font="serif"`).
 - **post-hoc for 3+ groups**: in addition to the omnibus, **multiplicity-corrected pairwise tests** are returned under `posthoc` (ANOVA→Games-Howell, Kruskal→Dunn's+Holm). Do not run uncorrected pairwise tests yourself.
 - **caution**: always check the result's `warnings` / `test_selection` — small-n (n<3), non-normality, and **pseudoreplication** (treating cells as independent samples) warnings live there.
 
+## ROI drift-correction guide
+
+An ROI drawn once and measured against only that frame silently mismeasures once a live sample
+drifts — the pixels under the ROI stop being the object. Two producers build a genuine per-frame
+Labels layer for `measure_intensity_over_time` to read instead, matching the two ways a scientist
+already copes with drift by hand.
+
+- **`track_roi_over_time`** ("draw once, track"): follows the seed's own drawn footprint frame to
+  frame by confidence-gated template cross-correlation (the same landmark-tracking engine behind
+  `correct_calcium_motion`) within a bounded `search_radius`. Cheap, and keeps the exact
+  hand-drawn shape. **2D+T only** — pass `z_project="max"` to track lateral (XY) drift on a
+  Z-max-projected copy of a 4D (TZYX) movie; Z/focus drift is *not* corrected, and the tool says
+  so in `warnings`.
+- **`resegment_roi_over_time`** ("draw wide, re-detect"): re-thresholds a fresh ROI from scratch,
+  every frame, inside a generously wide, fixed `boundary_mask` (build one from a Shapes ROI via
+  `boundary_mask_from_shapes`), then links each frame's detection back to the seed's stable label
+  id by nearest centroid. Works directly in 2D+T or true 3D+T and has no per-frame step limit, at
+  the cost of needing the boundary wide enough to contain wherever the object actually goes.
+- **which one**: reach for `track_roi_over_time` first (cheaper, exact-shape); fall back to
+  `resegment_roi_over_time` when the object moves more per frame than a sane search radius,
+  changes shape/size as it drifts, or the movie is true 3D+T. `set_labels_at_frame` hand-corrects
+  one frame of either producer's output afterward (e.g. a frame that came back gated).
+- **honest limits**: both gate every frame by confidence and write background (`0`) — never an
+  extrapolated or guessed position — wherever they cannot confidently place the object, so
+  `measure_intensity_over_time` emits **no row** for that (label, time) pair: a real gap, not a
+  smoothed-over number. Check the returned `coverage` (per-label usable fraction) and `rejected`
+  (labels under 50% coverage) before trusting a trace. `track_roi_over_time` can bridge a brief
+  confidence dip on one ROI from *other* simultaneously-tracked ROIs' motion, but that needs 3+
+  ROIs in the same call — the common single-ROI case has no such rescue and gates immediately.
+
 ## Representative workflows
 
 **① Single-image cell measurement**
@@ -120,10 +151,10 @@ A CSV combined outside the app comes back in via `import_table` and continues id
 `segment_intensity_regions("green")` → `partition_inside_outside(green, specimen)` → `measure_intensity(partition, ["red"])` → `compare_groups(group_col="region", test="wilcoxon")` → `plot_group_distribution(paired=True)`.
 
 **④ Timecourse / calcium**
-`measure_intensity_over_time(ROI, movie)` → `normalize_timecourse` / `extract_timecourse_features` → `plot_timecourse`. For calcium, `assess_calcium_timecourse` → `plot_dff_heatmap`.
+`measure_intensity_over_time(ROI, movie)` → `normalize_timecourse` / `extract_timecourse_features` → `plot_timecourse`. For calcium, `assess_calcium_timecourse` → `plot_dff_heatmap`. If the sample drifts, correct the ROI first — `track_roi_over_time` (or `resegment_roi_over_time`) → `measure_intensity_over_time` — see the ROI drift-correction guide above.
 
 **⑤ Sequential multi-file (collected into one folder)**
 Call `start_analysis(<name>)` once → analyze per file (`analyze_target_cells` appends to the open bundle, as do `save_result_bundle`, figures, stats and QC) → `finalize_analysis` at the end; do not call it between files. Each file's measurements land in `tables/<file>.csv` and `tables/combined.csv` is rebuilt across all of them, so the folder stands alone as a result set. Without `start_analysis` each file gets its own folder.
 
 ---
-*This document is based on the tools actually registered in the code (110). Update it whenever new tools/options are added.*
+*This document is based on the tools actually registered in the code (127). Update it whenever new tools/options are added.*

@@ -75,7 +75,10 @@ def segment_target_objects(
         image_layer,
         tool_name="segment_target_objects",
         dims="2d_or_3d",
-        ts_hint="Use extract_timepoint or a per-frame workflow first.",
+        ts_hint="Use extract_timepoint to segment a representative frame first, "
+        "then track_roi_over_time (or resegment_roi_over_time for a wide boundary) "
+        "to carry the ROI across every frame -- never measure this single frame "
+        "against the whole movie.",
     )
     saturation_warnings = _saturation_warnings(data, layer_name=L.name)
 
@@ -326,7 +329,10 @@ def auto_segment_target(
         image_layer,
         tool_name="auto_segment_target",
         dims="2d_or_3d",
-        ts_hint="Use extract_timepoint or a per-frame workflow first.",
+        ts_hint="Use extract_timepoint to segment a representative frame first, "
+        "then track_roi_over_time (or resegment_roi_over_time for a wide boundary) "
+        "to carry the ROI across every frame -- never measure this single frame "
+        "against the whole movie.",
     )
     saturation_warnings = _saturation_warnings(data, layer_name=L.name)
 
