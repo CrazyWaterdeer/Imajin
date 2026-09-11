@@ -155,7 +155,7 @@ def _check_gui_renderer() -> tuple[bool, str]:
         return False, f"probe failed: {type(e).__name__}: {str(e)[:80]}"
 
 
-def _doctor() -> int:
+def _doctor(settings: Settings) -> int:
     print("imajin doctor")
     print("=" * 48)
 
@@ -216,10 +216,47 @@ def _doctor() -> int:
         print("  On WSL, imajin auto-sets GALLIUM_DRIVER=d3d12; check that it")
         print("  isn't being overridden in your shell.")
 
+    # Providers/Ollama below are informational only: `ok` (and so the exit code)
+    # stays driven solely by imports/CUDA/display, exactly as before this
+    # section existed. Most users configure one provider, not all four, so an
+    # unavailable one is a normal state, not a failed doctor run.
     print("\n[Providers]")
-    for var in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY"):
-        present = bool(os.environ.get(var))
-        print(f"  {var}: {'set' if present else 'not set'}")
+    from imajin.ui.provider_status import compute_statuses
+
+    statuses = compute_statuses(settings)
+    for kind in ("anthropic", "claude-agent", "openai", "ollama"):
+        status = statuses.get(kind)
+        if status is None:
+            continue
+        marker = "ok  " if status.available else "warn"
+        detail = "available" if status.available else (status.reason or "unavailable")
+        print(f"  [{marker}] {kind:<12} {detail}")
+
+    print("\n[Ollama]")
+    from imajin.agent.local_models import discover_ollama_models
+
+    # Same (normalised) base URL compute_statuses just probed above, so this
+    # reuses that cache entry instead of a second /api/tags round trip.
+    local_models = discover_ollama_models(settings.ollama_base_url)
+    if not local_models:
+        print(f"  no models discovered at {settings.ollama_base_url}")
+        # On WSL2 'localhost' names the VM, not the Windows host, so a daemon
+        # running on the Windows side is silently unreachable and looks exactly
+        # like "no models pulled". Name the address that would reach it rather
+        # than leaving the user to guess.
+        from imajin.ui.ollama_helper import suggest_base_url
+
+        suggested = suggest_base_url(settings.ollama_base_url)
+        if suggested:
+            print(f"  on WSL, an Ollama running on the Windows host is at {suggested}")
+            print("  set OLLAMA_BASE_URL to that, or Imajin → API Keys… → Ollama base URL")
+    else:
+        for m in local_models:
+            marker = "ok  " if m.supports_tools else "warn"
+            ctx = f"{m.context_length} tokens" if m.context_length is not None else "unknown"
+            size = f" ({m.parameter_size})" if m.parameter_size else ""
+            caps = ", ".join(sorted(m.capabilities)) or "none reported"
+            print(f"  [{marker}] {m.name}{size} — context: {ctx} — capabilities: {caps}")
 
     print()
     return 0 if ok else 1
@@ -257,7 +294,7 @@ def main() -> int:
     args = parser.parse_args()
 
     if args.doctor:
-        return _doctor()
+        return _doctor(settings)
     if args.demo:
         print("demo not yet implemented — Phase 4")
         return 1

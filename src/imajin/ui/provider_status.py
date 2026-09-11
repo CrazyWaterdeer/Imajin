@@ -4,8 +4,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from imajin.agent.local_models import probe_ollama
 from imajin.agent.providers.claude_agent import subscription_available
-from imajin.ui.ollama_helper import is_running
 
 
 @dataclass(frozen=True)
@@ -36,10 +36,13 @@ def compute_statuses(settings: Any) -> dict[str, ProviderStatus]:
         if settings.openai_api_key
         else ProviderStatus(available=False, reason="no API key")
     )
+    # probe_ollama (not the bare TCP check in ollama_helper.is_running) so a
+    # daemon that's up but has nothing pulled, or nothing tool-capable, shows
+    # its real reason in the picker instead of a green light that only fails
+    # once the user actually sends a message.
+    ollama_ok, ollama_reason = probe_ollama(settings.ollama_base_url, timeout=0.5)
     statuses["ollama"] = (
-        _OK
-        if is_running(settings.ollama_base_url, timeout=0.5)
-        else ProviderStatus(available=False, reason="Ollama offline")
+        _OK if ollama_ok else ProviderStatus(available=False, reason=ollama_reason)
     )
 
     return statuses

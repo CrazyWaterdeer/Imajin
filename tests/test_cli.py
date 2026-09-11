@@ -25,6 +25,106 @@ def test_cli_help() -> None:
     assert "--doctor" in result.stdout
 
 
+def test_doctor_providers_section_reports_each_kind(monkeypatch, capsys) -> None:
+    # In-process (not subprocess) so compute_statuses/discover_ollama_models can
+    # be faked -- house rule is no real network/Ollama in tests, and a subprocess
+    # run can't be monkeypatched from here.
+    from imajin import cli
+    from imajin.config import Settings
+    from imajin.ui.provider_status import ProviderStatus
+
+    monkeypatch.setattr(
+        "imajin.ui.provider_status.compute_statuses",
+        lambda settings: {
+            "anthropic": ProviderStatus(True, None),
+            "claude-agent": ProviderStatus(False, "not logged in"),
+            "openai": ProviderStatus(False, "no API key"),
+            "ollama": ProviderStatus(False, "no tool-capable model"),
+        },
+    )
+    monkeypatch.setattr(
+        "imajin.agent.local_models.discover_ollama_models", lambda base_url, **kw: []
+    )
+
+    cli._doctor(Settings())
+
+    out = capsys.readouterr().out
+    assert "[Providers]" in out
+    assert "anthropic" in out
+    assert "not logged in" in out
+    assert "no tool-capable model" in out
+    assert "[Ollama]" in out
+    assert "no models discovered" in out
+
+
+def test_doctor_ollama_section_lists_discovered_models(monkeypatch, capsys) -> None:
+    from imajin import cli
+    from imajin.agent.local_models import LocalModel
+    from imajin.config import Settings
+    from imajin.ui.provider_status import ProviderStatus
+
+    monkeypatch.setattr(
+        "imajin.ui.provider_status.compute_statuses",
+        lambda settings: {
+            k: ProviderStatus(True, None)
+            for k in ("anthropic", "claude-agent", "openai", "ollama")
+        },
+    )
+    model = LocalModel(
+        name="qwen3.5:9b",
+        context_length=262144,
+        capabilities=frozenset({"completion", "tools", "vision", "thinking"}),
+        parameter_size="9.7B",
+        size_bytes=6_000_000_000,
+    )
+    monkeypatch.setattr(
+        "imajin.agent.local_models.discover_ollama_models", lambda base_url, **kw: [model]
+    )
+
+    cli._doctor(Settings())
+
+    out = capsys.readouterr().out
+    assert "qwen3.5:9b" in out
+    assert "9.7B" in out
+    assert "262144" in out
+    assert "tools" in out
+
+
+def test_doctor_return_code_unaffected_by_provider_availability(monkeypatch) -> None:
+    # Providers are informational -- the exit code contract (0 ok / 1 not) stays
+    # reserved for imports/CUDA/display, so all-down vs all-up must not change
+    # it. Comparing two runs rather than asserting a literal 0/1 keeps this
+    # independent of whatever imports/CUDA/display looks like on the machine
+    # running the test.
+    from imajin import cli
+    from imajin.config import Settings
+    from imajin.ui.provider_status import ProviderStatus
+
+    monkeypatch.setattr(
+        "imajin.agent.local_models.discover_ollama_models", lambda base_url, **kw: []
+    )
+
+    monkeypatch.setattr(
+        "imajin.ui.provider_status.compute_statuses",
+        lambda settings: {
+            k: ProviderStatus(False, "unavailable")
+            for k in ("anthropic", "claude-agent", "openai", "ollama")
+        },
+    )
+    code_all_down = cli._doctor(Settings())
+
+    monkeypatch.setattr(
+        "imajin.ui.provider_status.compute_statuses",
+        lambda settings: {
+            k: ProviderStatus(True, None)
+            for k in ("anthropic", "claude-agent", "openai", "ollama")
+        },
+    )
+    code_all_up = cli._doctor(Settings())
+
+    assert code_all_down == code_all_up
+
+
 def test_input_method_env_follows_existing_ime(monkeypatch) -> None:
     from imajin import cli
 

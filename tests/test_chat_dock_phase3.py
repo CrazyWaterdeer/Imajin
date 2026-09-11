@@ -1,9 +1,44 @@
 from __future__ import annotations
 
+import pytest
 
-def test_chat_dock_has_model_picker(qtbot, viewer) -> None:
+
+@pytest.fixture(autouse=True)
+def _no_real_ollama_discovery(monkeypatch):
+    """ChatDock.__init__ calls discover_ollama_models unconditionally (see
+    chat_dock._build_model_choices) to populate the picker's local rows.
+    Default that to "found nothing" so no test in this file touches a real
+    Ollama daemon; tests that care about specific discovered models override
+    this via their own monkeypatch.setattr (see _patch_one_discovered_model).
+    """
+    from imajin.ui import chat_dock as cd
+
+    monkeypatch.setattr(cd, "discover_ollama_models", lambda base_url: [])
+
+
+def _patch_one_discovered_model(monkeypatch):
+    """Pin discovery to exactly one tool-capable local model so picker row
+    count/positions are deterministic, regardless of what (if anything) is
+    actually pulled on the machine running this test."""
+    from imajin.agent.local_models import LocalModel
+    from imajin.ui import chat_dock as cd
+
+    model = LocalModel(
+        name="qwen3.5:9b",
+        context_length=262144,
+        capabilities=frozenset({"completion", "tools", "vision", "thinking"}),
+        parameter_size="9.7B",
+        size_bytes=6_000_000_000,
+    )
+    monkeypatch.setattr(cd, "discover_ollama_models", lambda base_url: [model])
+    return model
+
+
+def test_chat_dock_has_model_picker(qtbot, viewer, monkeypatch) -> None:
     from imajin.config import Settings
     from imajin.ui.chat_dock import ChatDock
+
+    _patch_one_discovered_model(monkeypatch)
 
     dock = ChatDock(viewer=viewer, settings=Settings())
     qtbot.addWidget(dock)

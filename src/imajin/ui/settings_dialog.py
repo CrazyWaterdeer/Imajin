@@ -28,8 +28,7 @@ class SettingsDialog(QDialog):
         intro = QLabel(
             f"Stored at <code>{Settings.secrets_path()}</code>.<br>"
             "Environment variables (ANTHROPIC_API_KEY, OPENAI_API_KEY, "
-            "OLLAMA_BASE_URL) take precedence at startup."
-            
+            "OLLAMA_BASE_URL, OLLAMA_MODEL) take precedence at startup."
         )
         intro.setStyleSheet(f"color: {Theme.TEXT_SECONDARY}; font-weight: normal;")
         intro.setWordWrap(True)
@@ -53,6 +52,13 @@ class SettingsDialog(QDialog):
         self.ollama_edit.setPlaceholderText("http://localhost:11434/v1")
         form.addRow("Ollama base URL", self.ollama_edit)
 
+        self.ollama_model_edit = QLineEdit(settings.ollama_model)
+        self.ollama_model_edit.setPlaceholderText(
+            "e.g. qwen3.5:9b — only used as a fallback when Ollama discovery "
+            "finds no tool-capable model"
+        )
+        form.addRow("Ollama model (fallback)", self.ollama_model_edit)
+
         layout.addLayout(form)
         layout.addStretch(1)
 
@@ -73,5 +79,6 @@ class SettingsDialog(QDialog):
         self.settings.ollama_base_url = (
             self.ollama_edit.text().strip() or "http://localhost:11434/v1"
         )
+        self.settings.ollama_model = self.ollama_model_edit.text().strip()
         self.settings.save_secrets()
         self.accept()
