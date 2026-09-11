@@ -5,7 +5,11 @@ from typing import Any, Literal
 import numpy as np
 import pandas as pd
 
-from imajin.analysis.arrays import layer_axes_from_metadata, materialize_array
+from imajin.analysis.arrays import (
+    layer_axes_from_metadata,
+    materialize_array,
+    resolve_time_axis,
+)
 from imajin.agent.qt_dispatch import call_on_main
 from imajin.session import (
     get_table,
@@ -113,25 +117,9 @@ def _layer_axes(layer: Any, ndim: int) -> str:
 
 
 def _resolve_time_axis(layer: Any, image_ndim: int, time_axis: int | str | None) -> int:
+    """Thin delegation -- see analysis.arrays.resolve_time_axis for the fail-loud body."""
     axes = _layer_axes(layer, image_ndim)
-    if time_axis is None:
-        if "T" in axes:
-            return axes.index("T")
-        raise ValueError(
-            f"image layer axes {axes!r} do not include a time axis. Reload with "
-            "metadata axes containing 'T' or pass time_axis explicitly."
-        )
-    if isinstance(time_axis, int):
-        idx = time_axis if time_axis >= 0 else image_ndim + time_axis
-        if idx < 0 or idx >= image_ndim:
-            raise ValueError(f"time_axis {time_axis} out of range for {image_ndim}-D image")
-        return idx
-    code = time_axis.upper()
-    if len(code) != 1:
-        raise ValueError(f"time_axis must be an axis code or integer, got {time_axis!r}")
-    if code not in axes:
-        raise ValueError(f"axis {time_axis!r} not found in image axes {axes!r}")
-    return axes.index(code)
+    return resolve_time_axis(axes, image_ndim, time_axis)
 
 
 # Intensity properties whose multichannel regionprops output is one column per

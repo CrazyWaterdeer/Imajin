@@ -52,6 +52,40 @@ task-oriented [getting-started guide](getting_started.md). Back to the
   the z-stack first (mean by default — the standard for intensity comparison)
   and measures 2D ROIs on the result. Tables persist in a session registry
   and surface in a layer-linked Qt table dock.
+- **ROI drift correction (live imaging)**: an ROI drawn once and measured
+  against only that one frame silently mismeasures once the sample drifts;
+  `measure_intensity_over_time` also accepts a genuine per-frame Labels
+  layer, and two producers build one, matching how a scientist already
+  copes with drift by hand. `track_roi_over_time` ("draw once, track")
+  follows the seed's own drawn footprint frame to frame by confidence-gated
+  template cross-correlation (the same landmark-tracking engine behind
+  `correct_calcium_motion`) within a bounded `search_radius` — cheap and
+  exact-shape, but **2D+T only** (`z_project="max"` tracks lateral XY drift
+  on a Z-max-projected copy of a 4D movie; Z/focus drift is not corrected).
+  `resegment_roi_over_time` ("draw wide, re-detect") re-thresholds a fresh
+  ROI from scratch every frame inside a generously wide, fixed
+  `boundary_mask`, then links each detection back to the seed's stable
+  label id by nearest centroid — works directly in 2D+T or true 3D+T with
+  no per-frame step limit, at the cost of needing a boundary wide enough to
+  contain wherever the object drifts to. Reach for `track_roi_over_time`
+  first; fall back to `resegment_roi_over_time` for a jump past a sane
+  search radius, a shape change while drifting, or true 3D+T movement. Both
+  gate every frame by confidence and write background where the object
+  cannot be confidently placed — never extrapolated or guessed — so a gated
+  frame gets **no measurement row**, a real gap rather than a fabricated
+  number; `set_labels_at_frame` hand-corrects one such frame afterward.
+  That gate tracks signal **contrast**, not drift, so on a channel whose
+  own brightness dips toward baseline between events (a calcium transient's
+  trough, say), the dropped frames are systematically the dim ones and the
+  surviving trace is biased **upward** — correct behaviour for the gate, a
+  trap for whoever reads the trace. Track a structural / activity-
+  independent channel instead (a co-imaged marker that stays lit
+  throughout — the same idea `correct_calcium_motion`'s own landmark
+  tracking already relies on) and measure the resulting Labels layer
+  against the signal channel; nothing about `measure_intensity_over_time`
+  requires the tracked and measured channels to match. `track_roi_over_time`
+  names this bias explicitly in its `warnings` when a track's gated frames
+  are dominated by the contrast gate rather than drift.
 - **Colocalization**: Manders M1/M2 (Otsu / zero / scalar threshold modes)
   and Pearson correlation, both mask-aware.
 - **Channel-as-mask (inside vs outside a domain)**: use one segmented channel to

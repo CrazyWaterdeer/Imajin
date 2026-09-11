@@ -51,6 +51,20 @@ _TOOL_PHRASES: dict[str, str] = {
         "per-object intensity features ({properties}) were extracted with "
         "scikit-image regionprops_table on channel(s) {channels}"
     ),
+    "track_roi_over_time": (
+        "a hand-drawn ROI ({labels_layer}) was tracked across every frame of "
+        "{image_layer} by template cross-correlation tracking (search radius "
+        "{search_radius}px, confidence floor {conf_floor}), and frames that failed "
+        "the confidence gate were excluded from the measurement rather than "
+        "interpolated"
+    ),
+    "resegment_roi_over_time": (
+        "an ROI seeded from {labels_layer} was re-detected on every frame of "
+        "{image_layer} by per-frame re-detection within a user-defined boundary "
+        "({boundary_mask}), linked back to its seed label by nearest centroid, and "
+        "frames that failed the confidence gate were excluded from the measurement "
+        "rather than interpolated"
+    ),
     "measure_intensity_over_time": (
         "ROI intensity time courses were extracted with scikit-image "
         "regionprops_table from {image_layer}"
@@ -145,6 +159,10 @@ def _format_phrase(tool_name: str, inputs: dict[str, Any]) -> str | None:
     args["image_a"] = inputs.get("image_a", "?")
     args["image_b"] = inputs.get("image_b", "?")
     args["image_layer"] = inputs.get("image_layer", "?")
+    args["labels_layer"] = inputs.get("labels_layer", "?")
+    args["boundary_mask"] = inputs.get("boundary_mask", "?")
+    args["search_radius"] = inputs.get("search_radius", "?")
+    args["conf_floor"] = inputs.get("conf_floor", "?")
     args["axis"] = inputs.get("axis", "?")
     args["projection"] = inputs.get("projection", "?")
     args["method"] = inputs.get("method", "?")

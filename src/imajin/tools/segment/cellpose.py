@@ -19,8 +19,10 @@ from imajin.tools.registry import tool
 @tool(
     description="Segment cells with Cellpose-SAM (generalist pretrained model). "
     "Works on 2D images (YX) and 3D z-stacks (ZYX). 4D (TZYX) and time-series (TYX) "
-    "inputs must be reduced to a single timepoint first via extract_timepoint or a "
-    "per-frame workflow. Set do_3D=True for true 3D segmentation on Z-stacks. "
+    "inputs must be reduced to a single timepoint first via extract_timepoint; to "
+    "measure over time, carry that segmentation across the movie afterward with "
+    "track_roi_over_time (or resegment_roi_over_time) rather than reusing this "
+    "single frame. Set do_3D=True for true 3D segmentation on Z-stacks. "
     "Use diameter=None for auto-estimation; otherwise specify approximate cell "
     "diameter in pixels.",
     phase="2",
@@ -43,7 +45,10 @@ def cellpose_sam(
         image_layer,
         tool_name="cellpose_sam",
         dims="2d_or_3d",
-        ts_hint="Use extract_timepoint to pick a frame first, or run a per-frame workflow.",
+        ts_hint="Use extract_timepoint to segment one representative frame, then "
+        "call track_roi_over_time (or resegment_roi_over_time for a wide boundary) "
+        "to carry that ROI across every frame -- do not measure this single frame "
+        "against the whole movie.",
         ndim_hint=" Reduce to YX/ZYX before calling.",
     )
 

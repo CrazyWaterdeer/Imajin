@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import os
 
+import napari
 import numpy as np
 import pytest
 from PIL import Image
@@ -166,3 +167,36 @@ def test_animate_z_rotation_writes_gif(viewer, tmp_path) -> None:
     assert out.exists()
     assert out.stat().st_size > 0
     assert res["frames"] == 6
+
+
+def test_extract_timepoint_on_labels_layer_adds_labels_not_image(viewer) -> None:
+    # A per-frame tracked/redetected ROI is a Labels stack; extracting one frame
+    # for inspection or manual correction must not silently downgrade it to an
+    # Image layer (that would drop the label ids the correction loop keys on).
+    data = np.zeros((3, 16, 16), dtype=np.int32)
+    data[:, 4:8, 4:8] = 7
+    viewer.add_labels(data, name="tracked_roi", metadata={"axes": "TYX"})
+
+    res = view.extract_timepoint("tracked_roi", t=1)
+
+    new_layer = viewer.layers[res["new_layer"]]
+    # The offscreen `viewer` fixture's fake layer tags kind on a single shared
+    # class (no real Labels/Image subclasses to distinguish); a real napari.Viewer
+    # returns an actual Labels instance. Either way it must not read as an Image.
+    is_labels = isinstance(new_layer, napari.layers.Labels)
+    is_labels = is_labels or getattr(new_layer, "kind", None) == "labels"
+    assert is_labels
+    np.testing.assert_array_equal(np.asarray(new_layer.data), data[1])
+
+
+def test_extract_timepoint_propagates_axes(viewer) -> None:
+    # Downstream tools (this module's _resolve_axis, measure.py's fail-loud time-
+    # axis resolver) trust recorded 'axes' metadata over guessing; a frame pulled
+    # from a TZYX movie must be re-labeled ZYX, not left un-annotated.
+    data = np.arange(2 * 3 * 8 * 8, dtype=np.float32).reshape(2, 3, 8, 8)
+    viewer.add_image(data, name="movie4d", metadata={"axes": "TZYX"})
+
+    res = view.extract_timepoint("movie4d", t=1)
+
+    new_layer = viewer.layers[res["new_layer"]]
+    assert new_layer.metadata["axes"] == "ZYX"

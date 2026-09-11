@@ -1,12 +1,10 @@
 from __future__ import annotations
 
-import os
-from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 import numpy as np
 
-from imajin.analysis.arrays import materialize_array
+from imajin.analysis.arrays import map_over_axis0, materialize_array
 from imajin.agent.qt_dispatch import call_on_main
 from imajin.tools.napari_ops import add_image_from_worker, snapshot_layer
 from imajin.tools.registry import tool
@@ -22,17 +20,15 @@ _materialize = materialize_array  # shared: analysis.arrays.materialize_array
 def _run_over_planes(fn, n: int) -> None:
     """Apply ``fn(z)`` for z in range(n), across threads when it pays off.
 
-    Independent Z-planes with disjoint output slices — safe to parallelise, and
-    ``skimage.restoration.rolling_ball`` releases the GIL, so this is a real
-    speedup (measured ~7x on a multi-core box) with byte-identical output.
+    Thin delegation to analysis.arrays.map_over_axis0 (same threshold, same
+    worker formula -- byte-identical behaviour) -- see that function's
+    docstring for the full safety argument (independent Z-planes with
+    disjoint output slices, GIL released by the underlying skimage call,
+    measured ~7x on a multi-core box). Kept as a private wrapper here, rather
+    than calling map_over_axis0 directly at this module's one call site,
+    because a rename churns nothing: the caller already spells it this way.
     """
-    if n <= 1:
-        for z in range(n):
-            fn(z)
-        return
-    workers = min(n, os.cpu_count() or 4)
-    with ThreadPoolExecutor(max_workers=workers) as ex:
-        list(ex.map(fn, range(n)))
+    map_over_axis0(fn, n)
 
 
 def _subtract_rolling_ball(

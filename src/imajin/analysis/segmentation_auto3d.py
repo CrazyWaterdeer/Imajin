@@ -274,6 +274,26 @@ def stitch_plane_labels(
     max_centroid_distance: float | None = None,
     max_area_ratio: float = 3.0,
 ) -> tuple[np.ndarray, dict[str, Any]]:
+    """Union-find MERGE of same-object ROIs across adjacent Z planes into one 3D
+    label -- correct here because a cell's planes really are one physical
+    object, so collapsing them into a single permanent id loses nothing.
+
+    Do NOT copy this shape onto a time axis (see
+    :func:`~imajin.analysis.roi_redetect.link_nearest`, which deliberately does
+    not): two time points of the SAME object must stay separate labels sharing
+    one id, not merge into one node, because merging cannot be undone -- two
+    real objects that transiently cross paths in time would fuse into one
+    identity forever. Overlap is also the PRIMARY gate here
+    (``min_overlap_fraction``, tried before ``_centroid_links``, and preferred
+    over it by :func:`_link_sort_key` whenever both fire): adjacent Z planes of
+    one cell are expected to overlap heavily, but a drifting object in time can
+    have zero pixel overlap between consecutive frames -- exactly the
+    discontinuity a time-axis linker exists to bridge, so overlap-first gating
+    is backwards there. :func:`area_ratio` is the one piece of scoring this
+    function's candidate generators (:func:`_overlap_links`,
+    :func:`_centroid_links`) and the time-axis linker do share -- see its own
+    docstring.
+    """
     arr = np.asarray(labels_stack, dtype=np.int32)
     if arr.ndim != 3:
         raise ValueError(f"stitch_plane_labels expects ZYX labels, got {arr.shape}")
@@ -797,6 +817,30 @@ def _candidate_variants(base_options: dict[str, Any]) -> list[dict[str, Any]]:
     return variants
 
 
+def area_ratio(a: float, b: float) -> float:
+    """Size-consistency ratio between two areas/pixel-counts (always >= 1.0).
+
+    The one piece of candidate-scoring genuinely shared between this module's
+    Z-stack plane linker (:func:`_overlap_links`, :func:`_centroid_links`, both
+    below) and the time-axis linker
+    (:func:`~imajin.analysis.roi_redetect.link_nearest`): on EITHER axis, a
+    candidate whose area is wildly different from the thing it might be linked
+    to is probably a different object, not the same one imaged again. That is
+    the full extent of what is shared -- see the module docstring divergence
+    note above :func:`stitch_plane_labels` and the one in roi_redetect.py for
+    why the rest (overlap-first gating, union-find merging, batch two-sided
+    resolution) is NOT: those encode assumptions that hold for adjacent Z
+    planes and actively break for a drifting object in time.
+
+    Floors both inputs at 1 so a degenerate zero-pixel edge case never divides
+    by zero or reports an infinite ratio -- matches the pre-extraction inline
+    expression exactly (both call sites already floored their own areas at 1
+    before this ratio was computed; the floor here is a no-op for them and a
+    safety net for any other caller).
+    """
+    return max(a, b) / max(1, min(a, b))
+
+
 def _overlap_links(
     current: np.ndarray,
     nxt: np.ndarray,
@@ -817,9 +861,9 @@ def _overlap_links(
         b_key = (int(z + 1), int(b_raw))
         area_a = max(1, areas.get(a_key, 1))
         area_b = max(1, areas.get(b_key, 1))
-        area_ratio = max(area_a, area_b) / max(1, min(area_a, area_b))
+        ratio = area_ratio(area_a, area_b)
         overlap_fraction = float(count / max(1, min(area_a, area_b)))
-        if overlap_fraction >= min_overlap_fraction and area_ratio <= max_area_ratio:
+        if overlap_fraction >= min_overlap_fraction and ratio <= max_area_ratio:
             links.append((a_key, b_key, "overlap", overlap_fraction))
     return links
 
@@ -840,8 +884,7 @@ def _centroid_links(
         for b_key in nxt:
             by, bx = centroids[b_key]
             area_b = max(1, areas[b_key])
-            area_ratio = max(area_a, area_b) / max(1, min(area_a, area_b))
-            if area_ratio > max_area_ratio:
+            if area_ratio(area_a, area_b) > max_area_ratio:
                 continue
             distance = float(np.hypot(ay - by, ax - bx))
             if distance <= max_centroid_distance:
