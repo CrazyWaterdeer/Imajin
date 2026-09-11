@@ -330,8 +330,12 @@ def test_make_provider_fallback_row_has_no_clamp_and_no_vision(qtbot, viewer, mo
 
     assert provider.model == "phi4:14b"
     # No known context_length to clamp to -> the headroom-adjusted estimate,
-    # rounded up to a multiple of 8192, floored at 32768.
-    assert provider.num_ctx >= 32768
+    # rounded up to a multiple of 8192, floored at 16384 (not the old 32768:
+    # _make_provider's ollama branch now sizes num_ctx from the 20-tool core
+    # subset and passes floor=16384 at the call site, so a legitimately
+    # smaller estimate is no longer forced back up to the old default -- see
+    # imajin.agent.tool_subset).
+    assert provider.num_ctx >= 16384
     assert provider.num_ctx % 8192 == 0
     assert provider.supports_vision is False  # capabilities unknown -> default off
 

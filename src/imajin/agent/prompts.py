@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+
 SYSTEM_PROMPT = """You are a confocal microscopy analysis assistant integrated into a napari
 viewer. The user has loaded fluorescence imaging data and you help them analyze it through
 the tools below. **You are an action-oriented agent**: when the user's intent is clear,
@@ -480,6 +482,177 @@ Confirm only for:
 """
 
 
+_ReductionSpan = tuple[str, str, frozenset[str]]
+
+# Each span is a whole coherent block of SYSTEM_PROMPT -- a named pipeline, or one
+# or more adjacent bullets -- tagged with every tool name (core and non-core alike)
+# it instructs calling. _reduced_system_prompt() drops a span outright when
+# available_tools does not cover its full `required` set, rather than deleting just
+# the offending names from inside it: surgical removal risks a pipeline step that
+# dangles ("then measure the result" with no antecedent) or a sentence that stops
+# mid-clause. Measured effect this supports: with all 107 tools
+# advertised qwen3.5:4b terminated on 2 of 3 multi-step prompts, detouring through
+# non-core orientation tools; with a 20-tool core and this reduced prompt it
+# terminated 3/3, in 2-3 fewer steps.
+_REDUCTION_SPANS: tuple[_ReductionSpan, ...] = (
+    # get_batch_progress ledger-listing tool
+    (
+        '- When continuing a multi-file batch, pick the **next pending** file; never restart from the',
+        '- For a multi-file batch, call `register_files` first so pending files are tracked.',
+        frozenset({'get_batch_progress'}),
+    ),
+    # advance_to_file/unload_layers stepping, start_analysis/finalize_analysis session
+    # folder, and the combine_tables/map_column/coalesce_columns/
+    # select_representative_rows/import_table table-pooling recipe
+    (
+        '- When stepping through large files **one at a time** (e.g. a hand-drawn ROI per file), load the',
+        '- Choosing a statistical test: `compare_groups(test="auto")` already picks parametric vs',
+        frozenset({
+            'advance_to_file', 'analyze_target_cells', 'coalesce_columns', 'combine_tables',
+            'compare_groups', 'finalize_analysis', 'import_table', 'load_file',
+            'map_column', 'plot_group_distribution', 'register_files',
+            'run_recipe_on_samples', 'save_result_bundle',
+            'select_representative_rows', 'start_analysis', 'unload_layers',
+        }),
+    ),
+    # plot_grouped_bars two-factor guidance and the hand-drawn-ROI
+    # boundary_mask_from_shapes/max_projection recipe
+    (
+        '- Two-factor designs — know WHICH values to compare. When the data has a condition factor AND a',
+        # Leading \n (vs. the bare heading text) keeps the blank line that normally
+        # separates this bulleted list from the next prose paragraph -- dropping the
+        # bullets shouldn't also silently weld the two sections together.
+        '\nConcrete pipelines (these are FUNCTIONS to invoke as tool calls, not text to write):',
+        frozenset({
+            'auto_segment_target', 'boundary_mask_from_shapes', 'max_projection',
+            'plot_group_distribution', 'plot_grouped_bars', 'segment_3d_cells_auto',
+            'segment_target_objects',
+        }),
+    ),
+    # compare / time-course / representative-image / average-projection /
+    # sample-grouping / resume-batch / channel-annotation pipelines -- every one of
+    # them names a non-core tool
+    (
+        'Pipeline "compare" — triggered by "compare channels", "colocalization", "공국지화":',
+        'When the user says "yes" / "do it" / "그냥 해" / "해줘" after any of your questions,',
+        frozenset({
+            'advance_to_file', 'analyze_target_cells', 'annotate_channel', 'annotate_sample',
+            'average_projection', 'boundary_mask_from_shapes', 'cellpose_sam',
+            'correct_sparse', 'export_channel_composite_png', 'extract_timepoint',
+            'filter_registered_files', 'list_layers', 'list_sample_annotations',
+            'manders_coefficients', 'max_projection', 'measure_intensity_over_time',
+            'measure_projected_intensity', 'open_result_bundle',
+            'pearson_correlation', 'plan_resume', 'register_files',
+            'resegment_roi_over_time', 'resolve_channel', 'segment_target_objects',
+            'track_roi_over_time',
+        }),
+    ),
+    # intent bullets compare-channels through batch-analysis -- same non-core mix
+    # as the pipeline block above
+    (
+        '- **"compare channels"** / **"colocalization"** / **"공국지화"** →',
+        '- **channel color references** / **"green에서 측정"** / **"red channel 분석"** /',
+        frozenset({
+            'annotate_sample', 'annotate_samples', 'average_projection',
+            'boundary_mask_from_shapes', 'cellpose_sam', 'create_analysis_recipe',
+            'export_channel_composite_png', 'import_recipe_from_bundle',
+            'load_file', 'manders_coefficients', 'measure_intensity_over_time',
+            'measure_projected_intensity', 'pearson_correlation', 'register_files',
+            'resegment_roi_over_time', 'run_recipe_on_samples',
+            'segment_target_objects', 'track_cells', 'track_roi_over_time',
+            'validate_analysis_metadata',
+        }),
+    ),
+    # ROI-judgment bullet's review_target_roi fallback and
+    # segment_expression_domain caution
+    (
+        '- **ROI judgment (too wide / too narrow)**: segmentation results carry a',
+        '- **Distribution flag vs confidence**: results may also carry `distribution_flag`',
+        frozenset({
+            'auto_segment_target', 'correct_roi', 'review_target_roi',
+            'segment_expression_domain',
+        }),
+    ),
+    # list_registered_files/filter_registered_files pagination bullet
+    (
+        '- Tool results in the conversation may be compacted. If a file list says entries were',
+        '- Preserve displayed microscope channel names such as `Ch1`/`Ch2`. These are',
+        frozenset({'filter_registered_files', 'list_registered_files'}),
+    ),
+    # stale segment_cells naming note
+    (
+        '- `segment_cells` (Cellpose-SAM) produces a Labels layer named "<image>_masks".',
+        '- Manders M1/M2 are more appropriate than Pearson r when one channel is thresholded /',
+        frozenset({'segment_cells'}),
+    ),
+    # before-saving-outputs Location bullet's start_analysis instruction
+    (
+        '- **Location** — is an analysis bundle active for THESE files? When you analyse files that',
+        '- **Per-file unique names** — the tools now derive per-file identity from the SOURCE FILE',
+        frozenset({'start_analysis'}),
+    ),
+    # what-requires-confirmation export_table/save_labels/screenshot bullet
+    (
+        '- Manual `export_table` / `save_labels` / `screenshot`: only run if the user explicitly',
+        '- Batch operations over many files (Phase 4.5+): confirm scope first.',
+        frozenset({'export_table', 'save_labels', 'screenshot'}),
+    ),
+)
+
+# Kept short deliberately (this itself counts against the reduced token budget the
+# feature exists to shrink). Stops the model filling a gap left by a dropped block
+# above with an invented call -- without this, both qwen test models called
+# list_sample_annotations and list_registered_files, tools that were never
+# advertised, wasting a full error round-trip each on the model with the fewest
+# loops to spare. It says explicitly what get_help does NOT do, because the obvious
+# reading of "ask for help" is to call it: get_help is onboarding-scoped (see
+# imajin/tools/help.py) and returns a docs URL plus guide-section titles, never a
+# tool list, so sending the model there to discover a missing tool would cost the
+# same wasted round-trip this notice exists to prevent.
+_REDUCED_TOOLSET_NOTICE = (
+    "A reduced tool set is active this session -- only the tools you were given are "
+    "callable, not the full catalogue this prompt was written against. If the right "
+    "next step needs a tool outside that set, do not guess or invent a call: name the "
+    "missing capability to the user and stop. `get_help` returns the getting-started "
+    "guide link, NOT a list of callable tools, so it cannot tell you what else exists."
+)
+
+
+def _reduced_system_prompt(available_tools: set[str]) -> str:
+    """Drop every _REDUCTION_SPANS block whose `required` tools aren't all in
+    available_tools, then splice in _REDUCED_TOOLSET_NOTICE. A marker that no longer
+    matches (SYSTEM_PROMPT edited without updating this list) is skipped rather than
+    raised: test_prompts_content.py's marker-drift test is what should catch that,
+    loudly, in CI -- a raise here would take down chat_dock's local-model path in
+    production over an unrelated prompt copy-edit.
+    """
+    text = SYSTEM_PROMPT
+    for start_marker, end_marker, required in _REDUCTION_SPANS:
+        if required <= available_tools:
+            continue  # every tool this block names is callable -- keep it whole
+        start = text.find(start_marker)
+        end = text.find(end_marker)
+        if start == -1 or end == -1 or end <= start:
+            continue
+        text = text[:start] + text[end:]
+    if "- **Location**" not in text:
+        # That bullet was one of three "before saving outputs" checks the intro
+        # sentence counts by name; dropping it without adjusting the count would
+        # leave "confirm three things" pointing at the two bullets that remain.
+        text = text.replace(
+            "stop and confirm three things.", "stop and confirm the following.", 1
+        )
+    # A removed span can leave a doubled blank line (or, more rarely, none) where its
+    # neighbours' own spacing now abuts; collapse runs rather than track each span's
+    # exact whitespace -- a cosmetic gap is harmless, a dangling sentence is not.
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.replace(
+        "\n\n# Bias to action",
+        "\n\n" + _REDUCED_TOOLSET_NOTICE + "\n\n# Bias to action",
+        1,
+    )
+
+
 def _runtime_path_context() -> str:
     from pathlib import Path
 
@@ -498,8 +671,25 @@ def _runtime_path_context() -> str:
     return "\n".join(lines)
 
 
-def build_system_prompt(extra_context: str | None = None) -> str:
+def build_system_prompt(available_tools: set[str] | None = None) -> str:
+    """Build the agent's system prompt, optionally scoped to a reduced tool set.
+
+    ``available_tools=None`` (every existing caller today -- chat_dock.py's cloud and
+    local paths alike) returns output BYTE-IDENTICAL to the pre-reduction prompt: this
+    is asserted in test_prompts.py, because a silent drift here would change every
+    cloud backend's behaviour too, not just the local-Ollama path this parameter
+    exists for.
+
+    When ``available_tools`` is given, whole coherent blocks (a named pipeline, or a
+    run of adjacent bullets) that instruct calling a tool outside that set are
+    dropped -- never surgically edited -- so the result can't dangle a pipeline step
+    or a sentence on a tool the model cannot call. See _REDUCTION_SPANS for the block
+    list and _REDUCED_TOOLSET_NOTICE for the line telling the model to ask (via
+    `get_help`) rather than guess when a gap remains.
+    """
+    if available_tools is None:
+        system = SYSTEM_PROMPT
+    else:
+        system = _reduced_system_prompt(available_tools)
     context = _runtime_path_context()
-    if extra_context:
-        context += "\n" + extra_context
-    return SYSTEM_PROMPT + "\n\nCurrent session context:\n" + context
+    return system + "\n\nCurrent session context:\n" + context
