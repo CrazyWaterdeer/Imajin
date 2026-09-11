@@ -75,12 +75,15 @@ def test_ollama_unavailable_when_no_tool_capable_model() -> None:
 
 
 def test_all_unavailable_on_laptop_scenario() -> None:
-    # No keys set + Ollama not installed/running + no `claude` login.
+    # No keys set + Ollama not installed/running + no `claude`/`codex` login.
     s = _settings(anthropic_api_key=None, openai_api_key=None)
     with (
         patch.object(provider_status, "probe_ollama", return_value=(False, "Ollama offline")),
         patch.object(
             provider_status, "subscription_available", return_value=(False, "not logged in")
+        ),
+        patch.object(
+            provider_status, "codex_available", return_value=(False, "codex not found")
         ),
     ):
         statuses = provider_status.compute_statuses(s)
@@ -98,3 +101,30 @@ def test_subscription_available_without_api_keys() -> None:
         statuses = provider_status.compute_statuses(s)
     assert statuses["claude-agent"].available is True
     assert statuses["anthropic"].available is False
+
+
+def test_codex_agent_available_without_api_keys() -> None:
+    # Same independence as claude-agent above -- codex_available() checks a
+    # `codex` CLI login, not an API key, so it can be True with no keys set.
+    s = _settings(anthropic_api_key=None, openai_api_key=None)
+    with (
+        patch.object(provider_status, "probe_ollama", return_value=(False, "Ollama offline")),
+        patch.object(provider_status, "codex_available", return_value=(True, None)),
+    ):
+        statuses = provider_status.compute_statuses(s)
+    assert statuses["codex-agent"].available is True
+    assert statuses["anthropic"].available is False
+
+
+def test_codex_agent_unavailable_reason_flows_through() -> None:
+    # Mirrors test_ollama_unavailable_when_no_models_pulled's intent for the
+    # codex-agent kind: compute_statuses must pass codex_available()'s own
+    # reason string through unchanged, not collapse it to a generic label.
+    s = _settings()
+    with (
+        patch.object(provider_status, "probe_ollama", return_value=(True, None)),
+        patch.object(provider_status, "codex_available", return_value=(False, "not logged in")),
+    ):
+        statuses = provider_status.compute_statuses(s)
+    assert statuses["codex-agent"].available is False
+    assert statuses["codex-agent"].reason == "not logged in"

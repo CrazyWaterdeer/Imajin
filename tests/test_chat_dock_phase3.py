@@ -43,11 +43,13 @@ def test_chat_dock_has_model_picker(qtbot, viewer, monkeypatch) -> None:
     dock = ChatDock(viewer=viewer, settings=Settings())
     qtbot.addWidget(dock)
 
-    assert dock.model_picker.count() == 6
+    # 6 static cloud rows (_MODEL_CHOICES, now including "Codex (subscription)")
+    # + 1 discovered local model.
+    assert dock.model_picker.count() == 7
     assert "Sonnet" in dock.model_picker.itemText(0)
     assert "latest" in dock.model_picker.itemText(0)
     assert "subscription" in dock.model_picker.itemText(2)
-    assert "qwen3.5:9b" in dock.model_picker.itemText(5)
+    assert "qwen3.5:9b" in dock.model_picker.itemText(6)
     assert dock.send_btn.isEnabled()
     assert dock.stop_btn.isHidden()
 
@@ -320,6 +322,37 @@ def test_model_picker_auto_fallback_does_not_emit_userSelected(qtbot) -> None:
     assert btn.currentIndex() == 0  # fell back to first available
     assert changed_events == [0]  # a change did happen
     assert user_events == []  # but it was not a user selection
+
+
+def test_model_picker_treats_unregistered_kind_as_unavailable(qtbot) -> None:
+    """A picker kind with no entry in `statuses` (e.g. someone adds a row to
+    _MODEL_CHOICES / _build_model_choices without a matching
+    compute_statuses() branch) must read as UNAVAILABLE everywhere -- initial
+    selection, fallback, and the menu label -- not silently pass as available
+    the way a bare `.get(kind)` used to. Regression test for the footgun this
+    slice fixed (see chat_dock._UNREGISTERED_STATUS)."""
+    from imajin.ui.chat_dock import _ModelPickerButton
+    from imajin.ui.provider_status import ProviderStatus
+
+    choices = [
+        ("Mystery backend", "mystery-kind", "m1"),
+        ("Anthropic Sonnet", "anthropic", "sonnet"),
+    ]
+    statuses = {"anthropic": ProviderStatus(True, None)}  # "mystery-kind" absent on purpose
+
+    btn = _ModelPickerButton(choices, statuses=statuses, preferred=("mystery-kind", "m1"))
+    qtbot.addWidget(btn)
+
+    # Preferring the unregistered row falls through to the first *real*
+    # available one instead of landing on it.
+    assert btn.currentIndex() == 1
+    assert btn.current_status() == ProviderStatus(True, None)
+
+    menu_texts = [a.text() for a in btn.menu().actions() if not a.isSeparator()]
+    mystery_action = next(a for a in btn.menu().actions() if a.text().startswith("Mystery"))
+    assert "not registered" in mystery_action.text()
+    assert not mystery_action.isEnabled()
+    assert any("Anthropic Sonnet" == t for t in menu_texts)
 
 
 def test_chat_dock_persists_and_restores_model_choice(qtbot, viewer, tmp_path, monkeypatch) -> None:

@@ -39,6 +39,7 @@ def test_doctor_providers_section_reports_each_kind(monkeypatch, capsys) -> None
             "anthropic": ProviderStatus(True, None),
             "claude-agent": ProviderStatus(False, "not logged in"),
             "openai": ProviderStatus(False, "no API key"),
+            "codex-agent": ProviderStatus(False, "codex not found"),
             "ollama": ProviderStatus(False, "no tool-capable model"),
         },
     )
@@ -53,6 +54,12 @@ def test_doctor_providers_section_reports_each_kind(monkeypatch, capsys) -> None
     assert "anthropic" in out
     assert "not logged in" in out
     assert "no tool-capable model" in out
+    # codex-agent is a fifth provider kind, not just a rename of an existing
+    # row -- assert its own label and reason both actually reached the
+    # printed report, not just that *a* row happened to already contain
+    # matching substrings.
+    assert "codex-agent" in out
+    assert "codex not found" in out
     assert "[Ollama]" in out
     assert "no models discovered" in out
 

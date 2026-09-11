@@ -6,6 +6,7 @@ from typing import Any
 
 from imajin.agent.local_models import probe_ollama
 from imajin.agent.providers.claude_agent import subscription_available
+from imajin.agent.providers.codex_agent import codex_available
 
 
 @dataclass(frozen=True)
@@ -35,6 +36,15 @@ def compute_statuses(settings: Any) -> dict[str, ProviderStatus]:
         _OK
         if settings.openai_api_key
         else ProviderStatus(available=False, reason="no API key")
+    )
+    # Subscription-backed like claude-agent above -- no API key, just a
+    # logged-in `codex` CLI. Registering this is not optional polish: a kind
+    # with no entry here used to render as selectable in the picker (see
+    # chat_dock._UNREGISTERED_STATUS), so skipping this line would ship a
+    # "Codex (subscription)" row that looks fine and fails on first send.
+    codex_ok, codex_reason = codex_available()
+    statuses["codex-agent"] = (
+        _OK if codex_ok else ProviderStatus(available=False, reason=codex_reason)
     )
     # probe_ollama (not the bare TCP check in ollama_helper.is_running) so a
     # daemon that's up but has nothing pulled, or nothing tool-capable, shows
