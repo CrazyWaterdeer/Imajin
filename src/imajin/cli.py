@@ -221,10 +221,15 @@ def _doctor(settings: Settings) -> int:
     # section existed. Most users configure one provider, not all five, so an
     # unavailable one is a normal state, not a failed doctor run.
     print("\n[Providers]")
+    from imajin.agent.providers.registry import kinds
     from imajin.ui.provider_status import compute_statuses
 
     statuses = compute_statuses(settings)
-    for kind in ("anthropic", "claude-agent", "openai", "codex-agent", "ollama"):
+    # kinds() replaces what used to be a hardcoded 5-tuple here -- one of the
+    # six places the survey found backend knowledge smeared across; adding a
+    # backend to imajin.agent.providers.registry now makes it show up here
+    # too, with no second edit.
+    for kind in kinds():
         status = statuses.get(kind)
         if status is None:
             continue

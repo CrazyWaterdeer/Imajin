@@ -204,7 +204,17 @@ def _qc_row(
     n_pixels: int,
 ) -> dict[str, Any]:
     """One row of the pinned QC schema, minus ``method`` -- the shared assembly
-    helper both producers hand their raw rows to stamps that column on."""
+    helper both producers hand their raw rows to
+    (:func:`~imajin.tools.roi_timeseries._write_roi_qc_table`) stamps that
+    column on.
+
+    Also imported and called directly by
+    :func:`~imajin.analysis.roi_track.track_rois` for this same 8-key
+    coercion, so the two producers' rows cannot drift apart key-by-key even
+    though their detection/tracking logic deliberately shares nothing else
+    (see the module docstring) -- test_both_producers_emit_identical_qc_schema
+    in test_tools_roi_timeseries.py pins the resulting agreement.
+    """
     return {
         "label": int(label),
         "time_index": int(time_index),

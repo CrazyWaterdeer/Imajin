@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import os
-from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
@@ -19,15 +18,9 @@ from qtpy.QtWidgets import (
 )
 
 from imajin.agent.execution import get_execution_service
-from imajin.agent.local_models import (
-    LocalModel,
-    choose_num_ctx,
-    discover_ollama_models,
-    estimate_prompt_tokens,
-)
-from imajin.agent.providers.base import Event
+from imajin.agent.local_models import LocalModel, discover_ollama_models
+from imajin.agent.providers.registry import BackendContext, get_backend
 from imajin.agent.qt_tool_runner import MainThreadToolRunner
-from imajin.agent.tool_subset import CORE_TOOL_NAMES, core_tools, missing_core_names
 from imajin.ui.chat_transcript import ChatTranscript
 from imajin.ui.provider_status import ProviderStatus, compute_statuses
 from imajin.ui.theme import apply_dock_theme
@@ -139,17 +132,18 @@ def _fallback_local_choice(settings: Any) -> tuple[str, str, str]:
 # What to actually DO about an unavailable backend. The subscription backends
 # ship no in-app login on purpose (Imajin never handles those credentials), so
 # for them the terminal is the only route — pointing the user at the API Keys
-# dialog would be advice that cannot work.
-_FIX_HINTS: dict[str, str] = {
-    "claude-agent": "Run `claude` in a terminal and sign in.",
-    "codex-agent": "Run `codex login` in a terminal.",
-    "ollama": "Start Ollama, then `ollama pull` a tool-capable model.",
-}
+# dialog would be advice that cannot work. Each kind's own hint (or None, for
+# "no specific hint, use the default below") lives on its BackendSpec in
+# imajin.agent.providers.registry now -- this used to be its own dict here,
+# one of the six places the survey found backend knowledge smeared across.
 _DEFAULT_FIX_HINT = "Open Imajin → API Keys…"
 
 
 def _fix_hint(kind: str) -> str:
-    return _FIX_HINTS.get(kind, _DEFAULT_FIX_HINT)
+    spec = get_backend(kind)
+    if spec is None or spec.fix_hint is None:
+        return _DEFAULT_FIX_HINT
+    return spec.fix_hint
 
 
 def _short_label(label: str) -> str:
@@ -375,63 +369,6 @@ class _ComposerInput(QPlainTextEdit):
         super().keyPressEvent(event)
 
 
-def _local_system_prompt(available_tools: set[str]) -> str:
-    """build_system_prompt(available_tools=...), so the model's own instructions
-    never point it at a tool outside the core set it was actually given.
-
-    Called directly rather than through a capability probe: an earlier
-    inspect.signature() shim guarded against prompts.py's half of this change
-    landing later, but both halves are in the tree now, and that shim failed
-    OPEN -- a rename would have silently reverted the local path to the full
-    33k-char prompt naming 87 uncallable tools, with no error. A TypeError on
-    a rename is the better failure, and the tests call this kwarg by keyword.
-    """
-    from imajin.agent.prompts import build_system_prompt
-
-    return build_system_prompt(available_tools=available_tools)
-
-
-class _OllamaCoreToolsProvider:
-    """Wraps a local-model Provider so its turns advertise core_tools(...)
-    instead of the full registry.
-
-    Why here, rather than on OllamaProvider itself or on AgentRunner:
-    AgentRunner.turn() always calls the module-level tools_for_anthropic()
-    fresh and hands the FULL list straight to provider.stream() (see
-    runner.py) -- _make_provider building a plain OllamaProvider does not
-    change that, since nothing about a provider's construction narrows what a
-    *later* turn sends it. Trimming has to happen where stream() actually
-    receives the tools, which is here -- the one seam _ensure_runner controls
-    without editing runner.py or providers/ollama.py.
-
-    Filtering is gated on "this tools list IS the full top-level registry" (by
-    exact name-set), not applied to every stream() call: a specialist consult
-    mid-turn (imajin.tools.specialists) fetches this SAME provider instance
-    back via get_current_provider() and calls .stream() again with its own,
-    disjoint, subagent-scoped tool list (SubAgent.run(), specialists/base.py).
-    Unconditional filtering would run core_tools() on THAT list too -- and
-    since none of a specialist's tools are in CORE_TOOL_NAMES, it would come
-    back empty, silently breaking specialist consults for local models. The
-    top-level list's exact name-set is captured once, at construction, and is
-    the only shape of `tools` that ever gets narrowed; anything else (a
-    specialist's own list) passes straight through unchanged.
-    """
-
-    def __init__(self, inner: Any, full_tool_names: frozenset[str]) -> None:
-        self._inner = inner
-        self._full_tool_names = full_tool_names
-        self.name = inner.name
-        self.model = inner.model
-
-    def stream(
-        self, messages: list[dict[str, Any]], tools: list[dict[str, Any]], system: str
-    ) -> Iterator[Event]:
-        names = frozenset(t.get("name") for t in tools)
-        if names == self._full_tool_names:
-            tools = core_tools(tools)
-        yield from self._inner.stream(messages, tools, system)
-
-
 class ChatDock(QWidget):
     _job_updated = Signal(object)
 
@@ -563,107 +500,36 @@ class ChatDock(QWidget):
         return [*_MODEL_CHOICES, *local_rows]
 
     def _make_provider(self):
-        from imajin.agent.providers import (
-            AnthropicProvider,
-            OllamaProvider,
-            OpenAICompatProvider,
-        )
-        from imajin.tools import tools_for_anthropic
+        """Build a bare Provider for the picker's current selection.
 
+        Kept as its own, directly-callable method (not inlined into
+        _ensure_runner, not a free function) because tests override it
+        directly on an instance (test_chat_dock_phase3.py) and call it
+        standalone to assert on the concrete provider it returns and on the
+        transcript warnings it emits (test_local_model_picker.py) -- both
+        would break if this stopped being a same-named ChatDock method
+        returning a bare provider. The actual per-kind construction (auth
+        checks, Ollama's num_ctx/vision sizing) lives in each kind's own
+        BackendSpec.make_provider now; this method only dispatches to it.
+        """
         idx = self.model_picker.currentIndex()
         _, kind, model = self.model_choices[idx]
-        if kind == "anthropic":
-            if not self.settings.anthropic_api_key:
-                raise RuntimeError(
-                    "ANTHROPIC_API_KEY not set. Open Imajin → API Keys… or set the env var."
-                )
-            return AnthropicProvider(
-                api_key=self.settings.anthropic_api_key, model=model
-            )
-        if kind == "openai":
-            if not self.settings.openai_api_key:
-                raise RuntimeError(
-                    "OPENAI_API_KEY not set. Open Imajin → API Keys… or set the env var."
-                )
-            return OpenAICompatProvider(
-                api_key=self.settings.openai_api_key,
-                model=model,
-                base_url=self.settings.openai_base_url,
-            )
-
-        # "ollama" -- native /api/chat, never the OpenAI-compat endpoint: the
-        # compat endpoint ignores num_ctx in every form tested and silently
-        # truncates to Ollama's 4096-token default, which with the full 104-tool
-        # prompt (~28.3K tokens) leaves the model narrating a tool call instead
-        # of emitting one (see local_models.py's module docstring for the
-        # measured numbers). choose_num_ctx sizes the window from the model's
-        # real context_length when discovery found one; when it has to clamp
-        # below what the prompt actually needs, that's real, user-visible
-        # truncation, so it's announced in the transcript here rather than left
-        # to surface later as a model that "forgot" its tools mid-turn.
-        local_model = self._local_models.get(model)
-        if local_model is None:
-            # Unconfirmed fallback row (settings.ollama_model; discovery found
-            # nothing) -- no known context_length to clamp to, and no confirmed
-            # capabilities, so default vision off rather than trust a guess.
-            local_model = LocalModel(
-                name=model,
-                context_length=None,
-                capabilities=frozenset(),
-                parameter_size=None,
-                size_bytes=None,
-            )
-        # Advertise the 20-tool core, not the full registry: with all 107
-        # tools offered, qwen3.5:4b never terminated a multi-step task (see
-        # tool_subset.py for the measured before/after). Recomputing the
-        # estimate from the SUBSET -- not the full list -- is what actually
-        # lets num_ctx reflect the smaller prompt; estimating from the full
-        # list here while only ever sending the subset (see
-        # _OllamaCoreToolsProvider, wired in by _ensure_runner) would silently
-        # throw the saving away.
-        full_tools_spec = tools_for_anthropic()
-        tools_spec = core_tools(full_tools_spec)
-        missing = missing_core_names(full_tools_spec)
-        if missing:
-            # A core tool was renamed/removed without updating tool_subset.py:
-            # local models now see fewer than 20 tools. Loud on purpose --
-            # silent capability loss is worse than a visible warning.
-            self._append_system(
-                f"[warning] {len(missing)} core tool(s) not found in the "
-                f"registry: {', '.join(missing)}. Local models will see "
-                f"{len(tools_spec)} tools instead of {len(CORE_TOOL_NAMES)}."
-            )
-        # Says how to reach the other 87 tools, not "call get_help" -- get_help
-        # is onboarding-scoped and returns a docs link, so pointing the user
-        # there for a missing capability sends them somewhere that cannot answer.
-        self._append_system(
-            f"[info] Local models see a {len(tools_spec)}-tool core set "
-            f"({len(tools_spec)} of {len(full_tools_spec)} available) so a small "
-            "model decides instead of dithering; switch to a cloud model for the "
-            "full set."
-        )
-        available_tool_names = {t["name"] for t in tools_spec}
-        est = estimate_prompt_tokens(
-            _local_system_prompt(available_tool_names), tools_spec, []
-        )
-        # floor=16384 -- was the implicit 32768 default, which is what would
-        # re-inflate a legitimately smaller subset-driven estimate right back
-        # up to the window a 107-tool prompt needed, throwing the saving away
-        # instead of letting it show up as a smaller num_ctx / less VRAM.
-        num_ctx = choose_num_ctx(local_model, est, floor=16384)
-        if num_ctx < est:
-            self._append_system(
-                f"[warning] {model}'s context window ({num_ctx} tokens) is "
-                f"smaller than the system prompt + {len(tools_spec)} tools "
-                f"(~{est} tokens). Requests will be truncated and the model may "
-                "stop seeing some or all of its tools."
-            )
-        return OllamaProvider(
+        spec = get_backend(kind)
+        if spec is None or spec.make_provider is None:
+            # Never silently mis-dispatch an unrecognized kind (e.g. to
+            # Ollama's branch, which the old if/elif fallthrough would have
+            # done) -- see imajin.agent.providers.registry.get_backend's
+            # docstring. Unreachable via the UI today: every kind offered by
+            # the picker comes from _MODEL_CHOICES/_build_model_choices,
+            # which only ever produce registered kinds.
+            raise RuntimeError(f"No backend registered for kind {kind!r}.")
+        ctx = BackendContext(
+            settings=self.settings,
             model=model,
-            base_url=self.settings.ollama_base_url,
-            num_ctx=num_ctx,
-            supports_vision=local_model.supports_vision,
+            local_models=self._local_models,
+            append_system=self._append_system,
         )
+        return spec.make_provider(ctx)
 
     def _ensure_runner(self):
         from imajin.agent.prompts import build_system_prompt
@@ -687,67 +553,42 @@ class ChatDock(QWidget):
                 tool_caller=self._tool_runner.call,
             )
 
-        if kind == "claude-agent":
-            # Subscription-backed: the Claude Code agent owns its own loop, so this
-            # is a ClaudeAgentRunner (not a Provider behind AgentRunner). It presents
-            # the same turn()/reset()/cancel() surface, so everything downstream is
-            # unchanged. No API key — it uses the local `claude` login.
-            from imajin.agent.providers.claude_agent import ClaudeAgentRunner
+        spec = get_backend(kind)
+        if spec is None:
+            # Same "never silently usable" guarantee as _make_provider above.
+            raise RuntimeError(f"No backend registered for kind {kind!r}.")
 
-            self._runner = ClaudeAgentRunner(
+        if spec.shape == "fused":
+            # Owns its own agentic loop end to end (claude-agent, codex-agent)
+            # -- not a Provider behind AgentRunner at all. See
+            # imajin.agent.providers.claude_agent's module docstring for why
+            # these can't be flattened into the "provider" shape below: a
+            # fused runner decides its own tools, once, at construction,
+            # rather than being handed them fresh by AgentRunner every turn.
+            ctx = BackendContext(
+                settings=self.settings,
                 model=model,
-                system_prompt=build_system_prompt(),
                 tool_caller=call_tool_via_jobs,
+                local_models=self._local_models,
+                append_system=self._append_system,
             )
-        elif kind == "codex-agent":
-            # Subscription-backed like claude-agent above: codex owns its own
-            # agentic loop (it drives the `codex` CLI, which calls back into
-            # Imajin's tools over an in-process MCP bridge), so this is a
-            # CodexAgentRunner, not a Provider behind AgentRunner. Same
-            # turn()/reset()/cancel()/close() surface, so everything
-            # downstream is unchanged. No API key -- it uses whatever the
-            # user set up themselves with `codex login`; see
-            # imajin.agent.providers.codex_agent's module docstring for the
-            # ToS/auth decision this mirrors from ClaudeAgentRunner.
-            from imajin.agent.providers.codex_agent import CodexAgentRunner
-
-            self._runner = CodexAgentRunner(
-                model=model,
-                system_prompt=build_system_prompt(),
-                tool_caller=call_tool_via_jobs,
-            )
-        elif kind == "ollama":
-            # Local path only (SCOPE DISCIPLINE: anthropic/openai below keep
-            # seeing the full registry via plain AgentRunner). The provider
-            # gets wrapped -- not AgentRunner itself -- so runner.py and
-            # providers/ollama.py stay untouched; see _OllamaCoreToolsProvider
-            # for why that's also the *safe* seam (a filter living on
-            # AgentRunner or applied unconditionally in the provider would
-            # also reach specialist consults, which reuse this same provider
-            # instance with their own, disjoint tool list).
-            from imajin.agent.runner import AgentRunner
-            from imajin.tools import tools_for_anthropic
-
-            full_tools_spec = tools_for_anthropic()
-            subset_tools_spec = core_tools(full_tools_spec)
-            available_tool_names = {t["name"] for t in subset_tools_spec}
-            provider = _OllamaCoreToolsProvider(
-                self._make_provider(), frozenset(t["name"] for t in full_tools_spec)
-            )
-            self._runner = AgentRunner(
-                provider,
-                _local_system_prompt(available_tool_names),
-                tool_caller=call_tool_via_jobs,
-            )
+            self._runner = spec.make_runner(ctx)
         else:
+            # "provider" shape (anthropic, openai, ollama): AgentRunner owns
+            # the tool loop around a bare Provider. Ollama's BackendSpec also
+            # sets wrap_for_runner, which is what applies its core-tool-set
+            # scoping and reduced system prompt (see registry.py's
+            # _wrap_ollama_for_runner) -- anthropic/openai leave it unset and
+            # get the provider as-is plus the full system prompt, unchanged.
             from imajin.agent.runner import AgentRunner
 
             provider = self._make_provider()
-            self._runner = AgentRunner(
-                provider,
-                build_system_prompt(),
-                tool_caller=call_tool_via_jobs,
-            )
+            if spec.wrap_for_runner is not None:
+                provider, prompt = spec.wrap_for_runner(provider)
+            else:
+                prompt = build_system_prompt()
+            self._runner = AgentRunner(provider, prompt, tool_caller=call_tool_via_jobs)
+
         self._provider_kind = kind
         self._provider_model = model
         return self._runner

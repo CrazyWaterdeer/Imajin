@@ -30,6 +30,7 @@ from imajin.agent.execution import raise_if_cancelled, report_progress
 from imajin.analysis import calcium_motion
 from imajin.analysis.arrays import map_over_axis0
 from imajin.analysis.calcium_qc import _centroid_of
+from imajin.analysis.roi_redetect import _qc_row
 
 # Below this many pixels per frame, threading the per-frame mask shift is a NET
 # LOSS, so rasterize_tracked_labels runs it serially instead. Measured on the
@@ -46,6 +47,53 @@ from imajin.analysis.calcium_qc import _centroid_of
 # measured to clear a ~1.5x win (448x448 -> 1.91x); 384x384 (147k px) only
 # reached 1.25x and is deliberately left serial.
 _PARALLEL_SHIFT_MIN_FRAME_PX = 200_000
+
+
+def _shift_mask_by_delta(mask: np.ndarray, dy: int, dx: int, *, dtype: type) -> np.ndarray:
+    """Translate a boolean mask by an exact integer (dy, dx) via scipy.ndimage.shift
+    (order=0, mode="constant"), leaving any leading axes (e.g. Z) untouched.
+
+    dy=dx=0 returns ``mask`` itself rather than issuing a no-op shift call -- a
+    "located" (undrifted) frame is the common case for every caller. ``dtype`` is
+    the float dtype the mask is cast to before shifting; it is a required
+    keyword (never hard-coded in here) so each caller keeps using ITS OWN prior
+    dtype exactly -- this is a pure extraction of the shift step, not a claim
+    that one caller's dtype choice was more correct than the other's (both are
+    bit-identical in the end anyway: order=0 on an exact-integer shift is a
+    nearest-neighbour lookup, and 0.0/1.0 round-trip losslessly through either
+    float32 or float64).
+
+    Shared by :func:`rasterize_tracked_labels` (2D-only, so ``mask.ndim - 2``
+    contributes no leading axes and the shift is exactly ``(dy, dx)``) and
+    :func:`~imajin.tools.roi_timeseries._lateral_shift_stack` (a genuinely 3D
+    mask, Z left untouched) -- see that function's docstring for why the (dy,
+    dx) input itself has to be independently recomputed there. Sharing THIS
+    step means the two are bit-for-bit identical by construction, not merely by
+    two hand-synced implementations that could silently drift apart.
+    """
+    if dy == 0 and dx == 0:
+        return mask
+    shift_vec = (0,) * (mask.ndim - 2) + (dy, dx)
+    return nd_shift(mask.astype(dtype), shift_vec, order=0, mode="constant").astype(bool)
+
+
+def _pixel_counts_per_frame(stack: np.ndarray) -> list[dict[int, int]]:
+    """Per-frame {label_id: pixel_count}, one np.unique pass per frame straight
+    off the actual LABELS stack -- not off any upstream candidate/position
+    bookkeeping -- so n_pixels can never disagree with what the stack actually
+    contains.
+
+    Shared by :func:`track_rois` and
+    :func:`~imajin.tools.roi_timeseries.track_roi_over_time`'s 3D z_project
+    fallback, which both re-derive n_pixels this same way for the same reason
+    (see track_rois' own docstring, "n_pixels self-consistent with the actual
+    LABELS output by construction").
+    """
+    counts: list[dict[int, int]] = []
+    for t in range(stack.shape[0]):
+        vals, freq = np.unique(stack[t], return_counts=True)
+        counts.append(dict(zip(vals.tolist(), freq.tolist())))
+    return counts
 
 
 def rasterize_tracked_labels(
@@ -186,12 +234,7 @@ def rasterize_tracked_labels(
                     return  # stays None; the aggregation loop re-checks usable_t itself
                 dy = int(round(float(pos[t, 0]) - base_y))
                 dx = int(round(float(pos[t, 1]) - base_x))
-                if dy == 0 and dx == 0:
-                    shifted_by_t[t] = orig_mask
-                else:
-                    shifted_by_t[t] = nd_shift(
-                        orig_mask.astype(float), (dy, dx), order=0, mode="constant"
-                    ).astype(bool)
+                shifted_by_t[t] = _shift_mask_by_delta(orig_mask, dy, dx, dtype=float)
 
             # A min_parallel that n_frames can never reach forces map_over_axis0
             # to run _shift_frame inline in this thread -- the size gate above,
@@ -322,10 +365,7 @@ def track_rois(
     # pixels straight off `stack` -- this also makes n_pixels self-consistent
     # with the actual LABELS output by construction, rather than a second
     # bookkeeping path that could silently disagree with it.
-    pixel_counts: list[dict[int, int]] = []
-    for t in range(t_count):
-        vals, counts = np.unique(stack[t], return_counts=True)
-        pixel_counts.append(dict(zip(vals.tolist(), counts.tolist())))
+    pixel_counts = _pixel_counts_per_frame(stack)
 
     qc_rows: list[dict[str, Any]] = []
     for lbl in sorted(result.positions):
@@ -348,15 +388,17 @@ def track_rois(
             else:
                 usable_row = bool(usable_arr[t])
                 reason_row = str(reason_arr[t])
-            qc_rows.append({
-                "label": int(lbl),
-                "time_index": int(t),
-                "usable": usable_row,
-                "confidence": float(conf_arr[t]),
-                "reason": reason_row,
-                "y": float(pos[t, 0]),
-                "x": float(pos[t, 1]),
-                "n_pixels": int(pixel_counts[t].get(int(lbl), 0)),
-            })
+            qc_rows.append(
+                _qc_row(
+                    lbl,
+                    t,
+                    usable=usable_row,
+                    confidence=conf_arr[t],
+                    reason=reason_row,
+                    y=pos[t, 0],
+                    x=pos[t, 1],
+                    n_pixels=pixel_counts[t].get(int(lbl), 0),
+                )
+            )
 
     return {"stack": stack, "qc_rows": qc_rows}
