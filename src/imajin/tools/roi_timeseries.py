@@ -342,12 +342,33 @@ def _contrast_bias_warnings(
         contrast_n = int(gated["reason"].isin(_CONTRAST_GATE_REASONS).sum())
         if contrast_n * 2 <= len(gated):  # not a majority -- e.g. drift/collision-driven
             continue
+        # The remedy depends on WHY contrast was low, and the two causes need
+        # opposite advice. A signal that dips to baseline is a real brightness
+        # problem -> track a structural channel. But a recording whose background
+        # is bright, structured tissue rather than black defeats the SNR estimate
+        # itself (snr_floor compares local contrast against a whole-movie noise
+        # figure that, on such an image, measures anatomy): there the object is
+        # perfectly trackable and the floor is simply out of calibration.
+        # Measured on a real confocal recording: snr read 1.80 against a floor of
+        # 3.0 while template matching found the cell with a median peak of 0.846.
+        # Recommending a channel switch there sends the user after a problem they
+        # do not have, so name both and let the coverage number discriminate.
+        share = len(gated) / t_count if t_count else 0.0
+        remedy = (
+            "Almost every frame was refused, which usually means snr_floor is out "
+            "of calibration for this image rather than that the object is dim -- "
+            "on a bright, structured background try snr_floor=0.5 or lower first. "
+            if share > 0.75
+            else "If the object's signal genuinely dips to baseline, track a "
+            "structural/activity-independent channel and measure this Labels layer "
+            "against the signal channel instead. "
+        )
         warnings.append(
             f"label {label}: {len(gated)}/{t_count} frames were dropped where the "
             "object's contrast fell below the detection floor; the surviving trace "
-            "is biased toward brighter frames. Track a structural/activity-"
-            "independent channel and measure this Labels layer against the signal "
-            "channel instead, or use resegment_roi_over_time."
+            f"is biased toward brighter frames. {remedy}"
+            "Otherwise use resegment_roi_over_time, which re-detects per frame "
+            "instead of following one seed."
         )
     return warnings
 

@@ -14,6 +14,19 @@ from dataclasses import dataclass
 import numpy as np
 
 SNR_FLOOR = 3.0
+# A normalized-cross-correlation peak this strong is independent evidence the cell
+# was located, sufficient on its own when the SNR gate is out of its calibration
+# range. SNR_FLOOR compares local contrast against a whole-movie noise estimate, a
+# ratio that only means what it says when the background is dark and near-uniform
+# (the sparse-cells-on-black case this module was built for). On a confocal
+# recording of bright, structured tissue the "noise" estimate captures anatomy
+# instead: measured on a real 501x502 recording, the field's own variation is 1482
+# while the cell's contrast is 2674, giving snr 1.80 against a floor of 3.0 -- so
+# every frame was refused even though template matching found the cell with a
+# median peak of 0.846 and tracked it across 84 px of drift. Peak correlation is
+# scale-invariant and behaved identically on both regimes, so it is the gate that
+# generalises; SNR stays as a second route in, not as a veto.
+STRONG_PEAK = 0.5
 MAX_STEP = 6
 MIN_NEIGHBOURS = 3
 MAX_RESID = 1.0
@@ -97,7 +110,7 @@ def _patch_at(movie_t, cy, cx, rad):
 
 def correct_sparse(movie, labels, *, snr_floor=SNR_FLOOR, max_step=MAX_STEP,
                    min_neighbours=MIN_NEIGHBOURS, max_resid=MAX_RESID,
-                   conf_floor=CONF_FLOOR) -> CorrectionResult:
+                   conf_floor=CONF_FLOOR, strong_peak=STRONG_PEAK) -> CorrectionResult:
     from imajin.analysis.calcium_qc import _centroid_of
 
     movie = np.asarray(movie, dtype=float)
@@ -120,7 +133,11 @@ def correct_sparse(movie, labels, *, snr_floor=SNR_FLOOR, max_step=MAX_STEP,
             cy, cx = loc["centroid"][t]
             # patch ~2x radius so the cell is a bright minority over local background
             obs = observability(_patch_at(movie[t], cy, cx, 2.0 * rad[lbl]), bg_sigma, snr_floor)
-            if obs["observable"] and loc["peak"][t] > 0.3:
+            # Either route in, then the weak-match floor still applies to both:
+            # low contrast AND a poor match is still refused. Requiring `and` here
+            # let the mis-calibrated SNR gate veto an unambiguous match (see
+            # STRONG_PEAK).
+            if (obs["observable"] or loc["peak"][t] >= strong_peak) and loc["peak"][t] > 0.3:
                 c[t] = min(1.0, max(0.0, loc["peak"][t]))
         conf[lbl] = c
 
