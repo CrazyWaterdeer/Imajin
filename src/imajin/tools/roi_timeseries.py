@@ -55,6 +55,7 @@ from imajin.agent.qt_dispatch import call_on_main
 from imajin.analysis.arrays import (
     layer_axes_from_metadata,
     materialize_array,
+    infer_time_axis,
     resolve_time_axis,
 )
 from imajin.analysis.calcium_qc import _centroid_of
@@ -97,7 +98,9 @@ def _layer_axes(layer: Any, ndim: int) -> str:
     return layer_axes_from_metadata(getattr(layer, "metadata", None), ndim, default_3d="ZYX")
 
 
-def _resolve_time_axis(layer: Any, ndim: int, time_axis: int | str | None) -> int:
+def _resolve_time_axis(
+    layer: Any, ndim: int, time_axis: int | str | None, shape: Any = None
+) -> tuple[int, str | None]:
     """Thin delegation -- see analysis.arrays.resolve_time_axis for the fail-loud
     body. Each time-series tool module carries this same 3-line adapter locally
     (tools/measure.py:119-122 is the original) rather than importing another
@@ -106,7 +109,21 @@ def _resolve_time_axis(layer: Any, ndim: int, time_axis: int | str | None) -> in
     whole point of set_labels_at_frame resolving against the LABELS layer
     instead of reusing a movie's index (the measure.py:270 landmine)."""
     axes = _layer_axes(layer, ndim)
-    return resolve_time_axis(axes, ndim, time_axis)
+    try:
+        return resolve_time_axis(axes, ndim, time_axis), None
+    except ValueError:
+        inferred = None if shape is None else infer_time_axis(axes, tuple(shape))
+        if inferred is None:
+            raise
+        # Inferred, not read: say so. The whole justification for inferring here
+        # (see analysis.arrays.infer_time_axis) is that the caller reports it --
+        # a silent guess is the failure mode tools/view.py's _resolve_axis has.
+        note = (
+            f"axes {axes!r} carry no time axis, but shape {tuple(int(v) for v in shape)} "
+            f"is unambiguously a time series (leading axis >> frame size), so axis "
+            f"{inferred} was used as time. Pass time_axis explicitly to override."
+        )
+        return inferred, note
 
 
 def _write_roi_qc_table(
@@ -418,7 +435,9 @@ def track_roi_over_time(
     labels = call_on_main(snapshot_layer, labels_layer)
     label_arr = _materialize(labels.data).astype(np.int32)
 
-    t_idx = _resolve_time_axis(image, image_arr.ndim, time_axis)
+    t_idx, axis_note = _resolve_time_axis(
+        image, image_arr.ndim, time_axis, shape=image_arr.shape
+    )
     axes = _layer_axes(image, image_arr.ndim)
     movie_t0 = np.moveaxis(image_arr, t_idx, 0)
     frame_shape_full = movie_t0.shape[1:]
@@ -446,7 +465,7 @@ def track_roi_over_time(
             "segment the seed ROI on a single timepoint of this movie."
         )
 
-    warnings: list[str] = []
+    warnings: list[str] = [axis_note] if axis_note else []
     if ndim_frame == 3:
         axes_no_t = axes[:t_idx] + axes[t_idx + 1 :]
         if "Z" not in axes_no_t:
@@ -595,7 +614,9 @@ def resegment_roi_over_time(
     labels = call_on_main(snapshot_layer, labels_layer)
     label_arr = _materialize(labels.data).astype(np.int32)
 
-    t_idx = _resolve_time_axis(image, image_arr.ndim, time_axis)
+    t_idx, axis_note = _resolve_time_axis(
+        image, image_arr.ndim, time_axis, shape=image_arr.shape
+    )
     axes = _layer_axes(image, image_arr.ndim)
     frames = np.moveaxis(image_arr, t_idx, 0)
     frame_shape = frames.shape[1:]
@@ -605,7 +626,7 @@ def resegment_roi_over_time(
     # redetect_roi_masks only ever READS boundary_bool, every frame (it may be a
     # read-only Z-broadcast view; see resolve_boundary_mask).
     boundary_bool, boundary_raw = resolve_boundary(boundary_mask, frame_shape)
-    warnings: list[str] = []
+    warnings: list[str] = [axis_note] if axis_note else []
     bcast = boundary_broadcast_warning(boundary_bool, boundary_raw)
     if bcast:
         warnings.append(bcast)
@@ -758,7 +779,9 @@ def set_labels_at_frame(
     # tool edits exactly the array measure_intensity_over_time will read next.
     # Reusing a different array's resolved index here is the measure.py:270
     # landmine this whole feature exists to close.
-    t_idx = _resolve_time_axis(labels, label_arr.ndim, time_axis)
+    t_idx, axis_note = _resolve_time_axis(
+        labels, label_arr.ndim, time_axis, shape=label_arr.shape
+    )
     if not 0 <= time_index < label_arr.shape[t_idx]:
         raise ValueError(
             f"time_index {time_index} out of range for axis {t_idx} of shape "
@@ -838,6 +861,7 @@ def set_labels_at_frame(
                 call_on_main(update_table, qc_table_name, qc_df)
 
     return {
+        "warnings": [axis_note] if axis_note else [],
         "labels_layer": labels_layer,
         "time_index": int(time_index),
         "source_layer": source_layer,

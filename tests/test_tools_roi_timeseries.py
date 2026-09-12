@@ -576,3 +576,44 @@ def test_contrast_bias_warning_survives_a_conf_floor_above_the_interpolated_scor
     assert any(
         w.startswith("label 1:") and "contrast fell below" in w for w in res["warnings"]
     ), res["warnings"]
+
+
+def _long_thin_recording():
+    """Deliberately shaped so infer_time_axis fires: 400 frames of 60x60 is a
+    6.7x ratio. The module's usual _drifting_recording (50 frames of 110x110,
+    0.45x) is BELOW the threshold on purpose -- 50 planes really could be a
+    z-stack -- so it cannot exercise this path."""
+    return make_recording(
+        n_frames=400, shape=(60, 60), n_cells=3, seed=7, motion={"lateral_px": 6.0},
+    )
+
+
+def test_bare_tiff_axes_are_inferred_and_the_inference_is_reported(viewer) -> None:
+    """A no-metadata TIFF must work WITHOUT time_axis, and must say it inferred.
+
+    Every reference recording for this feature is a bare 'IYX' export (tifffile's
+    placeholder for a file carrying no axis metadata), so the strict resolver
+    refused all of them. Inferring is only acceptable because the tool reports it
+    -- a silent guess is exactly the failure mode tools/view.py's _resolve_axis
+    has, where 'T' and 'Z' both map to axis 0 and nothing ever raises.
+    """
+    rec = _long_thin_recording()
+    viewer.add_labels(rec.labels, name="roi")
+    viewer.add_image(rec.movie, name="movie", metadata={"axes": "IYX"})
+
+    res = roi_timeseries.track_roi_over_time("roi", "movie")  # NO time_axis
+
+    assert res["n_timepoints"] == rec.movie.shape[0]
+    note = [w for w in res["warnings"] if "was used as time" in w]
+    assert note, f"the inference must be reported; got {res['warnings']}"
+    assert "IYX" in note[0] and "time_axis" in note[0]
+
+
+def test_an_ambiguous_bare_stack_is_still_refused(viewer) -> None:
+    """The guard the inference must not dissolve: a leading axis that could
+    plausibly be z-planes gets no guess, only the actionable error."""
+    viewer.add_image(np.zeros((30, 64, 64), np.float32), name="amb", metadata={"axes": "IYX"})
+    viewer.add_labels(np.zeros((64, 64), np.int32), name="amb_roi")
+
+    with pytest.raises(ValueError, match="do not include a time axis"):
+        roi_timeseries.track_roi_over_time("amb_roi", "amb")
