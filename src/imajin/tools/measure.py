@@ -8,6 +8,7 @@ import pandas as pd
 from imajin.analysis.arrays import (
     layer_axes_from_metadata,
     materialize_array,
+    infer_time_axis,
     resolve_time_axis,
 )
 from imajin.agent.qt_dispatch import call_on_main
@@ -116,10 +117,27 @@ def _layer_axes(layer: Any, ndim: int) -> str:
     return layer_axes_from_metadata(md, ndim, default_3d="ZYX")
 
 
-def _resolve_time_axis(layer: Any, image_ndim: int, time_axis: int | str | None) -> int:
-    """Thin delegation -- see analysis.arrays.resolve_time_axis for the fail-loud body."""
+def _resolve_time_axis(
+    layer: Any, image_ndim: int, time_axis: int | str | None, shape: Any = None
+) -> tuple[int, str | None]:
+    """(axis, note). See analysis.arrays.resolve_time_axis for the fail-loud body;
+    `note` is non-None only when the axis had to be inferred from `shape`."""
     axes = _layer_axes(layer, image_ndim)
-    return resolve_time_axis(axes, image_ndim, time_axis)
+    try:
+        return resolve_time_axis(axes, image_ndim, time_axis), None
+    except ValueError:
+        inferred = None if shape is None else infer_time_axis(axes, tuple(shape))
+        if inferred is None:
+            raise
+        # Inferred, not read: say so. The whole justification for inferring here
+        # (see analysis.arrays.infer_time_axis) is that the caller reports it --
+        # a silent guess is the failure mode tools/view.py's _resolve_axis has.
+        note = (
+            f"axes {axes!r} carry no time axis, but shape {tuple(int(v) for v in shape)} "
+            f"is unambiguously a time series (leading axis >> frame size), so axis "
+            f"{inferred} was used as time. Pass time_axis explicitly to override."
+        )
+        return inferred, note
 
 
 # Intensity properties whose multichannel regionprops output is one column per
@@ -428,7 +446,9 @@ def measure_intensity_over_time(
             f"got shape {image_arr.shape}"
         )
 
-    t_idx = _resolve_time_axis(image, image_arr.ndim, time_axis)
+    t_idx, axis_note = _resolve_time_axis(
+        image, image_arr.ndim, time_axis, shape=image_arr.shape
+    )
     props = properties or list(_TIME_PROPS)
     interval = _resolve_time_interval(image)
     df = _run_regionprops_over_time(
@@ -447,6 +467,7 @@ def measure_intensity_over_time(
         "properties": props,
         "time_axis": t_idx,
         "time_interval_s": interval,
+        "warnings": [axis_note] if axis_note else [],
     }
     name = call_on_main(
         put_table,

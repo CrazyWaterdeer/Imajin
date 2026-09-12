@@ -5,7 +5,7 @@ import threading
 import numpy as np
 import pytest
 
-from imajin.analysis.arrays import map_over_axis0, resolve_time_axis
+from imajin.analysis.arrays import infer_time_axis, map_over_axis0, resolve_time_axis
 
 
 # --- map_over_axis0 ----------------------------------------------------------
@@ -107,3 +107,38 @@ def test_resolve_time_axis_explicit_code_not_in_axes_raises():
 def test_resolve_time_axis_explicit_code_must_be_single_char():
     with pytest.raises(ValueError, match="axis code or integer"):
         resolve_time_axis("TYX", 3, "TT")
+
+
+class TestInferTimeAxis:
+    """The narrow escape hatch for TIFFs that carry no axis metadata at all.
+
+    Every reference recording in this project is a bare 'IYX' export, so the
+    strict resolver rejected 100% of real data for a question the shape answers.
+    Inferring is only defensible because it is (a) narrow and (b) reported --
+    see infer_time_axis's docstring.
+    """
+
+    @pytest.mark.parametrize(
+        "axes,shape",
+        [
+            ("IYX", (2882, 250, 251)),  # real file: 11.5x
+            ("IYX", (4187, 501, 502)),  # real file: 8.3x
+            ("QYX", (3601, 250, 251)),  # tifffile's other placeholder code
+        ],
+    )
+    def test_infers_axis_0_for_an_unlabelled_long_series(self, axes, shape):
+        assert infer_time_axis(axes, shape) == 0
+
+    @pytest.mark.parametrize(
+        "axes,shape,why",
+        [
+            ("IYX", (30, 250, 251), "30 planes is a plausible z-stack"),
+            ("IYX", (524, 501, 502), "1.04x — under the ratio, genuinely ambiguous"),
+            ("ZYX", (2882, 250, 251), "the file SAID z; never override metadata"),
+            ("TYX", (2882, 250, 251), "the file said t; the resolver handles it"),
+            ("IYX", (250, 251), "2D"),
+            ("IZYX", (10, 2882, 250, 251), "4D"),
+        ],
+    )
+    def test_refuses_anything_ambiguous(self, axes, shape, why):
+        assert infer_time_axis(axes, shape) is None, why

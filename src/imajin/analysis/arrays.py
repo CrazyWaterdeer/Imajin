@@ -108,6 +108,50 @@ def layer_axes_from_metadata(
     )
 
 
+# tifffile hands back a placeholder axes string when a TIFF carries no axis
+# metadata at all -- 'I' for a plain image series, 'Q' for an unknown axis. Neither
+# names T or Z, so neither tells us which one the leading axis is.
+_PLACEHOLDER_AXIS_CODES = frozenset("IQ")
+
+# How much longer than the in-plane dimensions the leading axis must be before we
+# will call it time. 4x is deliberately conservative: a confocal z-stack is tens of
+# planes over a few-hundred-pixel field, so 2882 x 250 x 251 (a real recording in
+# this project's test data) clears it by an order of magnitude, while an ambiguous
+# 30 x 250 x 251 -- which really could be 30 z-planes -- does not and still raises.
+_TIME_AXIS_SHAPE_RATIO = 4.0
+
+
+def infer_time_axis(axes: str, shape: tuple[int, ...]) -> int | None:
+    """Axis 0 if an unlabelled 3D array is near-certainly a time series, else None.
+
+    Only fires when the file told us NOTHING (every axis code is a placeholder),
+    the array is 3D, and the leading axis is at least
+    ``_TIME_AXIS_SHAPE_RATIO`` times the larger in-plane dimension. Returns None
+    -- meaning "say so and refuse" -- for anything ambiguous.
+
+    Why infer at all, having deliberately made :func:`resolve_time_axis` fail
+    loudly: refusing is only the safe choice when refusing is rare. Every TIFF in
+    this project's own reference recordings is a bare 'IYX' export, so the strict
+    path rejected 100% of real data for a question the shape answers
+    unambiguously. The danger in tools/view.py's `_resolve_axis` was never that it
+    guessed -- it was that it guessed SILENTLY and could never raise. Callers of
+    this function must report what it decided; see the tool-layer warnings.
+    """
+    if len(shape) != 3 or len(axes) != 3:
+        return None
+    codes = axes.upper()
+    # 'YX' are real codes even in a placeholder string -- tifffile always names the
+    # in-plane axes. It is the LEADING code that carries no information, and only
+    # that one may be a placeholder: a string that already says 'Z' or 'T' has told
+    # us the answer and must not be second-guessed from shape.
+    if codes[1:] != "YX" or codes[0] not in _PLACEHOLDER_AXIS_CODES:
+        return None
+    leading, *plane = (int(v) for v in shape)
+    if leading < _TIME_AXIS_SHAPE_RATIO * max(plane):
+        return None
+    return 0
+
+
 def resolve_time_axis(axes: str, ndim: int, time_axis: int | str | None) -> int:
     """Resolve which array axis is time, failing loudly instead of guessing.
 
