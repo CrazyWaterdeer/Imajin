@@ -1,4 +1,17 @@
-"""Compute availability of each LLM provider for the model picker."""
+"""Compute availability of each LLM provider for the model picker.
+
+imajin.agent.providers.registry.BACKEND_REGISTRY is the single source of truth
+for which backend kinds exist and how to build them, but the five bare-name
+probe calls below stay physically in this module rather than moving into that
+registry: tests/test_provider_status.py and conftest.py's autouse
+`_no_local_model_network` / `_no_codex_subscription` fixtures (which every
+test in the suite inherits) patch probe_ollama / subscription_available /
+codex_available as attributes of THIS module, relying on compute_statuses
+resolving them as bare names against its own globals at call time. The
+registry's own probes for claude-agent/codex-agent/ollama call back into
+compute_statuses() below for exactly this reason -- see registry.py's module
+docstring ("why probes delegate") for the full explanation.
+"""
 from __future__ import annotations
 
 from dataclasses import dataclass

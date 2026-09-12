@@ -49,7 +49,6 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
-from scipy.ndimage import shift as nd_shift
 
 from imajin.agent.execution import raise_if_cancelled, report_progress
 from imajin.agent.qt_dispatch import call_on_main
@@ -60,7 +59,7 @@ from imajin.analysis.arrays import (
 )
 from imajin.analysis.calcium_qc import _centroid_of
 from imajin.analysis.roi_redetect import redetect_roi_masks
-from imajin.analysis.roi_track import track_rois
+from imajin.analysis.roi_track import _pixel_counts_per_frame, _shift_mask_by_delta, track_rois
 from imajin.analysis.segmentation import voxel_spacing
 from imajin.result_bundles import register_output
 from imajin.session import get_layer, get_table, put_table, update_table
@@ -140,6 +139,18 @@ def _write_roi_qc_table(
         put_table, table_name, df, spec={"tool": method, "columns": list(df.columns)}
     )
     return name, df, coverage, rejected
+
+
+def _append_rejected_coverage_warning(warnings: list[str], rejected: list[int]) -> None:
+    """Both producers warn identically when a label's usable-frame coverage
+    falls below the 50% cutoff `_write_roi_qc_table` computes -- one shared
+    phrasing so the wording can never quietly diverge between
+    track_roi_over_time and resegment_roi_over_time (mirrors the schema-level
+    guarantee test_both_producers_emit_identical_qc_schema pins for QC rows).
+    A no-op when nothing was rejected.
+    """
+    if rejected:
+        warnings.append(f"{len(rejected)} label(s) below 50% usable coverage: {rejected}")
 
 
 def _write_roi_coverage_png(df: pd.DataFrame, path: Path, *, title: str) -> None:
@@ -237,9 +248,12 @@ def _lateral_shift_stack(
     ``y, x`` (track_rois' exact ``pos[t]``) against ``labels2d``'s own centroid
     -- the identical formula rasterize_tracked_labels used to build the 2D
     stack in the first place (roi_track.py: ``base_y, base_x =
-    _centroid_of(orig_mask)``; ``dy = round(pos[t,0] - base_y)``) -- so the 3D
-    shift applied here is bit-for-bit the same lateral placement the 2D pass
-    already validated, just replayed against every Z plane of the real mask.
+    _centroid_of(orig_mask)``; ``dy = round(pos[t,0] - base_y)``). The shift
+    is then applied via roi_track.py's own ``_shift_mask_by_delta`` (imported
+    below, same helper rasterize_tracked_labels calls), so the 3D shift
+    applied here is bit-for-bit the same lateral placement the 2D pass already
+    validated -- by construction, not by two hand-synced implementations --
+    just replayed against every Z plane of the real mask.
 
     Reuses ``usable`` from ``qc_rows`` verbatim as the placement gate --
     INCLUDING its 2D collision arbitration -- rather than re-deriving a
@@ -270,13 +284,7 @@ def _lateral_shift_stack(
                 continue
             dy = int(round(float(row["y"]) - base_y))
             dx = int(round(float(row["x"]) - base_x))
-            if dy == 0 and dx == 0:
-                shifted = orig_mask
-            else:
-                shift_vec = (0,) * (orig_mask.ndim - 2) + (dy, dx)  # Z (if any) untouched
-                shifted = nd_shift(
-                    orig_mask.astype(np.float32), shift_vec, order=0, mode="constant"
-                ).astype(bool)
+            shifted = _shift_mask_by_delta(orig_mask, dy, dx, dtype=np.float32)
             if shifted.any():
                 stack[t][shifted] = label
     return stack
@@ -470,14 +478,12 @@ def track_roi_over_time(
 
     if ndim_frame == 3:
         stack = _lateral_shift_stack(movie_t0, label_arr, labels2d, qc_rows)
-        # n_pixels re-derived from the actual 3D stack (one np.unique pass per
-        # frame, mirroring track_rois' own convention) so it never disagrees with
-        # what the LABELS layer actually contains -- the 2D pass's n_pixels would
-        # otherwise describe the projected footprint, not the real 3D voxel count.
-        pixel_counts = []
-        for t in range(t_count):
-            vals, counts = np.unique(stack[t], return_counts=True)
-            pixel_counts.append(dict(zip(vals.tolist(), counts.tolist())))
+        # n_pixels re-derived from the actual 3D stack (the same
+        # _pixel_counts_per_frame helper track_rois itself uses) so it never
+        # disagrees with what the LABELS layer actually contains -- the 2D
+        # pass's n_pixels would otherwise describe the projected footprint,
+        # not the real 3D voxel count.
+        pixel_counts = _pixel_counts_per_frame(stack)
         qc_rows = [
             {**row, "n_pixels": int(pixel_counts[row["time_index"]].get(row["label"], 0))}
             for row in qc_rows
@@ -505,8 +511,7 @@ def track_roi_over_time(
     qc_table_name, qc_df, coverage, rejected = _write_roi_qc_table(
         qc_rows, table_name or f"{labels_layer}_{image_layer}_roi_qc", "track_roi_over_time"
     )
-    if rejected:
-        warnings.append(f"{len(rejected)} label(s) below 50% usable coverage: {rejected}")
+    _append_rejected_coverage_warning(warnings, rejected)
     warnings.extend(_contrast_bias_warnings(qc_df, coverage, t_count))
 
     out_layer = call_on_main(
@@ -670,8 +675,7 @@ def resegment_roi_over_time(
         table_name or f"{labels_layer}_{image_layer}_roi_qc",
         "resegment_roi_over_time",
     )
-    if rejected:
-        warnings.append(f"{len(rejected)} label(s) below 50% usable coverage: {rejected}")
+    _append_rejected_coverage_warning(warnings, rejected)
 
     out_layer = call_on_main(
         add_labels_from_worker,
